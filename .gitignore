@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+# jsdom for the browser-client tests installs into a temp dir, never here
+node_modules/

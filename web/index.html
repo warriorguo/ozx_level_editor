@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OZX Level Studio</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark"></span> OZX Level Studio</div>
+      <div class="crumbs">
+        <span>LEVEL DATA</span><span class="slash">/</span>
+        <select class="level-picker" id="levelPicker" aria-label="Level"></select>
+        <span class="slash">/</span>
+        <span id="floorCrumb">FLOOR 01</span>
+        <span id="levelIssues"></span>
+      </div>
+      <div class="top-actions">
+        <span id="dirtyLabel"><span class="dirty-dot"></span>saved</span>
+        <button class="button ghost" id="validateBtn">Validate</button>
+        <button class="button ghost" id="reloadBtn">Reload</button>
+        <button class="button primary" id="saveBtn">Save</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="workspace">
+        <section class="panel room-browser room-list-browser" aria-label="Room list">
+          <div class="section-toolbar">
+            <h3>Rooms / <span id="floorTitle">Floor 01</span></h3>
+            <span class="count-label" id="roomCount">—</span>
+            <button class="button" id="addRoomBtn">＋ Add room</button>
+          </div>
+          <div class="room-canvas">
+            <div class="rooms-grid" id="roomsGrid"></div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <div class="side-head"><h3>Level layout</h3><span class="sub" id="levelSub">—</span></div>
+          <div class="minimap-wrap">
+            <div class="map-scroll" id="mapScroll">
+              <div class="map-plane" id="mapPlane"></div>
+            </div>
+            <div class="floor-tabs" id="floorTabs"></div>
+          </div>
+        </section>
+
+        <section class="panel library">
+          <div class="side-head"><h3>Enemy library</h3><span class="sub" id="enemyLibraryCount">—</span></div>
+          <div class="library-target" id="enemyLibraryTarget"></div>
+          <label class="search"><input id="enemySearch" placeholder="Search enemy ID, role, attack…" /></label>
+          <div class="asset-list" id="enemyLibrary"></div>
+        </section>
+
+        <section class="panel library">
+          <div class="side-head"><h3>Static library</h3><span class="sub" id="staticLibraryCount">—</span></div>
+          <div class="library-target" id="staticLibraryTarget"></div>
+          <label class="search"><input id="staticSearch" placeholder="Search cargo, hazard, prop…" /></label>
+          <div class="asset-list" id="staticLibrary"></div>
+        </section>
+
+        <section class="panel library">
+          <div class="side-head"><h3>Loot library</h3><span class="sub" id="lootLibraryCount">—</span></div>
+          <div class="library-target" id="lootLibraryTarget"></div>
+          <label class="search"><input id="lootSearch" placeholder="Search loot table, item…" /></label>
+          <div class="asset-list" id="lootLibrary"></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="healthLabel" class="ok">● LOADING</span>
+      <span id="errorCount">—</span><span id="warningCount">—</span>
+      <span class="spacer"></span>
+      <span id="projectLabel"></span>
+      <span><span class="kbd">⌘S</span> save</span>
+    </footer>
+  </div>
+
+  <div class="problems-drawer" id="problemsDrawer">
+    <h4>Problems</h4>
+    <div id="problemsList"></div>
+  </div>
+
+  <div class="toast" id="toast">Saved</div>
+
+  <script src="app.js"></script>
+</body>
+</html>

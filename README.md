@@ -1,0 +1,195 @@
+# OZX Level Studio
+
+A level editor for OZX level data. Browser UI, local Python server, editing the
+real `GameData/*.json` in a sibling `ozx_base` checkout.
+
+## Run it
+
+```sh
+python3 serve.py
+```
+
+Python 3.11+, standard library only — no pip install, no build step, no
+dependencies. It finds the sibling `ozx_base` automatically and opens a browser
+at <http://127.0.0.1:8765>.
+
+```sh
+python3 serve.py --root /path/to/ozx_base   # explicit checkout
+python3 serve.py --port 9000
+python3 serve.py --no-open                  # don't launch a browser
+```
+
+The server binds to loopback only. There is no auth; do not expose it.
+
+## Tests
+
+```sh
+python3 -m pytest tests/ -q
+```
+
+823 tests. The headline one opens all 387 production JSON files, saves each one
+back unchanged, and asserts **zero byte difference**.
+
+`tests/test_ui.py` drives the actual page under jsdom — clicking dropdowns,
+columns and library cards — because every client bug here so far has been a
+runtime one that `node --check` cannot see. jsdom installs into a temp dir on
+first run and the test skips cleanly without it, so the suite still works
+offline.
+
+## What it edits
+
+| Family | Files | Editable here |
+|---|---:|---|
+| `LevelData` | 6 | floors, rooms, doors, stage, category, encounter, placements, decorations |
+| `EncounterData` | 87 | enemy counts per launch step (via the room's enemy column) |
+| `EnemyData` | 68 | read-only catalog for now |
+| `LootTableData` | 25 | assignable per room (clear + per-cargo); entries read-only |
+| `LevelBasePlanData` | 8 | validated, not yet edited |
+
+## The map
+
+The **Level layout** panel in the sidebar is a spatial floor map: rooms at
+their real grid coordinates with their door connections drawn between them.
+Clicking a room selects it; the main workspace is the scrolling room list where
+you actually edit.
+
+Positions are not invented. The server replicates
+`MiniMapLayoutBuilder.BuildGridLayout` from `Game.Level` — BFS the door graph
+from `startRoomId`, offsetting `Up=(0,1)`, `Down=(0,-1)`, `Right=(1,0)`,
+`Left=(-1,0)` — so the editor's map and the in-game minimap agree. Rooms the
+door BFS never reaches (caves and basements, entered through cave/stair links)
+are anchored one cell down-and-right of the room you enter them from, with
+siblings bumped along X, exactly as production does it.
+
+Grid Y increases upward in production; the renderer flips it once for the
+screen, so the start room sits at the bottom and the peak at the top. The whole
+plane is scaled to fit the panel, with a floor of 0.5 — below that the rooms
+stop being distinguishable, so it scrolls instead.
+
+- Stage shows as a colour bar down each room's left edge; a dot marks a room
+  with content.
+- Composite rooms (`roomCols`/`roomRows` > 1) span the cells they occupy.
+- Locked doors draw amber, with the `keyId` in the tooltip.
+- A door leaving the floor draws a dashed stub naming its target.
+- A cycle-closing edge between non-adjacent cells draws as a rotated line.
+- Error rooms outline red; start and final rooms are marked.
+
+Every room on every level places successfully, including the negative
+coordinates and cycles in `level_generated_cycle` and the four floors of
+`level_test`.
+
+## How writes work
+
+Edits go straight to disk — there is no unsaved working copy. Each one is a
+span-level patch: the original file text is kept, and only the byte range of
+the value that changed is swapped. That is what keeps the diff to the line you
+touched.
+
+It matters because GameData is hand-formatted and no pretty-printer reproduces
+it. Inline arrays (`"cells": [{ "x": 6, "y": 10 }]`) sit beside multi-line ones
+in the same file, `projectiles/small_red_bullet.json` and `rooms/room_cave_01.json`
+are CRLF, `skills/resilient_string_throw.json` is 4-space, and every TilemapData
+file is minified with no trailing newline. Re-serialising any of them would
+produce a diff of thousands of lines.
+
+New values adopt the surrounding convention: objects get inner padding
+(`{ "direction": 0, "locked": false }`), arrays do not (`["key_gold"]`), and an
+appended element copies the indentation of the element before it.
+
+## Two things the UI is deliberately honest about
+
+**Loot arrives through two channels that roll at different moments.**
+`room.lootPlanId` rolls when the room is cleared; a cargo placement's
+`lootTableId` rolls when that box is opened. The Loot column keeps them
+separate and labelled rather than merging them into one list.
+
+Each table also states how to read its weights: with `pickOne` the weights are
+shares of a single guaranteed drop, and without it — 24 of the 25 tables — each
+weight is its own independent 0–100% roll, so they do not sum to 100 and are
+never normalised.
+
+**A room's enemies are not authored on the room.** They come from the
+`EncounterData` its `encounterId` points at. The "Effective enemies" column is a
+derived view, and its `+`/`−` controls write to that encounter's
+`steps[].action.min/max` — which is why the column says so underneath.
+
+**Doors are bidirectional.** Toggling one writes the twin on the other side in
+the same request. A door without its twin is a one-way door that nothing reports
+at runtime, so the tool never lets you create one by hand. Opening a door needs
+a neighbour it can identify from the level's grid naming (`f0_room_0_4`); when
+there is no obvious target it says so instead of guessing.
+
+## Selecting where things go
+
+Click a column — Decorations, Static items, Loot, Effective enemies — to make it
+the add target; it highlights, and each library's header says where its next
+click will land. Then click anything in the Enemy, Static or Loot library to add
+it there. The whole card adds, not just the `＋`.
+
+Clicking a specific entry narrows the target to that one slot. That matters most
+for loot: `f0_room_0_7` has a room-clear plan *and* a cargo box, both pointing at
+`loot_ch1_pressure`, so without picking the slot there is no way to say which one
+a new table should replace.
+
+## Validation
+
+The rules concentrate on failures that produce no runtime error:
+
+| Code | What it catches |
+|---|---|
+| `LEVEL_DOOR_TWIN_MISSING` | one-way door |
+| `LEVEL_CROSS_FLOOR_DOOR_NO_STAIR` | cross-floor door with no `stairLinks` — a silent dead end |
+| `LEVEL_DOOR_DIRECTION_DUPLICATE` | two doors facing the same way |
+| `LEVEL_ROOM_UNREACHABLE` | room not reachable from `startRoomId` |
+| `ROOM_STATIC_PLACEMENTS_UNDECLARED` | `null` instead of `[]` — every spawn adapter throws |
+| `LEVEL_BOSS_WITHOUT_ENCOUNTER` | `bossId` alone drives nothing |
+| `LEVEL_STAGE_INTRO_MISSING` | floor plan with no teaching/building slice (OZX-442) |
+| `TYPE_VALUE_UNKNOWN` on `generatorType` | typo silently becomes `tree` |
+| `ENCOUNTER_ACTION_VERB_INVALID` | anything but `launch`; a wait step omits `action` entirely |
+| `ENCOUNTER_ELITE_CONFIG_MISSING` | `eliteCount` on an enemy with no elite config |
+| `DATA_ID_DUPLICATE` | duplicate `(dataType, id)` — production lets the last file silently win |
+| `LOOT_TABLE_EMPTY` | a table that drops nothing |
+| `LOOT_ITEM_MISSING` | dangling `itemId` |
+| `LOOT_COUNT_RANGE_INVALID` | needs `0 < min <= max` |
+| `LOOT_WEIGHT_INVALID` | weight outside 0–100 on an independent table |
+
+Against the current data this reports **17 errors and 3 warnings**. The errors
+are all in `level_test`, `level_generated_tree` and `level_generated_cycle`.
+The warnings are three empty loot tables — `loot_ch1_supply`,
+`loot_ch1_shotgun`, `loot_ch1_laser` — which nine cargo boxes across
+`chapter_1` point at.
+
+## Layout
+
+```
+serve.py                       entry point
+ozxlevel/
+  jsonspan.py                  span-recording parser + byte-preserving patcher
+  dataset.py                   GameData index and the projections the UI reads
+  validate.py                  the rules above
+  api.py                       localhost HTTP API + static file serving
+web/
+  index.html  styles.css  app.js
+tests/
+  test_jsonspan.py             the whole-corpus byte-identical round trip
+  test_layout.py               grid layout parity with MiniMapLayoutBuilder
+  test_loot.py                 weight semantics, item resolution, loot rules
+  test_ui.py + ui/             the browser client, under a real DOM
+level_editor_template.html     the design prototype this is built from
+Documents/                     technical design and data reference (Chinese)
+```
+
+## Not done yet
+
+- Adding and deleting rooms (needs the graph editor).
+- Assigning a loot table to a room that has no `lootPlanId` key yet — the span
+  writer replaces values but does not insert new keys into an existing object.
+  Same gap as `stageType`.
+- Editing pinned placement `cells` — needs the tilemap grid, not a spinner.
+- `LevelBasePlanData` editing and seeded compile preview. That needs
+  `DynamicLevelBuilder` extracted out of `Game.Unity` so it can run headless —
+  it is already engine-free apart from three `ServiceLocator` lookups
+  (`DynamicLevelBuilder.cs:89,92`, `LevelBasePlanAssigner.cs:25`), but its only
+  `IRandom` wraps `UnityEngine.Random`, so a deterministic PRNG has to come
+  first.
+- Undo. Edits write through immediately, so `git` is the undo for now.
