@@ -25,11 +25,13 @@ parallel docs:
 - `level_data_reference.md` — the on-disk schema of `GameData/levels/`.
 - `level_referenced_data.md` — the five data families level data points at.
 
-An earlier `ozx_level_data_editor_td.md` designed this as a Unity Editor tool on UI
-Toolkit. That approach was dropped and the doc removed; the editor is a browser client
-on a local Python server. The two reference docs above survive and are still accurate —
-they describe the data, not the tool. `level_data_reference.md` still cites the TD
-in its header line.
+The technical design lives in the sibling repo, at
+`ozx_base/Documents/Shared/OZX_Level_Data_Editor_TD.md` (the `ozx_level_data_editor_td.md`
+that `level_data_reference.md` cites in its header). It designs this as a Unity Editor
+tool on UI Toolkit; the implementation here is a browser client on a local Python server
+instead. The TD's data findings still hold — the silent-failure list, the formatting
+constraints, the compiler extraction in §9.1 — but its architecture section describes a
+tool that was not built. Reconcile it when editing.
 
 ## What this project is
 

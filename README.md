@@ -193,5 +193,5 @@ Documents/                     technical design and data reference (Chinese)
   it is already engine-free apart from three `ServiceLocator` lookups
   (`DynamicLevelBuilder.cs:89,92`, `LevelBasePlanAssigner.cs:25`), but its only
   `IRandom` wraps `UnityEngine.Random`, so a deterministic PRNG has to come
-  first.
+  first. See `ozx_base/Documents/Shared/OZX_Level_Data_Editor_TD.md` §9.1.
 - Undo. Edits write through immediately, so `git` is the undo for now.
