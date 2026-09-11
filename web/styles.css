@@ -745,7 +745,21 @@ button { color: inherit; }
    The highlight has to be unmistakable, because the libraries write to
    whatever is highlighted. */
 
-.room-list-item.is-selected { border-color: rgba(214,244,93,.42); }
+.room-list-item.is-selected {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 1px rgba(214,244,93,.30), 0 12px 30px rgba(0,0,0,.28);
+}
+/* the selected room's card carries the same acid edge its map node does */
+.room-list-item.is-selected .room-core { box-shadow: inset 3px 0 0 var(--acid); }
+.room-list-item.is-selected.has-error .room-core { box-shadow: inset 3px 0 0 var(--danger); }
+
+/* A brief flash when the map scrolls a card into view, so the eye lands on
+   the right one instead of hunting for what changed. */
+@keyframes reveal-flash {
+  0%   { background-color: rgba(214,244,93,.16); }
+  100% { background-color: transparent; }
+}
+.room-list-item.just-revealed { animation: reveal-flash .9s ease-out; }
 
 .content-column { cursor: pointer; transition: background .12s, box-shadow .12s; }
 .content-column:hover { background: rgba(214,244,93,.035); }

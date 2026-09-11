@@ -50,8 +50,10 @@ offline.
 
 The **Level layout** panel in the sidebar is a spatial floor map: rooms at
 their real grid coordinates with their door connections drawn between them.
-Clicking a room selects it; the main workspace is the scrolling room list where
-you actually edit.
+The map and the Rooms list are two views of one selection: clicking a room on
+the map highlights its card, scrolls it into view and flashes it, and selecting
+a card highlights its map node. A map click keeps whichever column you were
+working in, so moving around the map never silently retargets the libraries.
 
 Positions are not invented. The server replicates
 `MiniMapLayoutBuilder.BuildGridLayout` from `Game.Level` — BFS the door graph

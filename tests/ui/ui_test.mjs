@@ -122,5 +122,41 @@ check('clicking a column selects it', column.classList.contains('selected-target
 check('only one target is highlighted', qa('.selected-target').length === 1,
       `${qa('.selected-target').length} highlighted`);
 
+// ── map and room list are two views of one selection ─────────────────────
+const mapRooms = qa('.map-room');
+const targetIndex = 7;
+const mapRoom = mapRooms.find((m) => Number(m.dataset.index) === targetIndex);
+click(mapRoom);
+await tick();
+const card = q(`.room-list-item[data-index="${targetIndex}"]`);
+check('clicking a map room highlights its card', card.classList.contains('is-selected'),
+      card.querySelector('h4')?.textContent);
+check('and flashes it so the eye finds it', card.classList.contains('just-revealed'));
+check('only one card is highlighted', qa('.room-list-item.is-selected').length === 1,
+      `${qa('.room-list-item.is-selected').length} highlighted`);
+// renderMap() replaces the plane's markup, so re-query rather than holding
+// the node we clicked.
+const mapNode = (i) => qa('.map-room').find((m) => Number(m.dataset.index) === i);
+check('the map node is highlighted too', mapNode(targetIndex).classList.contains('selected'));
+check('only one map node is highlighted', qa('.map-room.selected').length === 1,
+      `${qa('.map-room.selected').length} highlighted`);
+
+// The column the user was working in must survive a map click, or the
+// libraries would silently retarget.
+const kindBefore = q('.content-column.selected-target')?.dataset.kind;
+click(qa('.map-room').find((m) => Number(m.dataset.index) === 2));
+await tick();
+const kindAfter = q('.content-column.selected-target')?.dataset.kind;
+check('a map click keeps the selected column kind', kindBefore === kindAfter,
+      `${kindBefore} -> ${kindAfter}`);
+check('the target line follows to the new room',
+      q('#lootLibraryTarget').textContent.includes(
+        level.floors[0].rooms[2].roomId), q('#lootLibraryTarget').textContent);
+
+// ── and selecting in the list moves the map ──────────────────────────────
+click(qa('.content-column[data-kind="enemies"]')[5]);
+await tick();
+check('selecting a card highlights its map node', mapNode(5)?.classList.contains('selected'));
+
 console.log(failures.length ? `\n${failures.length} failing: ${failures.join(', ')}` : '\nall green');
 process.exit(failures.length ? 1 : 0);

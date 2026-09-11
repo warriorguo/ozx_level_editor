@@ -361,6 +361,26 @@ function selectSlot(roomIndex, kind, { pointer = null, index = null, label = nul
   refreshLibraryTargets();
 }
 
+/** Bring the selected room's card into view in the Rooms list and flash it.
+ *
+ *  The map is a glance view of the same rooms the list holds, so selecting in
+ *  one has to move the other — otherwise clicking a room on the map appears to
+ *  do nothing when its card is scrolled off screen.
+ */
+function revealSelectedRoom() {
+  const card = document.querySelector(
+    `.room-list-item[data-index="${state.selection.roomIndex}"]`);
+  if (!card) return;
+  // jsdom and older engines have no scrollIntoView; the highlight still works.
+  if (typeof card.scrollIntoView === 'function') {
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  card.classList.remove('just-revealed');
+  // Force a reflow so re-adding the class restarts the animation.
+  void card.offsetWidth;
+  card.classList.add('just-revealed');
+}
+
 /** Move the selection highlight by toggling classes, touching no markup. */
 function applySelectionStyles() {
   const sel = state.selection;
@@ -675,8 +695,12 @@ function renderMap() {
   fitMapToPanel(plane);
   plane.querySelectorAll('.map-room').forEach((box) =>
     box.addEventListener('click', () => {
-      state.selectedRoomIndex = Number(box.dataset.index);
-      renderAll();
+      if (state.busy) return;
+      // The map and the room list are two views of one selection. Keep the
+      // column the user was working in, so clicking around the map does not
+      // silently retarget the libraries.
+      selectSlot(Number(box.dataset.index), state.selection.kind);
+      revealSelectedRoom();
     }));
 
   const unplaced = floor.rooms.length - placed.length;
