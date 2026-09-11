@@ -158,5 +158,34 @@ click(qa('.content-column[data-kind="enemies"]')[5]);
 await tick();
 check('selecting a card highlights its map node', mapNode(5)?.classList.contains('selected'));
 
+// ── the library panels lay out as declared ───────────────────────────────
+// jsdom has no layout engine, so geometry cannot be asserted. What can be is
+// the invariant that actually broke: `.library` pins each child to a fixed
+// row, so adding a child without adding a row silently pushes everything
+// down one and stretches whatever lands in the 1fr track.
+const css = fs.readFileSync(path.join(ROOT, 'web/styles.css'), 'utf8');
+const rule = css.match(/\.library\s*\{[^}]*grid-template-rows:\s*([^;]+);/);
+check('.library declares its rows', !!rule);
+if (rule) {
+  // split on top-level whitespace — minmax(0,1fr) is one track, not two
+  const tracks = [];
+  let depth = 0, current = '';
+  for (const ch of rule[1].trim()) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (/\s/.test(ch) && depth === 0) { if (current) tracks.push(current); current = ''; }
+    else current += ch;
+  }
+  if (current) tracks.push(current);
+
+  for (const panel of qa('.library')) {
+    const label = panel.querySelector('h3')?.textContent ?? '?';
+    check(`${label}: a row per child`, panel.children.length === tracks.length,
+          `${panel.children.length} children, ${tracks.length} rows`);
+  }
+  check('the search box sits in its own fixed row',
+        tracks.length >= 3 && tracks[tracks.length - 2] === '42px', tracks.join(' | '));
+}
+
 console.log(failures.length ? `\n${failures.length} failing: ${failures.join(', ')}` : '\nall green');
 process.exit(failures.length ? 1 : 0);
