@@ -50,7 +50,16 @@ The app is unsigned, so a first launch elsewhere needs right-click ▸ Open.
 ## Choosing the project folder
 
 An app has no command line, so the `ozx_base` checkout is chosen in the UI and
-remembered in `~/.config/ozx-level-studio/config.json`. Inside the app the
+remembered in `~/.config/ozx-level-studio/config.json`.
+
+With nothing configured it finds the checkout itself: beside the caller first
+(the repo layout), then one and two levels under the conventional code roots —
+`~/Codes`, `~/Code`, `~/Developer`, `~/Projects`, `~/src`, `~/dev`, `~/work`,
+`~`. That covers `~/Codes/github.com/<user>/ozx_base` without hardcoding
+anyone's path, and takes about a millisecond. Whatever it finds is written to
+the config, so the search runs once rather than on every launch. When it finds
+nothing the picker opens pre-filled with its best guess, so the usual case is
+one click rather than typing a path. Inside the app the
 **Browse…** button opens a real macOS folder chooser; in a browser tab the same
 dialog takes a typed path. Both go through `PUT /api/config`, which validates
 the folder, swaps the dataset under a lock, and bumps the revision so the

@@ -24,17 +24,8 @@ import webbrowser
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from ozxlevel.api import serve  # noqa: E402
-from ozxlevel.config import Config, looks_like_project  # noqa: E402
-
-
-def sibling_checkout() -> pathlib.Path | None:
-    """The zero-config path: an ozx_base sitting next to this repo."""
-    here = pathlib.Path(__file__).resolve().parent
-    for base in (here, *here.parents):
-        candidate = base.parent / "ozx_base"
-        if looks_like_project(candidate)[0]:
-            return candidate.resolve()
-    return None
+from ozxlevel.config import (Config, discover_project,  # noqa: E402
+                             looks_like_project)
 
 
 def find_project_root(explicit: str | None,
@@ -57,9 +48,13 @@ def find_project_root(explicit: str | None,
         if ok:
             return pathlib.Path(config.project_root).expanduser().resolve(), "config"
 
-    sibling = sibling_checkout()
-    if sibling:
-        return sibling, "sibling checkout"
+    # Nothing configured: look beside this file first (the checkout layout),
+    # then the conventional code roots. An installed .app has no sibling repo,
+    # so without this every fresh install opens into the folder picker with
+    # the checkout sitting somewhere obvious.
+    found = discover_project(near=pathlib.Path(__file__).resolve().parent)
+    if found:
+        return found, "discovered"
 
     return None, "nothing found"
 

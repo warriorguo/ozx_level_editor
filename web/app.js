@@ -86,6 +86,8 @@ function showSetup({ dismissible, reason, current }) {
   $('setupCancel').hidden = !dismissible;
   $('setupBrowse').hidden = !nativeBridge();
   $('setupPath').value = current || '';
+  // A pre-filled guess turns the usual case into one click.
+  if (current) $('setupUse').textContent = 'Use this folder';
   if (reason) $('setupReason').textContent = reason;
   $('setupPath').focus();
 }
@@ -156,7 +158,7 @@ async function boot() {
     const cfg = await api('/api/config').catch(() => ({}));
     showSetup({
       dismissible: false,
-      current: cfg.project_root,
+      current: cfg.project_root || cfg.suggestion,
       reason: cfg.reason && cfg.project_root
         ? `That folder cannot be used: ${cfg.reason}`
         : undefined,

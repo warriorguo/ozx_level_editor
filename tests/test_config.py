@@ -168,3 +168,67 @@ def test_swapping_between_projects(config_path, project, tmp_path):
     api.set_project_root(str(second))
     assert api.dataset.get("LevelData", "chapter_1") is None
     assert api.get_config()["project_root"] == str(second.resolve())
+
+
+# ── finding the checkout without being told ──────────────────────────────
+
+
+def test_discovery_finds_a_checkout_beside_the_caller(tmp_path, project):
+    """The repo layout: ozx_base sitting next to this repo."""
+    from ozxlevel.config import discover_project
+    sibling = tmp_path / "some_other_repo"
+    sibling.mkdir()
+    # `project` is tmp_path/ozx_base, i.e. a sibling of `sibling`
+    assert discover_project(near=sibling) == project.resolve()
+
+
+def test_discovery_finds_nothing_when_there_is_nothing(tmp_path, monkeypatch):
+    from ozxlevel.config import discover_project
+    empty = tmp_path / "home"
+    (empty / "Codes").mkdir(parents=True)
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: empty))
+    assert discover_project(near=empty / "Codes") is None
+
+
+def test_discovery_ignores_a_folder_that_is_not_a_checkout(tmp_path, monkeypatch):
+    """A directory named ozx_base without GameData is not the thing."""
+    from ozxlevel.config import discover_project
+    home = tmp_path / "home"
+    (home / "Codes" / "ozx_base").mkdir(parents=True)   # no GameData inside
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    assert discover_project() is None
+
+
+def test_discovery_reaches_two_levels_down(tmp_path, monkeypatch):
+    """Covers ~/Codes/github.com/<user>/ozx_base, which is the real layout."""
+    from ozxlevel.config import discover_project
+    home = tmp_path / "home"
+    deep = home / "Codes" / "github.com" / "someone" / "ozx_base"
+    (deep / "Assets/StreamingAssets/GameData").mkdir(parents=True)
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    assert discover_project() == deep.resolve()
+
+
+def test_discovery_is_fast_enough_to_run_on_every_launch(tmp_path, monkeypatch):
+    """It runs whenever nothing is configured, so it must not scan $HOME deeply."""
+    import time
+    from ozxlevel.config import discover_project
+    home = tmp_path / "home"
+    for i in range(40):
+        (home / "Codes" / f"repo{i}" / "src").mkdir(parents=True)
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: home))
+    start = time.time()
+    discover_project()
+    assert time.time() - start < 1.0
+
+
+def test_the_api_suggests_a_folder_when_none_is_set(config_path):
+    """So the picker is a confirmation, not a typing exercise."""
+    api = Api(None, Config.load(config_path))
+    cfg = api.get_config()
+    assert cfg["mounted"] is False
+    # On this machine there is a real checkout to find; elsewhere the key is
+    # still present and simply empty.
+    assert "suggestion" in cfg
+    if cfg["suggestion"]:
+        assert looks_like_project(cfg["suggestion"])[0] is True

@@ -131,3 +131,58 @@ def looks_like_project(candidate: str | os.PathLike) -> tuple[bool, str]:
     if not (root / GAME_DATA_REL).is_dir():
         return False, f"no {GAME_DATA_REL} under {root}"
     return True, ""
+
+def discover_project(near: str | os.PathLike | None = None) -> pathlib.Path | None:
+    """Best guess at the user's ozx_base checkout.
+
+    Wanted because an installed .app has no sibling repo to walk up to and no
+    command line to be told — without this, every fresh install opens straight
+    into the folder picker even though the checkout is sitting in the obvious
+    place.
+
+    Looks beside *near* first (the repo layout: ozx_base next to this repo),
+    then through the conventional roots people keep code in. Deliberately
+    shallow and bounded: this runs on every launch that has no configured
+    folder, and a deep scan of $HOME would be both slow and surprising.
+    """
+    seen: set[pathlib.Path] = set()
+
+    def usable(path: pathlib.Path) -> bool:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        if resolved in seen:
+            return False
+        seen.add(resolved)
+        return looks_like_project(resolved)[0]
+
+    # 1. Beside the caller — how it resolves when run from a checkout.
+    if near is not None:
+        start = pathlib.Path(near).resolve()
+        for base in (start, *start.parents):
+            candidate = base.parent / "ozx_base"
+            if usable(candidate):
+                return candidate.resolve()
+
+    # 2. Conventional code roots, one and two levels deep. Two levels covers
+    #    the ~/Codes/github.com/<user>/ozx_base shape; going deeper starts
+    #    costing real time for no added hit rate.
+    home = pathlib.Path.home()
+    roots = [home / name for name in
+             ("Codes", "Code", "Developer", "Projects", "src", "dev", "work")]
+    roots.append(home)
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        if usable(root / "ozx_base"):
+            return (root / "ozx_base").resolve()
+        try:
+            for depth in ("*/ozx_base", "*/*/ozx_base"):
+                for candidate in sorted(root.glob(depth)):
+                    if usable(candidate):
+                        return candidate.resolve()
+        except OSError:
+            continue
+    return None

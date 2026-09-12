@@ -14,7 +14,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from .config import Config, ResolvedConfig, looks_like_project
+from .config import Config, ResolvedConfig, discover_project, looks_like_project
 from .dataset import DIRECTION_IDS, DIRECTION_TWIN, Dataset, ExternallyModified
 from .validate import (validate_all, validate_encounter, validate_level,
                        validate_loot, validate_plan)
@@ -48,6 +48,13 @@ class Api:
             resolved = self.config.resolve().as_dict()
         resolved["mounted"] = bool(self.project_root)
         resolved["documents"] = len(self.dataset.docs)
+        if not resolved["usable"] and not resolved["project_root"]:
+            # Offer the obvious answer so the picker is a confirmation rather
+            # than a typing exercise.
+            guess = discover_project(near=WEB_ROOT.parent)
+            resolved["suggestion"] = str(guess) if guess else ""
+        else:
+            resolved["suggestion"] = ""
         return resolved
 
     def set_project_root(self, candidate: str) -> dict:
