@@ -158,3 +158,44 @@ def test_door_writes_are_guarded_too(project):
     result = api.set_door("chapter_1", 0, 4, "E", False)
     assert result["ok"] is False
     assert result["externallyModified"] is True
+
+
+# ── derived data the client caches ───────────────────────────────────────
+
+
+def test_the_revision_moves_when_a_file_changes(project):
+    """Clients cache catalogs; they need a cheap way to know those are stale."""
+    api = Api(project)
+    start = api.bootstrap()["revision"]
+
+    edit_outside(level_file(project), '"stageType": "start"', '"stageType": "peak"')
+    api.dataset.refresh()
+
+    assert api.bootstrap()["revision"] != start
+
+
+def test_the_revision_holds_still_when_nothing_changes(project):
+    api = Api(project)
+    start = api.bootstrap()["revision"]
+    api.dataset.refresh()
+    assert api.bootstrap()["revision"] == start
+
+
+def test_a_level_read_reports_the_revision(project):
+    """So the client can compare without a second round trip."""
+    api = Api(project)
+    assert api.level("chapter_1")["revision"] == api.dataset.revision
+
+
+def test_a_loot_table_added_outside_reaches_the_catalog(project):
+    """The case that was broken: the library was frozen at page load."""
+    api = Api(project)
+    assert "loot_brand_new" not in [t["id"] for t in api.bootstrap()["lootCatalog"]]
+
+    before = api.level("chapter_1")["revision"]
+    (project / "Assets/StreamingAssets/GameData/loot_tables/loot_brand_new.json").write_text(
+        '{\n  "dataType": "LootTableData",\n  "id": "loot_brand_new",\n  "entries": []\n}\n')
+
+    after = api.level("chapter_1")["revision"]
+    assert after != before, "the client would never know to re-fetch"
+    assert "loot_brand_new" in [t["id"] for t in api.bootstrap()["lootCatalog"]]

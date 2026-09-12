@@ -108,6 +108,10 @@ class Dataset:
         self.tilemap_data = self.root / "Assets/StreamingAssets/TilemapData"
         self.docs: dict[tuple[str, str], Document] = {}
         self.problems: list[dict] = []
+        # Bumped whenever the indexed set changes, so a client holding derived
+        # data (catalogs, id lists) can tell it has gone stale without
+        # re-fetching to find out.
+        self.revision = 0
         self.load()
 
     # ── loading ──────────────────────────────────────────────────────────
@@ -115,6 +119,7 @@ class Dataset:
     def load(self) -> None:
         self.docs.clear()
         self.problems.clear()
+        self.revision += 1
         if not self.game_data.is_dir():
             self.problems.append({
                 "severity": "error",
@@ -180,6 +185,7 @@ class Dataset:
             if path not in on_disk:
                 self.docs.pop(key, None)
                 changed = True
+                self.revision += 1
                 continue
             doc = self.docs.get(key)
             if doc is not None and doc.is_stale():
@@ -190,6 +196,7 @@ class Dataset:
                     # problem surfaces through the normal load path.
                     return self._reload_all()
                 changed = True
+                self.revision += 1
                 # An id or dataType change moves the document's key.
                 if (doc.data_type, doc.id) != key:
                     return self._reload_all()

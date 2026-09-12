@@ -112,7 +112,21 @@ async function loadLevel(levelId) {
 
 async function reloadLevel() {
   state.level = await api(`/api/level/${encodeURIComponent(state.levelId)}`);
+  await syncCatalogsIfStale();
   renderAll();
+}
+
+/** Re-fetch the cached catalogs when the dataset behind them has moved.
+ *
+ *  The libraries, the encounter dropdown and the rarity palette all come from
+ *  /api/bootstrap and would otherwise be whatever they were at page load — so
+ *  a loot table added outside the editor would never appear in the library.
+ *  The revision makes that detectable without re-fetching to find out.
+ */
+async function syncCatalogsIfStale() {
+  const seen = state.level?.revision;
+  if (seen == null || seen === state.boot.revision) return;
+  state.boot = await api('/api/bootstrap');
 }
 
 // ── derived helpers ──────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ class Api:
         ds = self.dataset
         ds.refresh()
         return {
+            "revision": ds.revision,
             "projectRoot": str(ds.root),
             "levels": ds.level_summaries(),
             "plans": [{"id": d.id, "file": d.path.name,
@@ -59,6 +60,10 @@ class Api:
         self.dataset.refresh()
         view = self.dataset.level_view(level_id)
         view["issues"] = validate_level(self.dataset, level_id)
+        # The client caches catalogs from /api/bootstrap. Hand it the revision
+        # so it can notice they are stale instead of holding them until a
+        # human thinks to press Reload.
+        view["revision"] = self.dataset.revision
         return view
 
     def validate(self, scope: str | None, target: str | None) -> dict:
