@@ -14,7 +14,9 @@ that way unless there is a strong reason not to.
   it with a pretty-printer.
 - `ozxlevel/dataset.py` — GameData index and the projections the UI reads.
 - `ozxlevel/validate.py` — the silent-failure rules (see below).
-- `ozxlevel/api.py` — loopback HTTP API and static serving.
+- `ozxlevel/api.py` — loopback HTTP API and static serving. Reads call
+  `Dataset.refresh()` first; writes never do — they refuse when the file moved,
+  because a pointer-addressed patch against changed text can hit the wrong node.
 - `web/` — the browser client, built from `level_editor_template.html` (the design is
   the spec; keep `styles.css` in step with it).
 

@@ -38,14 +38,30 @@ SUBDIR = {
 }
 
 
+class ExternallyModified(RuntimeError):
+    """The file changed on disk since we parsed it."""
+
+
+def _stamp(path: pathlib.Path) -> tuple[int, int]:
+    """Cheap change token for a file: (mtime_ns, size)."""
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
 class Document:
     """One JSON file: its path, parsed value, and span map for editing."""
 
-    __slots__ = ("path", "doc", "data_type", "id")
+    __slots__ = ("path", "doc", "data_type", "id", "stamp")
 
     def __init__(self, path: pathlib.Path):
         self.path = path
-        text = path.read_bytes().decode("utf-8")
+        self._read()
+
+    def _read(self) -> None:
+        # Stamp BEFORE reading, so a write landing between the two is caught by
+        # the next staleness check rather than silently adopted.
+        self.stamp = _stamp(self.path)
+        text = self.path.read_bytes().decode("utf-8")
         self.doc = jsonspan.parse(text)
         value = self.doc.value
         self.data_type = value.get("dataType") if isinstance(value, dict) else None
@@ -55,17 +71,32 @@ class Document:
     def value(self) -> Any:
         return self.doc.value
 
+    def is_stale(self) -> bool:
+        try:
+            return _stamp(self.path) != self.stamp
+        except OSError:
+            return True
+
     def reload(self) -> None:
-        text = self.path.read_bytes().decode("utf-8")
-        self.doc = jsonspan.parse(text)
+        self._read()
 
     def apply(self, edits: list[dict]) -> None:
-        """Patch the file on disk, preserving every byte we did not edit."""
+        """Patch the file on disk, preserving every byte we did not edit.
+
+        Refuses when the file changed underneath us. The patch is computed
+        against the text parsed earlier and written back whole, so applying it
+        to a file someone else has edited would not merge — it would restore
+        our stale copy and take their work with it.
+        """
+        if self.is_stale():
+            raise ExternallyModified(
+                f"{self.path.name} changed on disk since it was loaded; "
+                f"reload before editing")
         new_text = jsonspan.patch(self.doc, edits)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_bytes(new_text.encode("utf-8"))
         tmp.replace(self.path)
-        self.doc = jsonspan.parse(new_text)
+        self._read()
 
 
 class Dataset:
@@ -123,6 +154,55 @@ class Dataset:
                     "path": str(path)})
                 continue
             self.docs[key] = doc
+
+
+    def refresh(self) -> bool:
+        """Pick up edits made outside the editor. Returns True if anything moved.
+
+        Called before every read, so the page reflects the files as they are
+        now. A browser refresh re-fetches the API but cannot re-read disk on
+        its own, and stale data here is not merely wrong on screen — an edit
+        computed against it would write the old file back.
+
+        Cheap: one stat() per file. Only changed documents are reparsed.
+        """
+        if not self.game_data.is_dir():
+            return False
+
+        # rglob yields absolute paths and Documents were built from them, so
+        # compare directly — resolve() raises on a path just deleted.
+        on_disk = set(self.game_data.rglob("*.json"))
+        known = {d.path: key for key, d in self.docs.items()}
+        changed = False
+
+        # Reparse what changed; drop what vanished.
+        for path, key in list(known.items()):
+            if path not in on_disk:
+                self.docs.pop(key, None)
+                changed = True
+                continue
+            doc = self.docs.get(key)
+            if doc is not None and doc.is_stale():
+                try:
+                    doc.reload()
+                except Exception:
+                    # A half-written or broken file: rebuild wholesale so the
+                    # problem surfaces through the normal load path.
+                    return self._reload_all()
+                changed = True
+                # An id or dataType change moves the document's key.
+                if (doc.data_type, doc.id) != key:
+                    return self._reload_all()
+
+        # Anything new showing up needs the full load path for its duplicate
+        # and dataType checks.
+        if on_disk - set(known):
+            return self._reload_all()
+        return changed
+
+    def _reload_all(self) -> bool:
+        self.load()
+        return True
 
     # ── lookup ───────────────────────────────────────────────────────────
 

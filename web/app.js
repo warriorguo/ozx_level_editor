@@ -35,7 +35,9 @@ async function api(path, options) {
   const response = await fetch(path, options);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || payload.message || `${response.status} ${path}`);
+    const err = new Error(payload.error || payload.message || `${response.status} ${path}`);
+    err.externallyModified = !!payload.externallyModified;
+    throw err;
   }
   return payload;
 }
@@ -781,7 +783,15 @@ async function applyEdits(dataType, id, edits, message) {
     markSaved(message || 'written');
     if (message) showToast(message);
   } catch (err) {
-    showToast(`Failed: ${err.message}`);
+    // Someone edited the file outside the editor. The patch was computed
+    // against the older text, so applying it would restore that text and
+    // take their change with it — the server refuses, and we re-read.
+    if (err.externallyModified) {
+      await reloadLevel();
+      showToast('File changed on disk — reloaded. Redo that edit.');
+    } else {
+      showToast(`Failed: ${err.message}`);
+    }
   } finally {
     setBusy(false);
   }
@@ -827,7 +837,12 @@ async function toggleDoor(roomIndex, direction, open) {
         : `Door ${direction} closed (twin removed)`);
     }
   } catch (err) {
-    showToast(`Failed: ${err.message}`);
+    if (err.externallyModified) {
+      await reloadLevel();
+      showToast('File changed on disk — reloaded. Redo that door change.');
+    } else {
+      showToast(`Failed: ${err.message}`);
+    }
   } finally {
     setBusy(false);
   }

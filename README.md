@@ -80,6 +80,19 @@ Every room on every level places successfully, including the negative
 coordinates and cycles in `level_generated_cycle` and the four floors of
 `level_test`.
 
+## Files changed outside the editor
+
+Every read re-stats the tree and reparses what moved, so editing a file in your
+own editor, or a `git checkout`, shows up on the next page refresh. Only changed
+documents are reparsed; new and deleted files are picked up too.
+
+Writes are guarded rather than refreshed. A span patch is computed against the
+text the server last parsed and the whole result is written back, so applying it
+to a file someone else changed would not merge — it would restore the stale copy
+and take their edit with it. Instead the write is refused, the dataset refreshes,
+and the page reloads asking you to redo that one action. The same applies to door
+toggles, whose array indices could otherwise land on a different room entirely.
+
 ## How writes work
 
 Edits go straight to disk — there is no unsaved working copy. Each one is a

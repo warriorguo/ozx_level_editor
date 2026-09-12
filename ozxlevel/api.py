@@ -13,7 +13,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from .dataset import DIRECTION_IDS, DIRECTION_TWIN, Dataset
+from .dataset import DIRECTION_IDS, DIRECTION_TWIN, Dataset, ExternallyModified
 from .validate import (validate_all, validate_encounter, validate_level,
                        validate_loot, validate_plan)
 
@@ -31,6 +31,7 @@ class Api:
 
     def bootstrap(self) -> dict:
         ds = self.dataset
+        ds.refresh()
         return {
             "projectRoot": str(ds.root),
             "levels": ds.level_summaries(),
@@ -55,12 +56,14 @@ class Api:
         }
 
     def level(self, level_id: str) -> dict:
+        self.dataset.refresh()
         view = self.dataset.level_view(level_id)
         view["issues"] = validate_level(self.dataset, level_id)
         return view
 
     def validate(self, scope: str | None, target: str | None) -> dict:
         ds = self.dataset
+        ds.refresh()
         if scope == "level" and target:
             issues = validate_level(ds, target)
         elif scope == "plan" and target:
@@ -86,7 +89,11 @@ class Api:
             raise KeyError(f"{data_type} '{entity_id}' not found")
         if not edits:
             return {"ok": True, "applied": 0}
-        doc.apply(edits)
+        try:
+            doc.apply(edits)
+        except ExternallyModified as exc:
+            self.dataset.refresh()
+            return {"ok": False, "externallyModified": True, "error": str(exc)}
         return {"ok": True, "applied": len(edits), "file": str(doc.path)}
 
     def set_door(self, level_id: str, floor: int, room: int,
@@ -98,6 +105,11 @@ class Api:
         of the same write, never a follow-up the user has to remember.
         """
         ds = self.dataset
+        # Deliberately NOT refreshing here. A door edit is computed from the
+        # in-memory graph and addressed by array index; if the file changed
+        # underneath, silently re-reading would apply the click to whatever
+        # now sits at that index. Document.apply refuses instead, and the
+        # client reloads and asks the user to redo it.
         doc = ds.get("LevelData", level_id)
         if doc is None:
             raise KeyError(level_id)
@@ -126,7 +138,11 @@ class Api:
                         edits.append({"op": "remove",
                                       "path": f"/floors/{t_fi}/rooms/{t_ri}/doors/{i}"})
                         break
-            doc.apply(edits)
+            try:
+                doc.apply(edits)
+            except ExternallyModified as exc:
+                ds.refresh()
+                return {"ok": False, "externallyModified": True, "error": str(exc)}
             return {"ok": True, "applied": len(edits)}
 
         if existing is not None:
@@ -152,7 +168,11 @@ class Api:
                                 "toRoomId": room_id,
                                 "toDoorId": direction,
                                 "locked": False}})
-        doc.apply(edits)
+        try:
+            doc.apply(edits)
+        except ExternallyModified as exc:
+            ds.refresh()
+            return {"ok": False, "externallyModified": True, "error": str(exc)}
         return {"ok": True, "applied": len(edits),
                 "linked": n_room.get("roomId")}
 
