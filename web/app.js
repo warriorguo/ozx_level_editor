@@ -72,6 +72,67 @@ function markSaved(text) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// ── project folder ───────────────────────────────────────────────────────
+// The app has no command line, so the ozx_base checkout is chosen here. When
+// running inside the native wrapper a real NSOpenPanel is available through a
+// WKWebView message handler; in a plain browser tab it is a text field, and
+// both go through the same PUT /api/config.
+
+const nativeBridge = () => window.webkit?.messageHandlers?.pickFolder;
+
+function showSetup({ dismissible, reason, current }) {
+  $('setupVeil').hidden = false;
+  $('setupError').textContent = '';
+  $('setupCancel').hidden = !dismissible;
+  $('setupBrowse').hidden = !nativeBridge();
+  $('setupPath').value = current || '';
+  if (reason) $('setupReason').textContent = reason;
+  $('setupPath').focus();
+}
+
+const hideSetup = () => { $('setupVeil').hidden = true; };
+
+async function applyProjectRoot(path) {
+  if (!path || !path.trim()) {
+    $('setupError').textContent = 'Enter a folder path.';
+    return;
+  }
+  setBusy(true);
+  try {
+    const result = await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectRoot: path.trim() }),
+    }).then((r) => r.json());
+
+    if (!result.ok) {
+      $('setupError').textContent = result.error || 'Could not use that folder.';
+      return;
+    }
+    hideSetup();
+    showToast(`Project set — ${result.documents} documents indexed`);
+    await boot();                       // re-bootstrap against the new project
+  } catch (err) {
+    $('setupError').textContent = err.message;
+  } finally {
+    setBusy(false);
+  }
+}
+
+/** Called by the native wrapper after the user chooses a folder. */
+window.onFolderPicked = (path) => { $('setupPath').value = path; applyProjectRoot(path); };
+
+$('setupUse').addEventListener('click', () => applyProjectRoot($('setupPath').value));
+$('setupPath').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyProjectRoot($('setupPath').value);
+});
+$('setupBrowse').addEventListener('click', () => nativeBridge()?.postMessage({}));
+$('setupCancel').addEventListener('click', hideSetup);
+$('projectBtn').addEventListener('click', async () => {
+  const cfg = await api('/api/config');
+  showSetup({ dismissible: cfg.mounted, current: cfg.project_root });
+});
+
 // ── loading ──────────────────────────────────────────────────────────────
 
 async function boot() {
@@ -85,7 +146,24 @@ async function boot() {
   }
 
   const { levels, counts, projectRoot } = state.boot;
-  $('projectLabel').textContent = `${projectRoot} · ${counts.documents} docs`;
+  $('projectLabel').textContent = projectRoot
+    ? `${projectRoot} · ${counts.documents} docs`
+    : 'no project folder set';
+
+  // Nothing mounted yet: block on the chooser rather than showing an editor
+  // with nothing in it.
+  if (!projectRoot || !counts.documents) {
+    const cfg = await api('/api/config').catch(() => ({}));
+    showSetup({
+      dismissible: false,
+      current: cfg.project_root,
+      reason: cfg.reason && cfg.project_root
+        ? `That folder cannot be used: ${cfg.reason}`
+        : undefined,
+    });
+    return;
+  }
+  hideSetup();
 
   if (!levels.length) {
     $('roomsGrid').innerHTML = '<div class="empty-copy">No LevelData found under GameData/levels/.</div>';

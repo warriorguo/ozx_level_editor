@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import mimetypes
 import pathlib
+import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .config import Config, ResolvedConfig, looks_like_project
 from .dataset import DIRECTION_IDS, DIRECTION_TWIN, Dataset, ExternallyModified
 from .validate import (validate_all, validate_encounter, validate_level,
                        validate_loot, validate_plan)
@@ -21,11 +23,51 @@ WEB_ROOT = pathlib.Path(__file__).resolve().parent.parent / "web"
 
 
 class Api:
-    """Holds the mounted dataset and answers the editor's requests."""
+    """Holds the mounted dataset and answers the editor's requests.
 
-    def __init__(self, project_root: pathlib.Path):
-        self.project_root = project_root
-        self.dataset = Dataset(project_root)
+    The mounted folder can change while the server runs — a double-clicked app
+    has no command line, so picking a project is a UI action. Swaps happen
+    under a lock so an in-flight request never sees a half-mounted world.
+    """
+
+    def __init__(self, project_root: pathlib.Path | None,
+                 config: Config | None = None):
+        self.config = config or Config()
+        self._lock = threading.RLock()
+        self.project_root = pathlib.Path(project_root) if project_root else None
+        # No folder yet is a legitimate startup state: the app opens, says so,
+        # and waits for the user to pick one. Mounting an empty Dataset keeps
+        # every read path working without a null check at each call site.
+        self.dataset = Dataset(self.project_root) if self.project_root \
+            else Dataset.empty()
+
+    # ── configuration ────────────────────────────────────────────────────
+
+    def get_config(self) -> dict:
+        with self._lock:
+            resolved = self.config.resolve().as_dict()
+        resolved["mounted"] = bool(self.project_root)
+        resolved["documents"] = len(self.dataset.docs)
+        return resolved
+
+    def set_project_root(self, candidate: str) -> dict:
+        """Mount a different folder, persist the choice, and reindex."""
+        ok, reason = looks_like_project(candidate)
+        if not ok:
+            return {"ok": False, "error": reason}
+
+        root = pathlib.Path(candidate).expanduser().resolve()
+        with self._lock:
+            self.project_root = root
+            self.dataset = Dataset(root)
+            self.config.project_root = str(root)
+            try:
+                self.config.save()
+            except OSError as exc:
+                # The folder is mounted either way; only persistence failed.
+                return {"ok": True, "warning": f"could not save config: {exc}",
+                        **self.get_config()}
+        return {"ok": True, **self.get_config()}
 
     # ── reads ────────────────────────────────────────────────────────────
 
@@ -224,8 +266,14 @@ def _guess_neighbour(rooms, index, direction):
 class Handler(BaseHTTPRequestHandler):
     api: Api = None  # set by serve()
 
-    def log_message(self, fmt, *args):  # quieter console
-        if "/api/" in (args[0] if args else ""):
+    def log_message(self, fmt, *args):
+        """Log API calls, stay quiet about static assets.
+
+        args[0] is the request line for access logs but an int status for
+        log_error, so coerce before matching rather than assuming a string.
+        """
+        first = str(args[0]) if args else ""
+        if "/api/" in first or not first.startswith("GET /"):
             super().log_message(fmt, *args)
 
     # -- helpers
@@ -247,6 +295,12 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         path, query = url.path, parse_qs(url.query)
         try:
+            # Deliberately trivial and listed first: the app wrapper probes this
+            # to know the server is up, and must not wait on the index.
+            if path == "/health":
+                return self._json({"ok": True})
+            if path == "/api/config":
+                return self._json(self.api.get_config())
             if path == "/api/bootstrap":
                 return self._json(self.api.bootstrap())
             if path.startswith("/api/level/"):
@@ -274,6 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/edit":
                 return self._json(self.api.edit(
                     payload["dataType"], payload["id"], payload["edits"]))
+            if url.path == "/api/config":
+                return self._json(self.api.set_project_root(payload.get("projectRoot", "")))
             if url.path == "/api/door":
                 return self._json(self.api.set_door(
                     payload["levelId"], payload["floor"], payload["room"],
@@ -283,6 +339,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(exc, 404)
         except Exception as exc:  # noqa: BLE001
             return self._error(exc, 500)
+
+    def do_PUT(self):
+        # The recipe's shape: PUT /config swaps the mounted folder.
+        return self.do_POST()
 
     def _static(self, path):
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
@@ -300,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def serve(project_root: pathlib.Path, port: int = 8765):
-    Handler.api = Api(project_root)
+def serve(project_root: pathlib.Path | None, port: int = 8765, config=None):
+    Handler.api = Api(project_root, config)
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     return server, Handler.api

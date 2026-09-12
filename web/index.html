@@ -18,6 +18,7 @@
         <span id="levelIssues"></span>
       </div>
       <div class="top-actions">
+        <button class="button ghost" id="projectBtn" title="Change project folder">📁 Project</button>
         <span id="dirtyLabel"><span class="dirty-dot"></span>saved</span>
         <button class="button ghost" id="validateBtn">Validate</button>
         <button class="button ghost" id="reloadBtn">Reload</button>
@@ -85,6 +86,22 @@
   <div class="problems-drawer" id="problemsDrawer">
     <h4>Problems</h4>
     <div id="problemsList"></div>
+  </div>
+
+  <div class="setup-veil" id="setupVeil" hidden>
+    <div class="setup-card">
+      <h2>Pick your <code>ozx_base</code> checkout</h2>
+      <p id="setupReason">Level Studio edits the JSON under
+        <code>Assets/StreamingAssets/GameData</code>. Choose the folder that
+        contains it.</p>
+      <div class="setup-row">
+        <input id="setupPath" placeholder="/path/to/ozx_base" spellcheck="false" />
+        <button class="button" id="setupBrowse" hidden>Browse…</button>
+        <button class="button primary" id="setupUse">Use this folder</button>
+      </div>
+      <div class="setup-error" id="setupError"></div>
+      <button class="button ghost setup-dismiss" id="setupCancel" hidden>Cancel</button>
+    </div>
   </div>
 
   <div class="toast" id="toast">Saved</div>

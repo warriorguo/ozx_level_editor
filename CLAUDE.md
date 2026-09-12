@@ -19,6 +19,11 @@ that way unless there is a strong reason not to.
   because a pointer-addressed patch against changed text can hit the wrong node.
 - `web/` — the browser client, built from `level_editor_template.html` (the design is
   the spec; keep `styles.css` in step with it).
+- `swift-app/` — the macOS wrapper. `make -C swift-app build`. It spawns `serve.py`
+  with **stock `/usr/bin/python3` (3.9)**, so the package must stay 3.9-compatible;
+  `tests/test_python39.py` enforces that and `tests/test_app_bundle.py` pins the
+  wrapper's contract. Never register Cmd+S as a menu item — AppKit would steal it
+  from the page, which binds it itself.
 
 `Documents/` holds three Chinese docs, all verified against `ozx_base@d867b644` — keep new
 claims sourced the same way (cite `file:line`), and update these rather than starting

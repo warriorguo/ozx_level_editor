@@ -102,6 +102,26 @@ class Document:
 class Dataset:
     """All of GameData, indexed by (dataType, id)."""
 
+    @classmethod
+    def empty(cls) -> "Dataset":
+        """A Dataset with nothing mounted.
+
+        The app starts before a project folder is chosen, so every read path
+        has to work against an empty index rather than guard for None.
+        """
+        ds = cls.__new__(cls)
+        ds.root = None
+        ds.game_data = None
+        ds.tilemap_data = None
+        ds.docs = {}
+        ds.problems = [{
+            "severity": "info",
+            "code": "DATA_NO_PROJECT",
+            "message": "No project folder set — pick your ozx_base checkout.",
+        }]
+        ds.revision = 0
+        return ds
+
     def __init__(self, project_root: str | pathlib.Path):
         self.root = pathlib.Path(project_root).expanduser().resolve()
         self.game_data = self.root / "Assets/StreamingAssets/GameData"
@@ -171,7 +191,7 @@ class Dataset:
 
         Cheap: one stat() per file. Only changed documents are reparsed.
         """
-        if not self.game_data.is_dir():
+        if self.game_data is None or not self.game_data.is_dir():
             return False
 
         # rglob yields absolute paths and Documents were built from them, so

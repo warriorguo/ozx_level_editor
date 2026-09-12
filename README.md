@@ -5,13 +5,22 @@ real `GameData/*.json` in a sibling `ozx_base` checkout.
 
 ## Run it
 
+As an app:
+
+```sh
+make -C swift-app build && open "swift-app/build/OZX Level Studio.app"
+make -C swift-app install          # to /Applications
+```
+
+Or from a terminal:
+
 ```sh
 python3 serve.py
 ```
 
-Python 3.11+, standard library only — no pip install, no build step, no
-dependencies. It finds the sibling `ozx_base` automatically and opens a browser
-at <http://127.0.0.1:8765>.
+Standard library only — no pip install, no build step, no dependencies. It
+finds the sibling `ozx_base` automatically and opens a browser at
+<http://127.0.0.1:8765>.
 
 ```sh
 python3 serve.py --root /path/to/ozx_base   # explicit checkout
@@ -20,6 +29,33 @@ python3 serve.py --no-open                  # don't launch a browser
 ```
 
 The server binds to loopback only. There is no auth; do not expose it.
+
+## The macOS app
+
+`swift-app/` is a ~300-line AppKit + WKWebView wrapper (lifted from the
+`ozx_roomtemplate` local-client recipe). It spawns `serve.py` on a free port,
+waits for `/health`, and hosts the page — so the app and a terminal instance
+can run side by side without colliding.
+
+It runs the sources with macOS's stock `/usr/bin/python3` rather than bundling
+an interpreter, which keeps the bundle ~320KB and means editing the Python
+inside the installed `.app` takes effect on the next launch. The cost is that
+**the code must stay Python 3.9-compatible** — `tests/test_python39.py` holds
+that line. If a Mac without Xcode Command Line Tools ever becomes a target,
+drop a self-contained binary into `Contents/Resources/` and
+`PythonServer.locateInterpreter()` picks it up; that is the only place to change.
+
+The app is unsigned, so a first launch elsewhere needs right-click ▸ Open.
+
+## Choosing the project folder
+
+An app has no command line, so the `ozx_base` checkout is chosen in the UI and
+remembered in `~/.config/ozx-level-studio/config.json`. Inside the app the
+**Browse…** button opens a real macOS folder chooser; in a browser tab the same
+dialog takes a typed path. Both go through `PUT /api/config`, which validates
+the folder, swaps the dataset under a lock, and bumps the revision so the
+client re-syncs. Starting with no folder set is a normal state — the editor
+opens and asks, rather than failing.
 
 ## Tests
 

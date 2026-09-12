@@ -791,3 +791,52 @@ button { color: inherit; }
 .library-target.armed { color: var(--acid); }
 
 .asset-card { cursor: pointer; }
+
+/* ── project chooser ─────────────────────────────────────────────────────
+   The app has no command line, so picking the ozx_base checkout is a UI
+   action. Shown as a blocking veil on first launch (there is nothing to edit
+   until a folder is set) and as a dismissible dialog afterwards. */
+
+.setup-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 11, 9, .82);
+  backdrop-filter: blur(6px);
+}
+.setup-card {
+  width: min(620px, 88vw);
+  background: var(--panel-2);
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  position: relative;
+}
+.setup-card h2 {
+  margin: 0 0 8px;
+  font-family: var(--display);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-size: 15px;
+}
+.setup-card p { margin: 0 0 16px; color: var(--muted); line-height: 1.6; }
+.setup-card code { color: var(--acid); }
+.setup-row { display: flex; gap: 8px; }
+.setup-row input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 11px;
+  color: var(--ink);
+  background: #101512;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  font-family: var(--body);
+}
+.setup-row input:focus { border-color: var(--acid); }
+.setup-error { min-height: 18px; margin-top: 10px; font-size: 11px; color: var(--danger); }
+.setup-dismiss { position: absolute; top: 14px; right: 14px; }
