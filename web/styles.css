@@ -21,6 +21,17 @@
   --body: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+/* `hidden` must actually hide.
+ *
+ * The HTML `hidden` attribute is `display: none` in the user-agent stylesheet,
+ * which any author rule with a class selector outranks. `.setup-veil` sets
+ * `display: grid`, so the project picker ignored its own hidden attribute and
+ * sat permanently over the editor — the JS was fine, the cascade was not.
+ *
+ * jsdom reads `el.hidden` as a property and does not run the cascade, so the
+ * UI tests could not see this. Hence the blunt instrument. */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
