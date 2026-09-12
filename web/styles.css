@@ -852,3 +852,6 @@ button { color: inherit; }
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+.setup-config { margin-top: 12px; font-size: 10px; color: var(--dim); }
+.setup-config code { color: var(--muted); }
