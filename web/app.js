@@ -80,17 +80,30 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
 
 const nativeBridge = () => window.webkit?.messageHandlers?.pickFolder;
 
-function showSetup({ dismissible, reason, current }) {
+function showSetup({ dismissible, reason, current, suggestion }) {
   $('setupVeil').hidden = false;
   $('setupError').textContent = '';
   $('setupCancel').hidden = !dismissible;
   $('setupBrowse').hidden = !nativeBridge();
-  $('setupPath').value = current || '';
-  // A pre-filled guess turns the usual case into one click.
-  if (current) $('setupUse').textContent = 'Use this folder';
-  if (reason) $('setupReason').textContent = reason;
+
+  // Pre-fill with the saved folder if there is one, otherwise the guess — so
+  // the usual case is one click rather than typing a path.
+  $('setupPath').value = current || suggestion || '';
+
+  // When the saved path is the problem, the guess is the way out, so offer it
+  // explicitly instead of silently overwriting what the user had.
+  const offerSuggestion = suggestion && suggestion !== $('setupPath').value;
+  $('setupHint').hidden = !offerSuggestion;
+  if (offerSuggestion) $('setupSuggestion').textContent = suggestion;
+
+  $('setupReason').textContent = reason || DEFAULT_SETUP_REASON;
   $('setupPath').focus();
+  $('setupPath').select();
 }
+
+const DEFAULT_SETUP_REASON =
+  'Level Studio edits the JSON under Assets/StreamingAssets/GameData. '
+  + 'Choose the folder that contains it.';
 
 const hideSetup = () => { $('setupVeil').hidden = true; };
 
@@ -129,10 +142,15 @@ $('setupPath').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyProjectRoot($('setupPath').value);
 });
 $('setupBrowse').addEventListener('click', () => nativeBridge()?.postMessage({}));
+$('setupSuggestion').addEventListener('click', () => {
+  $('setupPath').value = $('setupSuggestion').textContent;
+  applyProjectRoot($('setupPath').value);
+});
 $('setupCancel').addEventListener('click', hideSetup);
 $('projectBtn').addEventListener('click', async () => {
   const cfg = await api('/api/config');
-  showSetup({ dismissible: cfg.mounted, current: cfg.project_root });
+  showSetup({ dismissible: cfg.mounted, current: cfg.project_root,
+              suggestion: cfg.suggestion });
 });
 
 // ── loading ──────────────────────────────────────────────────────────────

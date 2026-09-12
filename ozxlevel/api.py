@@ -48,9 +48,11 @@ class Api:
             resolved = self.config.resolve().as_dict()
         resolved["mounted"] = bool(self.project_root)
         resolved["documents"] = len(self.dataset.docs)
-        if not resolved["usable"] and not resolved["project_root"]:
+        if not resolved["usable"]:
             # Offer the obvious answer so the picker is a confirmation rather
-            # than a typing exercise.
+            # than a typing exercise. Computed whenever the folder cannot be
+            # used — a saved path that has since moved needs the suggestion
+            # more than an empty one does, not less.
             guess = discover_project(near=WEB_ROOT.parent)
             resolved["suggestion"] = str(guess) if guess else ""
         else:
@@ -83,7 +85,8 @@ class Api:
         ds.refresh()
         return {
             "revision": ds.revision,
-            "projectRoot": str(ds.root),
+            # str(None) would be the string "None", which is truthy in JS.
+            "projectRoot": str(ds.root) if ds.root else "",
             "levels": ds.level_summaries(),
             "plans": [{"id": d.id, "file": d.path.name,
                        "floors": len(d.value.get("floors") or [])}

@@ -60,6 +60,7 @@ def fixtures(tmp_path_factory):
     api = Api(OZX_BASE)
     (out / "boot.json").write_text(json.dumps(api.bootstrap()))
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
+    (out / "cfg.json").write_text(json.dumps(api.get_config()))
     level_id = api.bootstrap()["levels"][0]["id"]
     (out / "lvl.json").write_text(json.dumps(api.level(level_id)))
     return out

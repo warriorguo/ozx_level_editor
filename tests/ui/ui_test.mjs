@@ -19,6 +19,7 @@ const { JSDOM } = await import(`file://${process.env.JSDOM_PATH}`);
 const routes = {
   '/api/bootstrap': JSON.parse(fs.readFileSync(`${FIXTURES}/boot.json`)),
   '/api/validate': JSON.parse(fs.readFileSync(`${FIXTURES}/val.json`)),
+  '/api/config': JSON.parse(fs.readFileSync(`${FIXTURES}/cfg.json`)),
 };
 const level = JSON.parse(fs.readFileSync(`${FIXTURES}/lvl.json`));
 routes[`/api/level/${level.id}`] = level;
@@ -185,6 +186,17 @@ if (rule) {
   }
   check('the search box sits in its own fixed row',
         tracks.length >= 3 && tracks[tracks.length - 2] === '42px', tracks.join(' | '));
+}
+
+// ── the project picker offers a path rather than an empty box ────────────
+const cfg = routes['/api/config'];
+if (cfg) {
+  q('#projectBtn').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+  check('the picker opens', q('#setupVeil').hidden === false);
+  check('and is pre-filled, not empty',
+        q('#setupPath').value.length > 0, q('#setupPath').value);
+  check('a mounted project can dismiss it', q('#setupCancel').hidden === false);
 }
 
 console.log(failures.length ? `\n${failures.length} failing: ${failures.join(', ')}` : '\nall green');

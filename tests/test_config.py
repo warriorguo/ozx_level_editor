@@ -232,3 +232,35 @@ def test_the_api_suggests_a_folder_when_none_is_set(config_path):
     assert "suggestion" in cfg
     if cfg["suggestion"]:
         assert looks_like_project(cfg["suggestion"])[0] is True
+
+
+def test_a_broken_saved_path_still_gets_a_suggestion(config_path, tmp_path):
+    """The case that leaves the picker with nothing to offer.
+
+    A folder that has since moved or been renamed needs the suggestion more
+    than an empty one does — previously it got none, because the guess was
+    only computed when project_root was blank.
+    """
+    cfg = Config.load(config_path)
+    cfg.project_root = str(tmp_path / "moved-away")
+    api = Api(None, cfg)
+
+    resolved = api.get_config()
+    assert resolved["usable"] is False
+    assert "does not exist" in resolved["reason"]
+    # On this machine there is a real checkout to find.
+    if resolved["suggestion"]:
+        assert looks_like_project(resolved["suggestion"])[0] is True
+
+
+def test_an_unmounted_bootstrap_reports_an_empty_root_not_the_string_None(config_path):
+    """str(None) is 'None', which is truthy in JS and defeats `if (!root)`."""
+    api = Api(None, Config.load(config_path))
+    assert api.bootstrap()["projectRoot"] == ""
+
+
+def test_a_usable_folder_offers_no_suggestion(config_path, project):
+    """Nothing to fix, so nothing to suggest."""
+    cfg = Config.load(config_path)
+    cfg.project_root = str(project)
+    assert Api(project, cfg).get_config()["suggestion"] == ""
