@@ -136,3 +136,57 @@ def test_a_free_port_is_allocated_rather_than_a_fixed_one():
     src = (SWIFT / "Sources/LevelStudio/PythonServer.swift").read_text()
     assert "allocateFreePort" in src
     assert "sin_port = 0" in src, "port 0 is what asks the kernel for a free one"
+
+
+# ── the app icon ─────────────────────────────────────────────────────────
+
+
+def test_the_icon_is_checked_in():
+    """`make build` must not need `make icon` first."""
+    assert (SWIFT / "Resources/AppIcon.icns").is_file()
+
+
+def test_the_icon_carries_every_slot_macos_asks_for():
+    """A missing slot makes macOS resample a neighbour, which looks soft."""
+    icns = SWIFT / "Resources/AppIcon.icns"
+    out = subprocess.run(["iconutil", "--convert", "iconset", str(icns),
+                          "--output", "/tmp/ozx-icon-verify.iconset"],
+                         capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        pytest.skip("iconutil unavailable")
+    slots = {p.name for p in pathlib.Path("/tmp/ozx-icon-verify.iconset").iterdir()}
+    for size in (16, 32, 128, 256, 512):
+        assert f"icon_{size}x{size}.png" in slots
+        assert f"icon_{size}x{size}@2x.png" in slots
+
+
+def test_the_plist_names_the_icon_the_makefile_ships():
+    plist = plistlib.loads((SWIFT / "Resources/Info.plist").read_bytes())
+    assert plist["CFBundleIconFile"] == "AppIcon"
+    makefile = (SWIFT / "Makefile").read_text()
+    assert "AppIcon.icns" in makefile
+
+
+def test_small_sizes_use_the_compact_artwork():
+    """16 and 32 get their own drawing; a downscaled detailed mark is a blob.
+
+    The large mark is an outlined diamond with an acid plus inside it. At 16px
+    the outline is barely a pixel and the plus merges into it, so the compact
+    variant inverts to a filled diamond with the plus knocked out — carried by
+    contrast rather than line work.
+    """
+    makefile = (SWIFT / "Makefile").read_text()
+    icon = makefile[makefile.index("icon:"):makefile.index("clean:")]
+    assert "--compact" in icon, "the compact variant is never generated"
+    small = icon[icon.index("for s in 16 32"):]
+    assert "ICON_COMPACT" in small.split("done")[0], \
+        "the 16/32 slots must be cut from the compact master"
+
+
+def test_the_icon_generator_needs_no_dependencies():
+    src = (SWIFT / "tools/MakeIcon.swift").read_text()
+    for allowed in ("import AppKit", "import CoreGraphics", "import Foundation"):
+        assert allowed in src
+    assert "import PackageDescription" not in src
+    # colours come from the app's own palette, not invented for the icon
+    assert "0xD6 / 255" in src, "the acid green should match --acid in styles.css"
