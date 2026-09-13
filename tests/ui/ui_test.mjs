@@ -188,6 +188,20 @@ if (rule) {
         tracks.length >= 3 && tracks[tracks.length - 2] === '42px', tracks.join(' | '));
 }
 
+// ── catalogs show real artwork ───────────────────────────────────────────
+const art = qa('.content-glyph.art, .portrait.art');
+check('catalogs render real sprites', art.length > 0, `${art.length} sprite glyphs`);
+check('each crops from its sheet rather than stretching it',
+      art.every((el) => {
+        const style = el.querySelector('i')?.getAttribute('style') || '';
+        return style.includes('background-position') && style.includes('background-size');
+      }));
+check('sprites are served from the texture endpoint',
+      art.every((el) => (el.querySelector('i')?.getAttribute('style') || '')
+        .includes('/api/texture?path=')));
+check('rows with no resolvable art keep their letter glyph',
+      qa('.content-glyph:not(.art)').every((el) => el.textContent.trim().length > 0));
+
 // ── the enemy column says when each wave appears ─────────────────────────
 const whens = qa('.enemy-content .when');
 check('every enemy row states when it appears',

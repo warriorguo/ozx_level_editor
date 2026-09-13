@@ -886,3 +886,35 @@ button { color: inherit; }
   padding: 0 4px;
 }
 .when-sep { color: var(--line-bright); }
+
+/* ── real artwork in the catalogs ────────────────────────────────────────
+   Sprites are cropped out of their sheet with background-position rather than
+   sliced server-side, so the page does the work the sheet was designed for.
+   The inner <i> carries the sprite's own aspect ratio; the outer box centres
+   it, so a 91×96 body and a 512×512 tree sit sensibly in the same square.
+   Pixel art, so nearest-neighbour rather than the browser's smoothing. */
+
+.content-glyph.art,
+.portrait.art {
+  background: rgba(8, 12, 10, .5);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.content-glyph.art > i,
+.portrait.art > i,
+.loot-item .li-icon {
+  display: block;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+.content-glyph.art.missing { border: 1px solid var(--danger); }
+
+.loot-item .li-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-self: center;
+}
+/* the loot row gains an icon column */
+.loot-item { grid-template-columns: auto minmax(0,1fr) auto auto; }

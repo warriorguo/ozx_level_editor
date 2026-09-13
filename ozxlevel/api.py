@@ -319,6 +319,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.api.validate(
                     (query.get("scope") or [None])[0],
                     (query.get("target") or [None])[0]))
+            if path == "/api/texture":
+                return self._texture((query.get("path") or [""])[0])
             if path == "/api/reload":
                 return self._json(self.api.reload())
             return self._static(path)
@@ -353,6 +355,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         # The recipe's shape: PUT /config swaps the mounted folder.
         return self.do_POST()
+
+    def _texture(self, rel):
+        """Serve a texture from inside the mounted project.
+
+        Read-only and confined to the project root: the path comes from the
+        page, so it is resolved and checked rather than trusted. Textures are
+        immutable for a session's purposes, so unlike the API they are allowed
+        to cache.
+        """
+        root = self.api.project_root
+        if not root or not rel:
+            self.send_error(404)
+            return
+        target = (pathlib.Path(root) / rel).resolve()
+        if not str(target).startswith(str(pathlib.Path(root).resolve())) \
+                or not target.is_file() or target.suffix.lower() != ".png":
+            self.send_error(404)
+            return
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _static(self, path):
         rel = "index.html" if path in ("/", "") else path.lstrip("/")

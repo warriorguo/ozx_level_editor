@@ -214,6 +214,39 @@ for loot: `f0_room_0_7` has a room-clear plan *and* a cargo box, both pointing a
 `loot_ch1_pressure`, so without picking the slot there is no way to say which one
 a new table should replace.
 
+## Artwork in the catalogs
+
+Enemies, placements and loot items show their real sprite rather than a
+two-letter code. Resolution walks Unity's asset graph:
+
+```
+EnemyData.animConfigKey     "anim/husk"
+  → ResourcesDB.asset        key  → guid
+  → HuskAnimConfig.asset     spriteAnimStates[name="idle"] → guid
+  → Husk-BreathAnim.asset    frames[0] → {fileID, guid}
+  → HuskBreath.png(.meta)    the sprite whose internalID == fileID → rect
+```
+
+The enemy picture is the first frame of its **idle** state — the resting pose,
+which is what a picker wants. 23 enemies have `spriteAnimStates: []` and are
+rigged from a model prefab instead, so resolution falls through to the prefab's
+sprite, and then to its head and leg parts: `demolition`'s body is
+`m_Sprite: {fileID: 0}` because its whole silhouette is the head.
+
+**64 of 68 enemies** resolve. The remaining four (`long_broodmother` and the
+three octopuses) have no static sprite anywhere — they are drawn procedurally —
+and keep the letter glyph, as do the placement kinds with no prefab art.
+
+Nothing is cropped server-side. The sheet is served whole from `/api/texture`
+and the browser cuts it with `background-position`, which is what a sprite sheet
+is for and what keeps the server standard-library only. Unity measures sprite
+rects from the **bottom** of the texture and CSS from the **top**, so the flip
+happens once, in `_css_offset`, and nowhere else.
+
+The texture endpoint is read-only, confined to the mounted project, and serves
+`.png` only — the path comes from the page, so it is resolved and checked
+rather than trusted.
+
 ## Validation
 
 The rules concentrate on failures that produce no runtime error:

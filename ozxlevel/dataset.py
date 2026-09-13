@@ -15,6 +15,7 @@ import pathlib
 from typing import Any
 
 from . import jsonspan
+from .sprites import SpriteIndex
 
 # DoorDirection in Game.Contracts/Enums/GameEnums.cs:58 — the integer IS the
 # enum, so 0 means Up and never "absent".
@@ -120,6 +121,7 @@ class Dataset:
             "message": "No project folder set — pick your ozx_base checkout.",
         }]
         ds.revision = 0
+        ds.sprites = SpriteIndex(pathlib.Path("/nonexistent"))
         return ds
 
     def __init__(self, project_root: str | pathlib.Path):
@@ -132,6 +134,10 @@ class Dataset:
         # data (catalogs, id lists) can tell it has gone stale without
         # re-fetching to find out.
         self.revision = 0
+        # Sprite resolution walks Assets/, not GameData, so it is built lazily
+        # and separately — a session that never opens a catalog never pays for
+        # the ~3.7k .meta files it indexes.
+        self.sprites = SpriteIndex(self.root)
         self.load()
 
     # ── loading ──────────────────────────────────────────────────────────
@@ -267,6 +273,9 @@ class Dataset:
                 "id": doc.id,
                 "meta": meta or "enemy",
                 "code": _code(doc.id),
+                # The first frame of the idle state — what the thing looks like
+                # standing still, which is what a picker wants.
+                "sprite": self.sprites.idle_sprite_for_key(v.get("animConfigKey")),
                 "category": v.get("category"),
                 "role": v.get("role"),
                 "hasElite": bool(v.get("elite")),
@@ -310,6 +319,7 @@ class Dataset:
         v = doc.value
         return {
             "missing": False,
+            "sprite": self.sprites.sprite_for_resource_key(v.get("spriteKey")),
             # nameTemplate wins at generation time when set; displayName is the
             # fixed-literal fallback (OZX-586).
             "displayName": v.get("nameTemplate") or v.get("displayName") or item_id,
@@ -398,7 +408,8 @@ class Dataset:
         for k in known:
             seen.setdefault(k, 0)
         return [{"id": k, "meta": f"placement · used {seen[k]}×",
-                 "code": _code(k), "uses": seen[k]}
+                 "code": _code(k), "uses": seen[k],
+                 "sprite": self.sprites.sprite_for_prefab_key(f"prefab/{k}")}
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
     def encounter_enemies(self, encounter_id: str | None) -> list[dict]:

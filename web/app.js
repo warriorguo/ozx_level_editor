@@ -260,6 +260,47 @@ function catalogItem(list, id) {
 /** Options for a loot-table picker: every table, plus an explicit "none".
  *  Clearing a picker removes the key rather than writing an empty string —
  *  an omitted lootPlanId and a blank one are not the same thing. */
+/** A glyph for a catalog row: the real sprite when we can resolve one.
+ *
+ *  The sheet is served whole and cropped with background-position — that is
+ *  what a sprite sheet is for, and it means the server never decodes a pixel.
+ *  The sprite is scaled to fit the box while keeping its aspect ratio, so a
+ *  91×96 body and a 512×512 tree both sit sensibly in the same 25px square.
+ *
+ *  Falls back to the two-letter code: four enemies are drawn procedurally and
+ *  have no static sprite at all, and most placement kinds have no prefab art.
+ */
+/** The larger variant used by the library cards. */
+function portrait(sprite) {
+  const box = 34;
+  const scale = Math.min(box / sprite.width, box / sprite.height);
+  const style = [
+    `background-image:url('/api/texture?path=${encodeURIComponent(sprite.texture)}')`,
+    `background-position:${-sprite.x * scale}px ${-sprite.y * scale}px`,
+    `background-size:${sprite.sheetWidth * scale}px ${sprite.sheetHeight * scale}px`,
+    `width:${sprite.width * scale}px`,
+    `height:${sprite.height * scale}px`,
+  ].join(';');
+  return `<span class="portrait art" title="${esc(sprite.name)}"><i style="${style}"></i></span>`;
+}
+
+function glyph(sprite, code, extraClass = '') {
+  if (!sprite) {
+    return `<span class="content-glyph ${extraClass}">${esc(code)}</span>`;
+  }
+  const box = 25;
+  const scale = Math.min(box / sprite.width, box / sprite.height);
+  const style = [
+    `background-image:url('/api/texture?path=${encodeURIComponent(sprite.texture)}')`,
+    `background-position:${-sprite.x * scale}px ${-sprite.y * scale}px`,
+    `background-size:${sprite.sheetWidth * scale}px ${sprite.sheetHeight * scale}px`,
+    `width:${sprite.width * scale}px`,
+    `height:${sprite.height * scale}px`,
+  ].join(';');
+  return `<span class="content-glyph art ${extraClass}" title="${esc(sprite.name)}"
+    ><i style="${style}"></i></span>`;
+}
+
 function lootOptions(selected) {
   const catalog = state.boot.lootCatalog || [];
   const opts = [`<option value="">⟨none⟩</option>`];
@@ -298,7 +339,7 @@ function renderRooms() {
             || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
           const count = p.count != null ? p.count : p.cells.length;
           return `<div class="content-entry${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
-            <span class="content-glyph">${esc(source.code)}</span>
+            ${glyph(source.sprite, source.code)}
             <span><strong>${esc(p.kind)}</strong><small>${esc(detail)}</small></span>
             <span class="quantity" data-static-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
@@ -325,7 +366,7 @@ function renderRooms() {
               ? 'This wave waits — the condition includes any pure-wait steps before it'
               : 'Fires as soon as the playhead reaches this step')}">${esc(e.appearsWhen)}</span>`;
           return `<div class="content-entry ${e.missing ? 'missing' : ''}${slotCls('enemies', i)}" data-slot="enemies" data-slot-index="${i}">
-            <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(source.code)}</span>
+            ${glyph(source.sprite, source.code, e.missing ? 'missing' : '')}
             <span><strong>${esc(e.id)}</strong><small>${when}<span class="when-sep">·</span>${esc(bits.join(' · '))}</small></span>
             <span class="quantity" data-enemy-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
@@ -374,6 +415,7 @@ function renderRooms() {
           e.rarity ? `<span class="li-rarity"${colour ? ` style="color:${esc(colour)}"` : ''}>${esc(e.rarity)}</span>` : '',
         ].filter(Boolean).join('');
         return `<div class="loot-item" title="${esc(e.itemId)}">
+          ${e.sprite ? `<i class="li-icon" style="background-image:url('/api/texture?path=${encodeURIComponent(e.sprite.texture)}');background-position:${-e.sprite.x * Math.min(16 / e.sprite.width, 16 / e.sprite.height)}px ${-e.sprite.y * Math.min(16 / e.sprite.width, 16 / e.sprite.height)}px;background-size:${e.sprite.sheetWidth * Math.min(16 / e.sprite.width, 16 / e.sprite.height)}px ${e.sprite.sheetHeight * Math.min(16 / e.sprite.width, 16 / e.sprite.height)}px"></i>` : ''}
           <span class="li-name">${esc(e.displayName)}<small>${tags || esc(e.itemId)}</small></span>
           <span class="li-count">${count}</span>
           <span class="li-chance">${e.chance}%</span>
@@ -854,7 +896,7 @@ function renderCatalog(list, targetId, query, kind) {
   const q = (query || '').toLowerCase();
   const filtered = list.filter((item) => `${item.id} ${item.meta}`.toLowerCase().includes(q));
   $(targetId).innerHTML = filtered.map((item) => `<article class="asset-card ${kind}" data-id="${esc(item.id)}">
-      <span class="portrait">${esc(item.code)}</span>
+      ${item.sprite ? portrait(item.sprite) : `<span class="portrait">${esc(item.code)}</span>`}
       <span><strong>${esc(item.id)}</strong><small>${esc(item.meta)}</small></span>
       <button class="plus" title="Add to selected room">＋</button>
     </article>`).join('') || '<div class="empty-copy">No matching assets.</div>';
