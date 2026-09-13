@@ -866,3 +866,23 @@ button { color: inherit; }
 
 .setup-config { margin-top: 12px; font-size: 10px; color: var(--dim); }
 .setup-config code { color: var(--muted); }
+
+/* ── when a wave appears ─────────────────────────────────────────────────
+   The enemy column is ordered by step, and each row says when that step
+   fires. `time` and `killed` are relative to the playhead entering the step,
+   not to the start of the encounter, so they read as offsets. A wave sitting
+   behind a pure-wait step inherits that wait, which is why some rows chain
+   ("when cleared → +2s") rather than showing only their own condition. */
+
+.loot-item .li-name > small,
+.content-entry small { display: flex; gap: 5px; align-items: baseline; }
+
+.when { color: var(--dim); white-space: nowrap; }
+.when.gated {
+  color: var(--cyan);
+  border: 1px solid rgba(116,216,211,.35);
+  background: rgba(116,216,211,.08);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.when-sep { color: var(--line-bright); }

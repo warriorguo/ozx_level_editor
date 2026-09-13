@@ -180,3 +180,65 @@ def test_every_rarity_used_by_items_has_a_colour(ds):
     palette = ds.rarity_palette()
     used = {d.value.get("rarity") for d in ds.of_type("ItemData") if d.value.get("rarity")}
     assert used <= set(palette), f"no colour for {used - set(palette)}"
+
+
+# ── when each wave appears ───────────────────────────────────────────────
+
+
+def test_an_absent_condition_is_immediate(ds):
+    """Omitted condition == immediate; 178 of the 207 steps rely on it."""
+    waves = ds.encounter_enemies("spawn_ch1_elite_01")
+    assert all(w["appearsWhen"] == "immediately" for w in waves)
+    assert all(w["gatedByWait"] is False for w in waves)
+
+
+def test_a_wave_inherits_the_waits_it_sits_behind(ds):
+    """The load-bearing case.
+
+    spawn_tyranopode_test_01 is: launch, wait-cleared, wait-2s, launch. The
+    second launch has NO condition of its own, so reading only its own step
+    would report "immediately" — but the playhead cannot reach it until both
+    waits pass. SequentialEncounterRuntime sits on one step at a time, which
+    is what makes the preceding waits part of this wave's gate.
+    """
+    waves = {w["id"]: w for w in ds.encounter_enemies("spawn_tyranopode_test_01")}
+
+    assert waves["tyranopode"]["appearsWhen"] == "immediately"
+    assert waves["big_mouth"]["appearsWhen"] == "when cleared → +2s"
+    assert waves["big_mouth"]["gatedByWait"] is True
+    # and the gate is consumed, not carried on forever
+    assert waves["carcinoptera"]["appearsWhen"] == "immediately"
+
+
+def test_pure_wait_steps_contribute_no_enemies(ds):
+    """A step with no action is a wait, not a spawn."""
+    waves = ds.encounter_enemies("spawn_tyranopode_test_01")
+    assert [w["stepIndex"] for w in waves] == [0, 3, 4]
+
+
+def test_a_time_condition_reads_as_a_relative_offset(ds):
+    """Relative to entering the step, so "+3s" not "at 3s"."""
+    waves = ds.encounter_enemies("spawn_entomochelon_01")
+    offsets = [w["appearsWhen"] for w in waves if w["appearsWhen"].startswith("+")]
+    assert offsets, "expected a time-gated wave here"
+    assert all(o.endswith("s") for o in offsets)
+
+
+def test_every_condition_kind_has_a_phrase():
+    """touch/killed/custom are zero-usage but legal; none may render as blank."""
+    from ozxlevel.dataset import describe_condition
+    assert describe_condition(None) == "immediately"
+    assert describe_condition({"kind": "time", "seconds": 2.5}) == "+2.5s"
+    assert describe_condition({"kind": "cleared"}) == "when cleared"
+    assert describe_condition({"kind": "killed", "enemyId": "husk", "count": 3}) \
+        == "after 3× husk killed"
+    assert describe_condition({"kind": "touch", "triggerId": "t1"}) == "on touching t1"
+    assert describe_condition({"kind": "custom", "key": "k"}) == "on k"
+    # an unknown kind must still say something rather than render empty
+    assert describe_condition({"kind": "invented"}) == "on invented"
+
+
+def test_no_wave_anywhere_renders_a_blank_phrase(ds):
+    blank = [(d.id, w["id"]) for d in ds.of_type("EncounterData")
+             for w in ds.encounter_enemies(d.id) if not w["appearsWhen"].strip()]
+    assert not blank, blank

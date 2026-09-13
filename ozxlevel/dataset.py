@@ -415,13 +415,32 @@ class Dataset:
             return [{"id": encounter_id, "count": 0, "missing": True,
                      "meta": "encounter not found"}]
         out = []
+        # A pure wait (a step with no action) blocks the playhead, so the
+        # launches after it inherit that gate. Carrying the waits forward is
+        # the difference between "immediately" and "when cleared, then +2s" —
+        # the step's own condition alone would claim the former.
+        pending_gates: list[str] = []
+
         for index, step in enumerate(doc.value.get("steps") or []):
             action = step.get("action")
+            condition = step.get("condition")
+
             if not action:
-                continue  # absent action == wait, not an enemy source
+                # Absent action == pure wait, not an enemy source.
+                pending_gates.append(describe_condition(condition))
+                continue
+
             enemy_id = action.get("enemyId")
             if not enemy_id:
                 continue
+
+            own = describe_condition(condition)
+            gates = list(pending_gates)
+            # "immediately" says nothing once something precedes it.
+            if own != "immediately" or not gates:
+                gates.append(own)
+            pending_gates = []
+
             out.append({
                 "id": enemy_id,
                 "count": action.get("max", action.get("min", 0)) or 0,
@@ -434,6 +453,11 @@ class Dataset:
                 "pointer": f"/steps/{index}/action",
                 "encounterId": encounter_id,
                 "missing": self.get("EnemyData", enemy_id) is None,
+                # When this wave appears, including the waits it sits behind.
+                "appearsWhen": " → ".join(gates),
+                "conditionKind": (condition or {}).get("kind"),
+                "gatedByWait": len(gates) > 1 or (
+                    bool(gates) and gates[0] != "immediately"),
             })
         return out
 
@@ -653,6 +677,32 @@ def _find_anchor_parent(by_id, room_id, positions):
             if room_id in (link.get("roomIdB"), link.get("toRoomId"), link.get("roomIdA")):
                 return other_id
     return None
+
+
+def describe_condition(condition: dict | None) -> str:
+    """One phrase for a step's condition. An omitted condition is immediate.
+
+    `time` and `killed` are relative to the playhead entering that step, not to
+    the start of the encounter (`SequentialEncounterRuntime`), so they are
+    phrased as offsets rather than absolute times.
+    """
+    if not condition:
+        return "immediately"
+    kind = condition.get("kind")
+    if kind == "time":
+        seconds = condition.get("seconds", 0)
+        return f"+{seconds:g}s"
+    if kind == "cleared":
+        return "when cleared"
+    if kind == "killed":
+        count = condition.get("count") or 1
+        enemy = condition.get("enemyId") or "?"
+        return f"after {count}× {enemy} killed"
+    if kind == "touch":
+        return f"on touching {condition.get('triggerId') or '?'}"
+    if kind == "custom":
+        return f"on {condition.get('key') or '?'}"
+    return f"on {kind or 'unknown'}"
 
 
 def _code(identifier: str) -> str:

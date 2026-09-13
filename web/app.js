@@ -316,9 +316,17 @@ function renderRooms() {
           const bits = [source.meta];
           if (e.eliteCount) bits.push(`elite ×${e.eliteCount}`);
           if (e.viaSpawner) bits.push(`via ${e.viaSpawner}`);
+          // When the wave appears. Shown on every row so its absence is never
+          // ambiguous, but muted for the immediate ones — 177 of the 190 waves
+          // in this data are immediate, and highlighting all of them would
+          // bury the handful that are not.
+          const when = `<span class="when ${e.gatedByWait ? 'gated' : ''}"
+            title="${esc(e.gatedByWait
+              ? 'This wave waits — the condition includes any pure-wait steps before it'
+              : 'Fires as soon as the playhead reaches this step')}">${esc(e.appearsWhen)}</span>`;
           return `<div class="content-entry ${e.missing ? 'missing' : ''}${slotCls('enemies', i)}" data-slot="enemies" data-slot-index="${i}">
             <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(source.code)}</span>
-            <span><strong>${esc(e.id)}</strong><small>${esc(bits.join(' · '))}</small></span>
+            <span><strong>${esc(e.id)}</strong><small>${when}<span class="when-sep">·</span>${esc(bits.join(' · '))}</small></span>
             <span class="quantity" data-enemy-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${e.count}" aria-label="${esc(e.id)} count" />
@@ -452,7 +460,7 @@ function renderRooms() {
         <div class="content-head">Effective enemies <span>${units} units</span></div>
         <div class="content-list">${enemyEntries}
           ${room.encounterId
-            ? `<div class="derived-note">derived from encounter ${esc(room.encounterId)} — edits write to its steps</div>`
+            ? `<div class="derived-note">derived from encounter ${esc(room.encounterId)} — in step order; edits write to its steps</div>`
             : ''}
         </div>
       </section>

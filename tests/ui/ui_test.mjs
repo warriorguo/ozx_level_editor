@@ -188,6 +188,15 @@ if (rule) {
         tracks.length >= 3 && tracks[tracks.length - 2] === '42px', tracks.join(' | '));
 }
 
+// ── the enemy column says when each wave appears ─────────────────────────
+const whens = qa('.enemy-content .when');
+check('every enemy row states when it appears',
+      whens.length > 0 && whens.every((w) => w.textContent.trim().length > 0),
+      `${whens.length} rows`);
+check('immediate waves are not highlighted',
+      whens.filter((w) => w.textContent.trim() === 'immediately')
+           .every((w) => !w.classList.contains('gated')));
+
 // ── the project picker offers a path rather than an empty box ────────────
 const cfg = routes['/api/config'];
 if (cfg) {

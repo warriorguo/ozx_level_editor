@@ -184,6 +184,18 @@ never normalised.
 derived view, and its `+`/`−` controls write to that encounter's
 `steps[].action.min/max` — which is why the column says so underneath.
 
+Each row is listed in step order and says **when that wave appears**. An omitted
+condition is immediate (178 of the 207 steps), `time` and `killed` are relative
+to the playhead entering that step rather than to the start of the encounter, so
+they read as offsets (`+2s`).
+
+A wave also inherits the pure-wait steps it sits behind: in
+`spawn_tyranopode_test_01` the `big_mouth` step has no condition of its own, but
+sits after a wait-for-cleared and a wait-2s, so it reads **"when cleared → +2s"**
+rather than "immediately". Reporting only its own condition would be wrong, and
+wrong in the direction that looks fine. Gated rows are highlighted; the immediate
+majority stays muted so the handful that wait are the ones you notice.
+
 **Doors are bidirectional.** Toggling one writes the twin on the other side in
 the same request. A door without its twin is a one-way door that nothing reports
 at runtime, so the tool never lets you create one by hand. Opening a door needs
