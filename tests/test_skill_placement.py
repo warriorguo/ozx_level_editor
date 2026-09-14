@@ -154,27 +154,67 @@ def a_skill_placement(ds, level_id):
     raise AssertionError(f"{level_id} has no skill placement")
 
 
-def test_an_unloadable_icon_is_an_error(ds):
-    """chapter_2's f1_room_1_2 grants `speed_boost`, whose icon key is not in
-    ResourcesDB — ResolveIcon's second throw. Also live in shipped data.
+def test_an_unloadable_icon_is_an_error(ds, monkeypatch):
+    """ResolveIcon's second throw: iconKeys names a key that will not load.
+
+    Driven by monkeypatch rather than by whichever room currently has the
+    problem. These are live authoring mistakes that get fixed — pinning the
+    room makes the test fail when someone does the right thing, which is
+    backwards. What must not regress is the rule.
     """
-    key = ds.get("SkillData", "speed_boost").value["iconKeys"][0]
-    assert ds.sprites.guid_for_key(key) is None
-    messages = [i["message"] for i in validate_level(ds, "chapter_2")
+    # A real SkillData whose icon key is absent from ResourcesDB. This is a
+    # property of the skill, not of any level, so it is stable to assert.
+    unloadable = next(
+        d.id for d in ds.of_type("SkillData")
+        if d.value.get("type") == "passive"
+        and (d.value.get("iconKeys") or [None])[0]
+        and ds.sprites.guid_for_key(d.value["iconKeys"][0]) is None)
+
+    placement = a_skill_placement(ds, "chapter_1")
+    monkeypatch.setitem(placement, "skillId", unloadable)
+    messages = [i["message"] for i in validate_level(ds, "chapter_1")
                 if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
-    assert any("speed_boost" in m and "ResourcesDB" in m for m in messages), messages
+    assert any(unloadable in m and "ResourcesDB" in m for m in messages), messages
 
 
-def test_a_skill_with_no_icon_is_an_error(ds):
-    """chapter_2's f0_room_2_2 grants `shield_orange`, which has no iconKeys.
+def test_a_skill_with_no_icon_is_an_error(ds, monkeypatch):
+    """ResolveIcon's first throw: no iconKeys at all."""
+    iconless = next(d.id for d in ds.of_type("SkillData")
+                    if d.value.get("type") == "passive"
+                    and not (d.value.get("iconKeys") or []))
+    placement = a_skill_placement(ds, "chapter_1")
+    monkeypatch.setitem(placement, "skillId", iconless)
+    messages = [i["message"] for i in validate_level(ds, "chapter_1")
+                if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
+    assert any(iconless in m and "iconKeys" in m for m in messages), messages
 
-    This is live in the shipped data: ResolveIcon throws, so that room does
-    not spawn. Pinned as a regression rather than a fixture because the fix
-    belongs in GameData, not here.
+
+def test_whatever_is_authored_today_is_reported_consistently(ds):
+    """Not an assertion about which rooms are broken — that changes as they
+    get fixed — but that a placement the adapter would throw on is always
+    reported, and one it would accept never is.
     """
-    orange = ds.get("SkillData", "shield_orange")
-    assert orange is not None and not (orange.value.get("iconKeys") or [])
-    assert "ROOM_PLACEMENT_SKILL_NO_ICON" in codes_for(ds, "chapter_2")
+    for level_id in ds.ids_of("LevelData"):
+        flagged = {i["pointer"] for i in validate_level(ds, level_id)
+                   if i["code"].startswith("ROOM_PLACEMENT_SKILL")}
+        view = ds.level_view(level_id)
+        for fi, floor in enumerate(view["floors"]):
+            for room in floor["rooms"]:
+                for p in room["staticPlacements"]:
+                    if p["kind"] != "skill":
+                        continue
+                    doc = ds.get("SkillData", p["skillId"] or "")
+                    icon = (doc.value.get("iconKeys") or [None])[0] if doc else None
+                    would_throw = (
+                        not p["skillId"] or doc is None
+                        or doc.value.get("type") != "passive"
+                        or not icon or ds.sprites.guid_for_key(icon) is None)
+                    ptr = f"{p['pointer']}/skillId"
+                    # DATA_REFERENCE_MISSING covers the unknown-id case under
+                    # its own code, so exclude it from the "is flagged" test.
+                    if doc is None and p["skillId"]:
+                        continue
+                    assert (ptr in flagged) == would_throw, (level_id, ptr, would_throw)
 
 
 def test_healthy_skill_placements_raise_nothing(ds):
