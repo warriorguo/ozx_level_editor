@@ -112,6 +112,11 @@ def test_count_ranges_are_valid_across_production(ds):
     assert not bad, bad
 
 
+class FakeItem:
+    """The minimum an existing, non-skill ItemData looks like."""
+    value = {"type": "exp"}
+
+
 def test_independent_weight_outside_0_100_is_an_error():
     """A weight of 250 is meaningless when the weight is a percentage."""
     class FakeDoc:
@@ -120,7 +125,9 @@ def test_independent_weight_outside_0_100_is_an_error():
 
     class FakeDs:
         def get(self, data_type, id_):
-            return FakeDoc() if data_type == "LootTableData" else object()
+            # A document-shaped stand-in, not a bare sentinel: the validator
+            # reads an entry's ItemData to see whether it is a skill drop.
+            return FakeDoc() if data_type == "LootTableData" else FakeItem()
 
     codes = [i["code"] for i in validate_loot(FakeDs(), "t")]
     assert "LOOT_WEIGHT_INVALID" in codes
@@ -135,7 +142,9 @@ def test_pick_one_allows_weights_above_100():
 
     class FakeDs:
         def get(self, data_type, id_):
-            return FakeDoc() if data_type == "LootTableData" else object()
+            # A document-shaped stand-in, not a bare sentinel: the validator
+            # reads an entry's ItemData to see whether it is a skill drop.
+            return FakeDoc() if data_type == "LootTableData" else FakeItem()
 
     assert [i["code"] for i in validate_loot(FakeDs(), "t")] == []
 

@@ -340,6 +340,46 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     return issues
 
 
+def _skill_drop_issues(ds: Dataset, table_id: str, index: int,
+                       eptr: str, item_id: str) -> list[dict]:
+    """A dropped skill resolves by the ITEM's id, not by its `refId`.
+
+    `ItemService.ApplySkill` hands `item.id` straight to
+    `SkillService.AddPassive`, which throws when no SkillData carries that id.
+    `refId` is declared on ItemData and read nowhere in the runtime, so an
+    author who points it at the real skill and lets the ids diverge gets a
+    drop that crashes on pickup — which is `sprint_engine` today.
+    """
+    item = ds.get("ItemData", item_id)
+    if item is None or item.value.get("type") != "skill":
+        return []
+    # An inventory item is stashed rather than applied, so it never reaches
+    # ApplySkill and none of this binds.
+    if item.value.get("inventoryItem"):
+        return []
+
+    issues = []
+    skill = ds.get("SkillData", item_id)
+    if skill is None:
+        ref = item.value.get("refId")
+        hint = (f"; its refId names '{ref}', but refId is not read by the runtime"
+                if ref and ref != item_id else "")
+        issues.append(_issue("error", "LOOT_SKILL_ITEM_UNRESOLVED",
+                             f"entry {index}: '{item_id}' is a skill item but no "
+                             f"SkillData has that id, so picking it up throws in "
+                             f"AddPassive{hint}",
+                             entity=table_id, pointer=f"{eptr}/itemId"))
+    elif skill.value.get("type") != "passive":
+        # ApplySkill calls AddPassive unconditionally, so an active skill is
+        # installed into the passive list. It does not throw, which is exactly
+        # why this is worth saying out loud.
+        issues.append(_issue("warning", "LOOT_SKILL_ITEM_NOT_PASSIVE",
+                             f"entry {index}: '{item_id}' resolves to an active "
+                             f"skill, but a drop is always added as a passive",
+                             entity=table_id, pointer=f"{eptr}/itemId"))
+    return issues
+
+
 def validate_loot(ds: Dataset, table_id: str) -> list[dict]:
     doc = ds.get("LootTableData", table_id)
     if doc is None:
@@ -364,6 +404,8 @@ def validate_loot(ds: Dataset, table_id: str) -> list[dict]:
             issues.append(_issue("error", "LOOT_ITEM_MISSING",
                                  f"entry {index}: item '{item_id}' does not exist",
                                  entity=table_id, pointer=f"{eptr}/itemId"))
+        else:
+            issues.extend(_skill_drop_issues(ds, table_id, index, eptr, item_id))
 
         lo, hi = entry.get("minCount", 0), entry.get("maxCount", 0)
         if not (0 < lo <= hi):

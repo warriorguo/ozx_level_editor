@@ -24,6 +24,12 @@ DIRECTION_IDS = {v: k for k, v in DIRECTIONS.items()}
 # Twin of each direction, for generating the other side of a door.
 DIRECTION_TWIN = {0: 1, 1: 0, 2: 3, 3: 2}
 
+# EventBindings.cs:141,144 — the two ids the drop chain reaches for on its
+# own. Neither is authored anywhere, so a drop view that omitted them would
+# show "nothing" for the many enemies that name no table.
+FALLBACK_DROP_ITEM = "item_exp_small"
+ELITE_BONUS_DROP_ITEM = "item_exp_large"
+
 # The five families Level Studio owns; everything else is read-only closure.
 OWNED = ("levels", "level_plans", "encounters", "enemies", "loot_tables")
 
@@ -479,6 +485,56 @@ class Dataset:
                  "sprite": self.sprites.sprite_for_prefab_key(f"prefab/{k}")}
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
+    def wave_drop(self, action: dict) -> dict:
+        """What one launch wave drops when it dies — the Effective Drop view.
+
+        `EventBindings.OnEnemyDied` resolves exactly one table, in this order
+        (OZX-289), and the editor must not approximate it:
+
+            action.dropTableIdOverride  →  EnemyData.dropTableId  →  item_exp_small
+
+        This is the channel skills reach the player through: an ItemData of
+        `type: "skill"` in the rolled table is picked up by `ItemService`,
+        which hands `item.id` to `SkillService.AddPassive`. It is separate
+        from, and additive to, the room-clear and cargo tables the Loot column
+        already shows — an enemy drop is authored on the encounter, not on the
+        room, so nothing in that column would ever reveal it.
+
+        The elite bonus is `item_exp_large` on top of whatever rolled, never
+        instead of it.
+        """
+        enemy_id = action.get("enemyId")
+        override = action.get("dropTableIdOverride") or None
+        enemy = self.get("EnemyData", enemy_id) if enemy_id else None
+        intrinsic = (enemy.value.get("dropTableId") or None) if enemy else None
+
+        if override:
+            table_id, source = override, "override"
+        elif intrinsic:
+            table_id, source = intrinsic, "enemy"
+        else:
+            table_id, source = None, "fallback"
+
+        view = self.loot_table_view(table_id) if table_id else None
+        items = []
+        if view and not view.get("missing"):
+            items = [{"itemId": e["itemId"], "displayName": e["displayName"],
+                      "itemType": e["itemType"], "chance": e["chance"],
+                      "missing": e["missing"]}
+                     for e in view["entries"]]
+        return {
+            "tableId": table_id,
+            "source": source,
+            "missing": bool(view and view.get("missing")),
+            "empty": bool(view and view.get("empty")),
+            "items": items,
+            # Named rather than inlined so the UI never has to hardcode them.
+            "fallbackItemId": FALLBACK_DROP_ITEM if source == "fallback" else None,
+            "eliteBonusItemId": (ELITE_BONUS_DROP_ITEM
+                                 if action.get("eliteCount") else None),
+            "hasSkill": any(i["itemType"] == "skill" for i in items),
+        }
+
     def encounter_enemies(self, encounter_id: str | None) -> list[dict]:
         """The Effective Enemy view for a room.
 
@@ -533,6 +589,7 @@ class Dataset:
                 "missing": self.get("EnemyData", enemy_id) is None,
                 # When this wave appears, including the waits it sits behind.
                 "appearsWhen": " → ".join(gates),
+                "drop": self.wave_drop(action),
                 "conditionKind": (condition or {}).get("kind"),
                 "gatedByWait": len(gates) > 1 or (
                     bool(gates) and gates[0] != "immediately"),

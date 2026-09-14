@@ -179,6 +179,11 @@ enemy picker 至少显示 `category / role / movementType / attackType / footpri
 ### 3.3 掉落链（编辑器的 Effective Drop 视图要复刻的顺序）
 
 1. 敌人死亡：`instance/action override` → `EnemyData.dropTableId` → `item_exp_small` 兜底，三者取第一个命中的**一张**表；elite 额外直接给 `item_exp_large`（相加，不替换）。
+   （`EventBindings.cs:103-138`。编辑器已按这一条实现：每个 launch wave 的敌人行
+   下面挂一行 `DROPS`，标出最终生效的表、它是哪一级命中的，以及表里的物品；
+   带技能的那一行高亮，因为这是**唯一**能靠打怪拿到技能的通道，而它既不在房间的
+   `lootPlanId` 上、也不在 cargo 上，Loot 栏永远看不到。第 3、4 条的楼层合成与
+   cap 仍未实现。）
 2. 房间清场：`inlineLootPlan` 优先于 `lootPlanId`，与敌人掉落、cargo/oiltank 掉落**相加**。
 3. 楼层通道：floor `probabilistic` 合成的楼层表会覆盖 enemy pool entry 自带的 drop override；`guaranteed.boundEnemyId` 再覆盖第一个匹配的 action；自动过渡钥匙还可能覆盖 peak 房最后一个 action。
 4. `floorCap` / `categoryCap` 按实际事件顺序消费；全部候选被 cap 掉时仍回退 `item_exp_small`。
@@ -197,11 +202,32 @@ enemy picker 至少显示 `category / role / movementType / attackType / footpri
 | `rarity` | `common` 19 / `uncommon` 11 / `rare` 9 / 未填 8（消耗品与钥匙） | — |
 | `inventoryItem` | 是否进背包 | 16 |
 | `stackable` | **0 份数据使用** | 0 |
-| `refId` | 指向具体实现（武器/技能）的 id | — |
+| `refId` | **运行时从不读取**（全仓库只有声明与一处测试）。看着像「指向具体实现」，实际不是——见 4.3 | — |
 | `displayName` / `nameTemplate` | 后者在生成时套名字库，空则回退前者 | — |
 | `value` / `spriteKey` / `effects[]` | — | — |
 
 过渡钥匙就是普通 item：`key_silver`、`key_gold`。`FloorPlanData.transitionKeyId` 和 `doors[].keyId` 都指向它们。
+
+### 4.3 技能掉落靠 item 的 `id`，不是 `refId`
+
+`ItemService.ApplySkill` 把 `item.id` 直接交给 `SkillService.AddPassive`
+（`ItemService.cs:111-120`），`refId` 全程没被读过。所以一份 `type: "skill"`
+的 ItemData 要能捡，**它自己的 id 必须同时是一个 SkillData 的 id**；`refId`
+指对了也没用。
+
+- `sprint_engine` 就是反例：`refId: "sprint"` 指向存在的技能，但没有
+  `SkillData` 叫 `sprint_engine`，`AddPassive` 会抛
+  （`SkillService.cs:84-86`）。它在 `loot_skills` 里，权重 50。
+- `AddPassive` 不检查 `type`，所以 `fireball`、`sprint` 这两份 active 技能
+  被当 passive 装上，不报错。
+- `inventoryItem: true` 的 item 在 switch 之前就进背包了，走不到 `ApplySkill`。
+
+编辑器把前两条分别报成 `LOOT_SKILL_ITEM_UNRESOLVED`（Error）和
+`LOOT_SKILL_ITEM_NOT_PASSIVE`（Warning）。
+
+另一条技能入手途径是 SkillPlatform（`staticPlacements` 的 `kind: "skill"`，
+直接指 `skillId` → SkillData），和掉落这条完全独立，见
+`level_data_reference.md` §7.2。
 
 ### 4.2 ItemTaxonomyData（`GameData/item_taxonomy.json`，单份）
 

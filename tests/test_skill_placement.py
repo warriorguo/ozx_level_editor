@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ozxlevel.dataset import Dataset  # noqa: E402
-from ozxlevel.validate import validate_level  # noqa: E402
+from ozxlevel.validate import validate_level, validate_loot  # noqa: E402
 
 OZX_BASE = pathlib.Path.home() / "Codes/github.com/warriorguo/ozx_base"
 pytestmark = pytest.mark.skipif(
@@ -214,3 +214,100 @@ def test_an_active_skill_on_a_platform_is_an_error(ds, monkeypatch):
     placement = a_skill_placement(ds, "chapter_1")
     monkeypatch.setitem(placement, "skillId", active)
     assert "ROOM_PLACEMENT_SKILL_NOT_PASSIVE" in codes_for(ds, "chapter_1")
+
+
+# ── the other channel: skills as loot ────────────────────────────────────
+#
+# A skill platform is not the only way a skill reaches the player. A
+# LootTableData entry naming an ItemData of `type: "skill"` drops one on
+# death, and `ItemService.ApplySkill` installs it. The two channels share
+# nothing — different data families, different failure modes — so both are
+# pinned here rather than one standing in for the other.
+
+
+def test_the_drop_chain_follows_the_runtime_order(ds):
+    """override → EnemyData.dropTableId → item_exp_small, and nothing else.
+
+    `EventBindings.OnEnemyDied` picks exactly one table by this order. Getting
+    it wrong shows a designer a table the game will never roll.
+    """
+    over = ds.wave_drop({"enemyId": "blight_sac_stalker",
+                         "dropTableIdOverride": "loot_ch1_build3_skill"})
+    assert over["source"] == "override"
+    assert over["tableId"] == "loot_ch1_build3_skill"
+
+    # Same enemy, no override: its own table wins.
+    plain = ds.wave_drop({"enemyId": "blight_sac_stalker"})
+    assert plain["source"] == "enemy"
+    assert plain["tableId"] == ds.get("EnemyData", "blight_sac_stalker").value["dropTableId"]
+    assert plain["tableId"] != over["tableId"]
+
+    # Neither: the last-resort item, not "nothing".
+    none = ds.wave_drop({"enemyId": "no_such_enemy"})
+    assert none["source"] == "fallback"
+    assert none["tableId"] is None
+    assert none["fallbackItemId"] == "item_exp_small"
+
+
+def test_the_elite_bonus_is_additive(ds):
+    """An elite rolls its own table AND gets the crystal, never instead."""
+    drop = ds.wave_drop({"enemyId": "blight_sac_stalker", "eliteCount": 1})
+    assert drop["tableId"] is not None
+    assert drop["eliteBonusItemId"] == "item_exp_large"
+    assert ds.wave_drop({"enemyId": "blight_sac_stalker"})["eliteBonusItemId"] is None
+
+
+def test_a_skill_drop_is_flagged_on_the_wave_that_carries_it(ds):
+    """The one thing the Loot column can never show."""
+    waves = ds.encounter_enemies("spawn_ch1_build3_01")
+    carriers = [w for w in waves if w["drop"]["hasSkill"]]
+    assert len(carriers) == 1, [w["id"] for w in carriers]
+    assert carriers[0]["drop"]["tableId"] == "loot_ch1_build3_skill"
+    assert {i["displayName"] for i in carriers[0]["drop"]["items"]} == \
+        {"Crimson Barrage", "Blue Shield"}
+
+
+def test_every_wave_reports_a_drop(ds):
+    """There is no such thing as a wave that drops nothing — the chain always
+    lands somewhere, so a blank here would be the view lying."""
+    for level_id in ds.ids_of("LevelData"):
+        view = ds.level_view(level_id)
+        for floor in view["floors"]:
+            for room in floor["rooms"]:
+                for wave in room["enemies"]:
+                    if wave.get("missing") and "drop" not in wave:
+                        continue
+                    drop = wave["drop"]
+                    assert drop["tableId"] or drop["fallbackItemId"], wave
+
+
+def test_a_skill_item_resolves_by_its_own_id_not_refid(ds):
+    """`sprint_engine` names skill `sprint` via refId and still throws.
+
+    ApplySkill passes `item.id`; refId is declared on ItemData and read
+    nowhere in the runtime. Live in `loot_skills` today.
+    """
+    item = ds.get("ItemData", "sprint_engine")
+    assert item.value["type"] == "skill"
+    assert item.value["refId"] == "sprint"
+    assert ds.get("SkillData", "sprint") is not None
+    assert ds.get("SkillData", "sprint_engine") is None
+
+    codes = [i["code"] for i in validate_loot(ds, "loot_skills")]
+    assert "LOOT_SKILL_ITEM_UNRESOLVED" in codes
+
+
+def test_an_active_skill_dropped_as_loot_is_a_warning(ds):
+    """AddPassive does not check `type`, so this installs but misbehaves."""
+    issues = [i for i in validate_loot(ds, "loot_skills")
+              if i["code"] == "LOOT_SKILL_ITEM_NOT_PASSIVE"]
+    assert {i["pointer"] for i in issues}
+    assert all(i["severity"] == "warning" for i in issues)
+    named = " ".join(i["message"] for i in issues)
+    assert "fireball" in named and "sprint" in named
+
+
+def test_a_sound_skill_drop_raises_nothing(ds):
+    """loot_ch1_build3_skill: both entries are passives with matching ids."""
+    assert not [i for i in validate_loot(ds, "loot_ch1_build3_skill")
+                if i["code"].startswith("LOOT_SKILL_")]

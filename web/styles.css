@@ -905,6 +905,40 @@ button { color: inherit; }
 }
 .when-sep { color: var(--line-bright); }
 
+/* ── what a wave drops ───────────────────────────────────────────────────
+   A second row on the enemy entry. Enemy drops are authored on the encounter,
+   not the room, so the Loot column cannot show them — and this is the only
+   channel that puts a skill in the player's hands by killing something. */
+.drop-carrier { row-gap: 4px; }
+.drop-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drop-tag {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+/* Authored for this wave, rather than inherited from the enemy's own data. */
+.drop-line.authored { color: #c2c8c2; }
+.drop-line.authored .drop-tag { color: var(--cyan); border-color: rgba(116,216,211,.45); }
+/* The find-me case: this wave hands the player a skill. */
+.drop-line.has-skill { color: var(--acid); }
+.drop-line.has-skill .drop-tag { color: #11140f; border-color: var(--acid); background: var(--acid); }
+.drop-line.bad, .drop-line.bad .drop-tag { color: var(--danger); border-color: rgba(255,90,120,.5); }
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

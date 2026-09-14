@@ -58,11 +58,19 @@ def fixtures(tmp_path_factory):
     """Snapshot the API payloads the page loads at boot."""
     out = tmp_path_factory.mktemp("ui-fixtures")
     api = Api(OZX_BASE)
-    (out / "boot.json").write_text(json.dumps(api.bootstrap()))
+    boot = api.bootstrap()
+    # Prefer a level with more than one floor: several client behaviours only
+    # exist across a floor switch (a stale selection re-aiming at another
+    # room, most of all), and a single-floor fixture skips them silently.
+    # It has to lead the list, because the page boots levels[0] and the
+    # harness serves exactly one level view.
+    levels = boot["levels"]
+    chosen = next((l for l in levels if l["floors"] > 1), levels[0])
+    boot["levels"] = [chosen] + [l for l in levels if l is not chosen]
+    (out / "boot.json").write_text(json.dumps(boot))
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
     (out / "cfg.json").write_text(json.dumps(api.get_config()))
-    level_id = api.bootstrap()["levels"][0]["id"]
-    (out / "lvl.json").write_text(json.dumps(api.level(level_id)))
+    (out / "lvl.json").write_text(json.dumps(api.level(chosen["id"])))
     return out
 
 

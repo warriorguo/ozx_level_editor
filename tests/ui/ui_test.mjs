@@ -292,6 +292,40 @@ check('and says where a click will land',
   await settle();
 }
 
+// ── a switch must not leave a slot armed in another room ─────────────────
+// The selection is (roomIndex, kind, index) against the CURRENT floor, so
+// carrying it across a switch re-aims it at whatever room now sits at that
+// index — and a library click then edits a room nobody pointed at. This was
+// real: it rewrote a skill platform two rooms away during testing.
+{
+  const slot = qa('[data-slot="statics"]')[0];
+  if (slot && level.floors.length > 1) {
+    click(slot);
+    await settle();
+    const armed = q('#staticLibraryTarget').textContent;
+    check('selecting a slot arms the library', /·/.test(armed), armed);
+
+    const tabs = qa('#floorTabs [data-floor]');
+    click(tabs[1]);
+    await settle();
+    const after = q('#staticLibraryTarget').textContent;
+    check('switching floors disarms it',
+          !after.includes('#'), after);
+
+    const before = posted.length;
+    click(qa('#skillLibrary .asset-card')[0]);
+    await settle();
+    const write = posted[before];
+    // Disarmed means "append to the room I am looking at", never "repoint
+    // that slot I happened to have selected on the other floor".
+    check('a library click after the switch appends rather than repoints',
+          write?.body.edits[0].op === 'append', write?.body.edits[0].op);
+    check('and lands on the floor now shown',
+          write?.body.edits[0].path.startsWith('/floors/1/'),
+          write?.body.edits[0].path);
+  }
+}
+
 // ── the project picker offers a path rather than an empty box ────────────
 const cfg = routes['/api/config'];
 if (cfg) {

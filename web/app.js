@@ -213,11 +213,27 @@ async function boot() {
   await refreshGlobalValidation();
 }
 
+/** Forget which slot a library click would act on.
+ *
+ *  The selection is (roomIndex, kind, index) resolved against the CURRENT
+ *  floor, so carrying it across a floor or level switch silently re-aims it
+ *  at whatever room now sits at that index. The library target line then
+ *  reads like a room the user never picked, and one click edits it — for the
+ *  Skill library that means repointing a skill platform in a room the user
+ *  is not even looking at. Both switches already reset selectedRoomIndex;
+ *  this is the half that was missed.
+ */
+function resetSelection() {
+  state.selection = { roomIndex: 0, kind: 'enemies', pointer: null,
+                      index: null, label: null };
+}
+
 async function loadLevel(levelId) {
   state.levelId = levelId;
   state.level = await api(`/api/level/${encodeURIComponent(levelId)}`);
   state.floorIndex = 0;
   state.selectedRoomIndex = 0;
+  resetSelection();
   $('levelPicker').value = levelId;
   renderAll();
 }
@@ -334,6 +350,43 @@ function skillOptions(selected) {
   return opts.join('');
 }
 
+/** What one wave drops when it dies.
+ *
+ *  Shown on the enemy row rather than in the Loot column because that is
+ *  where it is authored: an enemy drop comes from the encounter action or the
+ *  EnemyData, never from the room, so the Loot column — which reads the
+ *  room's own lootPlanId and its cargo — can never reveal it. This is the
+ *  channel skills reach the player through, and it was invisible.
+ */
+function dropLine(drop) {
+  if (!drop) return '';
+  const names = drop.items.map((i) => i.displayName || i.itemId);
+  let body;
+  if (drop.missing) body = `${drop.tableId} — table not found`;
+  else if (drop.source === 'fallback') body = `${drop.fallbackItemId} — no table on this enemy`;
+  else if (drop.empty) body = `${drop.tableId} — empty table`;
+  else body = `${drop.tableId} — ${names.join(', ')}`;
+  if (drop.eliteBonusItemId) body += ` · +${drop.eliteBonusItemId} (elite)`;
+
+  // The whole point of the row: a skill in there is the one thing a designer
+  // cannot find anywhere else in the app.
+  const cls = [
+    'drop-line',
+    drop.hasSkill ? 'has-skill' : '',
+    drop.missing || drop.empty ? 'bad' : '',
+    // An override is authored for THIS wave; the enemy's own table is just
+    // the default it came with, so only the former deserves the eye.
+    drop.source === 'override' ? 'authored' : '',
+  ].filter(Boolean).join(' ');
+  const title = drop.source === 'override'
+    ? 'dropTableIdOverride on this wave — overrides the enemy\'s own table'
+    : drop.source === 'enemy'
+      ? "the enemy's own dropTableId"
+      : 'no table anywhere in the chain; the last-resort fallback drops instead';
+  return `<span class="${cls}" title="${esc(title)}">
+    <span class="drop-tag">drops</span>${esc(body)}</span>`;
+}
+
 function renderRooms() {
   const floor = currentFloor();
   const rooms = floor.rooms;
@@ -406,14 +459,14 @@ function renderRooms() {
             title="${esc(e.gatedByWait
               ? 'This wave waits — the condition includes any pure-wait steps before it'
               : 'Fires as soon as the playhead reaches this step')}">${esc(e.appearsWhen)}</span>`;
-          return `<div class="content-entry ${e.missing ? 'missing' : ''}${slotCls('enemies', i)}" data-slot="enemies" data-slot-index="${i}">
+          return `<div class="content-entry drop-carrier ${e.missing ? 'missing' : ''}${slotCls('enemies', i)}" data-slot="enemies" data-slot-index="${i}">
             ${glyph(source.sprite, source.code, e.missing ? 'missing' : '')}
             <span><strong>${esc(e.id)}</strong><small>${when}<span class="when-sep">·</span>${esc(bits.join(' · '))}</small></span>
             <span class="quantity" data-enemy-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${e.count}" aria-label="${esc(e.id)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span></div>`;
+            </span>${dropLine(e.drop)}</div>`;
         }).join('')
       : `<div class="inline-empty">${room.encounterId
             ? 'Encounter has no launch steps'
@@ -1307,6 +1360,7 @@ $('floorTabs').addEventListener('click', (event) => {
   if (!button) return;
   state.floorIndex = Number(button.dataset.floor);
   state.selectedRoomIndex = 0;
+  resetSelection();
   renderAll();
 });
 
