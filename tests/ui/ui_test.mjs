@@ -245,6 +245,53 @@ if (skillSelect) {
   check('and carries the chosen skill', write?.body.edits[0].value === other.value);
 }
 
+// ── the skill library ────────────────────────────────────────────────────
+const skillCards = qa('#skillLibrary .asset-card');
+check('the skill library lists the placeable skills',
+      skillCards.length === routes['/api/bootstrap'].skillCatalog.length,
+      `${skillCards.length} cards`);
+check('every skill card shows its artwork',
+      skillCards.every((c) => c.querySelector('.portrait.art')),
+      `${skillCards.filter((c) => c.querySelector('.portrait.art')).length} with art`);
+check('and names the skill, not just the id',
+      skillCards.every((c) => (c.querySelector('small')?.textContent || '').includes('passive')));
+check('it counts what it shows',
+      q('#skillLibraryCount').textContent === `${skillCards.length} FOUND`,
+      q('#skillLibraryCount').textContent);
+check('and says where a click will land',
+      (q('#skillLibraryTarget').textContent || '').startsWith('→'),
+      q('#skillLibraryTarget').textContent);
+
+{
+  const before = posted.length;
+  click(skillCards[0]);
+  await settle();
+  const write = posted[before];
+  check('clicking a skill writes an edit', !!write);
+  check('it appends a placement to the room', write?.body.edits[0].op === 'append',
+        write?.body.edits[0].path);
+  // A skill platform with no skillId throws at spawn, so the appended entry
+  // has to arrive complete rather than as a bare kind.
+  check('the placement arrives with its skill already set',
+        write?.body.edits[0].value?.kind === 'skill'
+        && write?.body.edits[0].value?.skillId === skillCards[0].dataset.id,
+        JSON.stringify(write?.body.edits[0].value));
+}
+
+{
+  const search = q('#skillSearch');
+  search.value = 'hammer';
+  search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle();
+  const shown = qa('#skillLibrary .asset-card');
+  check('searching narrows the list', shown.length > 0 && shown.length < skillCards.length,
+        `${shown.length} of ${skillCards.length}`);
+  check('and keeps only matches', shown.every((c) => c.dataset.id.includes('hammer')));
+  search.value = '';
+  search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle();
+}
+
 // ── the project picker offers a path rather than an empty box ────────────
 const cfg = routes['/api/config'];
 if (cfg) {

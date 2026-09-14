@@ -567,7 +567,9 @@ const KIND_LABEL = {
 
 // The libraries are named for one thing ('enemy'); the room columns they
 // write into are named for many ('enemies'). Map once, here.
-const LIBRARY_KIND = { enemy: 'enemies', static: 'statics', loot: 'loot' };
+// A skill platform is a static placement, so the Skill library writes into
+// the same column the Static library does.
+const LIBRARY_KIND = { enemy: 'enemies', static: 'statics', skill: 'statics', loot: 'loot' };
 
 function selectSlot(roomIndex, kind, { pointer = null, index = null, label = null } = {}) {
   state.selectedRoomIndex = roomIndex;
@@ -624,7 +626,7 @@ function applySelectionStyles() {
 
 /** Update the "→ room · column" line under each library header. */
 function refreshLibraryTargets() {
-  for (const kind of ['enemy', 'static', 'loot']) {
+  for (const kind of ['enemy', 'static', 'skill', 'loot']) {
     const target = $(`${kind}LibraryTarget`);
     if (!target) continue;
     target.textContent = selectionSummary(kind);
@@ -961,6 +963,7 @@ function renderCatalog(list, targetId, query, kind) {
       event.stopPropagation();
       if (state.busy) return;
       if (kind === 'static') await addStatic(card.dataset.id);
+      else if (kind === 'skill') await addSkill(card.dataset.id);
       else if (kind === 'loot') await addLoot(card.dataset.id);
       else await addEnemy(card.dataset.id);
     };
@@ -994,6 +997,7 @@ function renderAll() {
   renderLevelIssueBadge();
   renderCatalog(state.boot.enemyCatalog, 'enemyLibrary', $('enemySearch').value, 'enemy');
   renderCatalog(state.boot.staticCatalog, 'staticLibrary', $('staticSearch').value, 'static');
+  renderCatalog(state.boot.skillCatalog, 'skillLibrary', $('skillSearch').value, 'skill');
   renderCatalog(state.boot.lootCatalog, 'lootLibrary', $('lootSearch').value, 'loot');
 }
 
@@ -1173,6 +1177,39 @@ async function addStatic(kind) {
   }], `${kind} added to ${room.roomId}`);
 }
 
+/** Put a skill platform in the selected room, or repoint the selected one.
+ *
+ *  Unlike the Static library — which adds a bare `kind` and leaves you to
+ *  fill in the rest — this arrives complete, because a skill platform with no
+ *  skillId throws at room-spawn time rather than placing nothing.
+ */
+async function addSkill(skillId) {
+  const room = selectionRoom();
+  const sel = state.selection;
+  // "Pick a target, click a thing": with a skill platform selected, this
+  // repoints that one instead of adding a second beside it.
+  if (sel.kind === 'statics' && sel.index != null) {
+    const placement = room.staticPlacements[sel.index];
+    if (placement && placement.kind === 'skill') {
+      if (!placement.skillIdDeclared) {
+        showToast('This placement has no skillId key yet — add it in the JSON first');
+        return;
+      }
+      await setSkillId(`${placement.pointer}/skillId`, skillId);
+      return;
+    }
+  }
+  if (!room.staticPlacementsDeclared) {
+    showToast(`${room.roomId}: staticPlacements is null — fix that first`);
+    return;
+  }
+  await applyEdits('LevelData', state.levelId, [{
+    op: 'append',
+    path: `${room.pointer}/staticPlacements`,
+    value: { kind: 'skill', skillId, count: 1 },
+  }], `skill ${skillId} added to ${room.roomId}`);
+}
+
 async function addLoot(tableId) {
   const room = selectionRoom();
   // A specific loot slot was picked (one cargo box, or the room-clear plan),
@@ -1260,6 +1297,8 @@ $('enemySearch').addEventListener('input', (e) =>
   renderCatalog(state.boot.enemyCatalog, 'enemyLibrary', e.target.value, 'enemy'));
 $('staticSearch').addEventListener('input', (e) =>
   renderCatalog(state.boot.staticCatalog, 'staticLibrary', e.target.value, 'static'));
+$('skillSearch').addEventListener('input', (e) =>
+  renderCatalog(state.boot.skillCatalog, 'skillLibrary', e.target.value, 'skill'));
 $('lootSearch').addEventListener('input', (e) =>
   renderCatalog(state.boot.lootCatalog, 'lootLibrary', e.target.value, 'loot'));
 

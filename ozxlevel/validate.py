@@ -135,16 +135,28 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                              f"is type '{skill.value.get('type')}'; a SkillPlatform "
                                              f"only grants passive skills",
                                              entity=level_id, pointer=f"{pptr}/skillId"))
-                    elif skill is not None and not (skill.value.get("iconKeys") or []):
+                    elif skill is not None:
                         # The platform draws the skill's level-1 icon in its
-                        # centre and ResolveIcon throws without one, so a
-                        # skill with no iconKeys cannot be placed at all —
-                        # legal SkillData, illegal on a platform.
-                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NO_ICON",
-                                             f"{rid}: placement {pi} grants '{p['skillId']}', which "
-                                             f"has no iconKeys; a SkillPlatform needs an icon to "
-                                             f"display and throws without one",
-                                             entity=level_id, pointer=f"{pptr}/skillId"))
+                        # centre, and ResolveIcon throws twice over: once when
+                        # iconKeys is empty, and again when the key it names
+                        # will not load. Both are legal SkillData and illegal
+                        # on a platform, so both are caught here.
+                        icon = (skill.value.get("iconKeys") or [None])[0]
+                        why = None
+                        if not icon:
+                            why = ("has no iconKeys; a SkillPlatform needs an icon to "
+                                   "display and throws without one")
+                        elif ds.sprites.guid_for_key(icon) is None:
+                            # Verbatim, because ResourcesAssetService does no
+                            # `@`-suffix fallback — a key that resolves only
+                            # by dropping the suffix still throws in game.
+                            why = (f"names icon '{icon}', which is not in ResourcesDB; "
+                                   f"the platform cannot load it and throws")
+                        if why:
+                            issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NO_ICON",
+                                                 f"{rid}: placement {pi} grants "
+                                                 f"'{p['skillId']}', which {why}",
+                                                 entity=level_id, pointer=f"{pptr}/skillId"))
 
             # ── doors ────────────────────────────────────────────────────
             seen_dirs: dict[int, int] = {}

@@ -421,7 +421,14 @@ button { color: inherit; }
 .sidebar {
   min-height: 0;
   display: grid;
-  grid-template-rows: 262px minmax(150px, .82fr) minmax(140px, .72fr) minmax(150px, .78fr);
+  /* One track per panel: the map, then a library each. A library's own
+     chrome (head + target line + search) is 97px, so anything under ~190px
+     leaves no list at all — four of them plus the map cannot share a short
+     window. So the tracks keep a usable minimum and the rail scrolls; a
+     column of four unusable slivers is worse than a scrollbar. */
+  grid-template-rows: 262px repeat(4, minmax(190px, 1fr));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 10px;
 }
 
@@ -759,6 +766,10 @@ button { color: inherit; }
 .loot-item.missing .li-name > small { color: var(--danger); opacity: .75; }
 
 .asset-card.loot .portrait { background: var(--cyan); }
+/* Skills borrow the static accent — a skill platform IS a static placement,
+   and colouring it as its own thing would imply a fourth room column. */
+.asset-card.skill:hover, .asset-card.skill.active { border-color: var(--amber); background: rgba(242,185,107,.06); }
+.skill .portrait { background: linear-gradient(135deg, #ffd28f, var(--amber)); }
 
 /* ── selection ───────────────────────────────────────────────────────────
    Pick a target by clicking it, then click a library entry to add into it.

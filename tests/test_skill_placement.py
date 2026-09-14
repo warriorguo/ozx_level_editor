@@ -100,9 +100,9 @@ def test_only_skill_placements_get_a_brief(ds):
 def test_the_catalog_offers_only_what_can_be_placed(ds):
     """Every offered skill must survive SkillPlatformSpawnAdapter.
 
-    The adapter throws on an active skill and again on one with no iconKeys,
-    so an entry here that fails either check hands the designer a two-click
-    path to a crash.
+    The adapter throws on an active skill, on one with no iconKeys, and on one
+    whose icon will not load, so an entry here that fails any of the three
+    hands the designer a two-click path to a crash.
     """
     catalog = ds.skill_catalog()
     assert catalog
@@ -110,7 +110,26 @@ def test_the_catalog_offers_only_what_can_be_placed(ds):
         doc = ds.get("SkillData", row["id"])
         assert doc is not None
         assert doc.value.get("type") == "passive", row["id"]
-        assert doc.value.get("iconKeys"), row["id"]
+        icon = (doc.value.get("iconKeys") or [None])[0]
+        assert icon, row["id"]
+        assert ds.sprites.guid_for_key(icon) is not None, row["id"]
+        assert row["sprite"] is not None, f"{row['id']} has no art for its card"
+
+
+def test_the_catalog_matches_resourcesdb_verbatim(ds):
+    """No `@`-suffix fallback, because ResourcesAssetService has none.
+
+    `sprite_for_resource_key` drops the suffix and retries, which is fine for
+    drawing something in a list — but a key that only resolves that way still
+    throws in game, so the catalog must not be built on it.
+    """
+    lenient = [d.id for d in ds.of_type("SkillData")
+               if (d.value.get("iconKeys") or [None])[0]
+               and ds.sprites.guid_for_key((d.value["iconKeys"])[0]) is None
+               and ds.sprites.sprite_for_resource_key((d.value["iconKeys"])[0]) is not None]
+    offered = {row["id"] for row in ds.skill_catalog()}
+    assert not (offered & set(lenient)), \
+        f"offered on the lenient fallback only: {sorted(offered & set(lenient))}"
 
 
 def test_the_catalog_is_narrower_than_the_skill_list(ds):
@@ -133,6 +152,17 @@ def a_skill_placement(ds, level_id):
                 if p.get("kind") == "skill":
                     return p
     raise AssertionError(f"{level_id} has no skill placement")
+
+
+def test_an_unloadable_icon_is_an_error(ds):
+    """chapter_2's f1_room_1_2 grants `speed_boost`, whose icon key is not in
+    ResourcesDB — ResolveIcon's second throw. Also live in shipped data.
+    """
+    key = ds.get("SkillData", "speed_boost").value["iconKeys"][0]
+    assert ds.sprites.guid_for_key(key) is None
+    messages = [i["message"] for i in validate_level(ds, "chapter_2")
+                if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
+    assert any("speed_boost" in m and "ResourcesDB" in m for m in messages), messages
 
 
 def test_a_skill_with_no_icon_is_an_error(ds):

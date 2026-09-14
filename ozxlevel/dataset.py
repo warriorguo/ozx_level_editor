@@ -360,27 +360,39 @@ class Dataset:
         }
 
     def skill_catalog(self) -> list[dict]:
-        """Skills a SkillPlatform may grant — passive, and with an icon.
+        """Skills a SkillPlatform may grant — passive, with a loadable icon.
 
-        SkillPlatformSpawnAdapter throws on an active skill and again on one
-        with no `iconKeys` (the platform draws the icon in its centre), so
-        offering either would only let a designer author a crash. Whatever is
-        already in the data is still shown and validated; this list governs
-        what can be chosen, not what can be displayed.
+        SkillPlatformSpawnAdapter throws on an active skill, on one with no
+        `iconKeys`, and again when the key it does name will not load, so
+        offering any of the three would only let a designer author a crash.
+        Whatever is already in the data is still shown and validated; this
+        list governs what can be chosen, not what can be displayed.
         """
         out = []
         for doc in self.of_type("SkillData"):
             v = doc.value
-            if v.get("type") != "passive" or not (v.get("iconKeys") or []):
+            if v.get("type") != "passive":
+                continue
+            # ResourcesDB, looked up verbatim: ResourcesAssetService does no
+            # `@`-suffix fallback, so a key that only resolves through this
+            # module's bare-name fallback would draw art here and still throw
+            # in the game. `skill/speed_boost@icon` is exactly that case.
+            icon_key = (v.get("iconKeys") or [None])[0]
+            if not icon_key or self.sprites.guid_for_key(icon_key) is None:
                 continue
             out.append({
                 "id": doc.id,
                 "displayName": v.get("displayName") or doc.id,
+                # The display name leads the meta line because that is what a
+                # designer knows the skill by, and `meta` is what the library
+                # search matches on alongside the id.
                 "meta": " · ".join(x for x in (
+                    v.get("displayName"),
                     v.get("type"),
                     f"rarity {v['rarity']}" if v.get("rarity") is not None else None,
                 ) if x),
                 "code": _code(doc.id),
+                "sprite": self.sprites.sprite_for_resource_key(icon_key),
             })
         return out
 
