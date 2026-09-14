@@ -327,6 +327,10 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - `mountedEnemyId` 用在非 `cargo` kind，或落在有多条 count 条目的 kind 上 → 抛错。
 - `mountedCount` 超过该条目能放置的数量 → 抛错。
 - `spawnIf` 写了未知 key、`prop` 缺 `prefabKey`、`skill` 缺 `skillId`、`trigger` 缺 `triggerId`、`equipment` 缺/错 `itemId` → 抛错。
+- `skill` 的 `skillId` 指向的 SkillData `type != "passive"`，或其 `iconKeys` 为空 → 抛错
+  （`SkillPlatformSpawnAdapter.cs:130`、`:244`；平台正中要画 level-1 图标，
+  `ResolveIcon` 拿不到 key 就抛）。`iconKeys` 为空是**合法的 SkillData**，
+  只是不能摆在平台上——`shield_orange` 现在就是这样，chapter_2 `f0_room_2_2` 因此起不来。
 - `steamTrain: true` 但房间模板没有 rail 层 → 抛错。
 - `generatorType: "static"` 但 `rooms` 为空 → 抛错。
 - `enemyPool` 非空但 `enemiesPerRoom <= 0` → 抛错。

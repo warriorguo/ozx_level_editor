@@ -211,6 +211,40 @@ check('immediate waves are not highlighted',
       whens.filter((w) => w.textContent.trim() === 'immediately')
            .every((w) => !w.classList.contains('gated')));
 
+// ── a skill platform says which skill it grants ──────────────────────────
+// Its skillId is the only thing that distinguishes one platform from another;
+// without it the row reads "skill / random" and names nothing.
+const skillRows = qa('.content-entry.skill-entry');
+check('skill placements render a skill row', skillRows.length > 0,
+      `${skillRows.length} rows`);
+check('each names the skill rather than just the kind',
+      skillRows.every((row) => {
+        const sub = row.querySelector('small')?.textContent.trim() || '';
+        return sub.length > 0 && sub !== 'random' && !/^\d+ cells?$/.test(sub);
+      }),
+      skillRows.map((r) => r.querySelector('small')?.textContent.trim()).join(' | '));
+check('and offers a picker to change it',
+      skillRows.every((row) => row.querySelector('.skill-picker')?.options.length > 0));
+check('the picker is pre-selected to the authored skill',
+      skillRows.every((row) => {
+        const select = row.querySelector('.skill-picker');
+        return !select.disabled ? select.value.length > 0 : true;
+      }));
+
+const skillSelect = skillRows[0]?.querySelector('.skill-picker');
+if (skillSelect) {
+  const before = posted.length;
+  const other = [...skillSelect.options].find((o) => o.value && o.value !== skillSelect.value);
+  skillSelect.value = other.value;
+  skillSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  const write = posted[before];
+  check('changing the picker writes an edit', !!write);
+  check('the edit targets that placement\'s skillId',
+        write?.body.edits[0].path.endsWith('/skillId'), write?.body.edits[0].path);
+  check('and carries the chosen skill', write?.body.edits[0].value === other.value);
+}
+
 // ── the project picker offers a path rather than an empty box ────────────
 const cfg = routes['/api/config'];
 if (cfg) {

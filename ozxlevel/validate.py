@@ -107,15 +107,44 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          entity=level_id, pointer=f"{rptr}/{name}"))
 
             for pi, p in enumerate(room.get("staticPlacements") or []):
+                pptr = f"{rptr}/staticPlacements/{pi}"
                 for name, dtype in (("lootTableId", "LootTableData"),
                                     ("mountedEnemyId", "EnemyData"),
-                                    ("itemId", "ItemData")):
+                                    ("itemId", "ItemData"),
+                                    ("skillId", "SkillData")):
                     ref = p.get(name)
                     if ref and ds.get(dtype, ref) is None:
                         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
                                              f"{rid}: placement {pi} {name} '{ref}' does not exist",
                                              entity=level_id,
-                                             pointer=f"{rptr}/staticPlacements/{pi}/{name}"))
+                                             pointer=f"{pptr}/{name}"))
+
+                # SkillPlatformSpawnAdapter throws on both of these when the
+                # room spawns, so an unfinished skill platform takes the whole
+                # room down rather than quietly placing nothing.
+                if p.get("kind") == "skill":
+                    skill = ds.get("SkillData", p.get("skillId") or "")
+                    if not p.get("skillId"):
+                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_MISSING",
+                                             f"{rid}: placement {pi} is kind 'skill' with no "
+                                             f"skillId; the spawn adapter throws",
+                                             entity=level_id, pointer=f"{pptr}/skillId"))
+                    elif skill is not None and skill.value.get("type") != "passive":
+                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NOT_PASSIVE",
+                                             f"{rid}: placement {pi} grants '{p['skillId']}', which "
+                                             f"is type '{skill.value.get('type')}'; a SkillPlatform "
+                                             f"only grants passive skills",
+                                             entity=level_id, pointer=f"{pptr}/skillId"))
+                    elif skill is not None and not (skill.value.get("iconKeys") or []):
+                        # The platform draws the skill's level-1 icon in its
+                        # centre and ResolveIcon throws without one, so a
+                        # skill with no iconKeys cannot be placed at all —
+                        # legal SkillData, illegal on a platform.
+                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NO_ICON",
+                                             f"{rid}: placement {pi} grants '{p['skillId']}', which "
+                                             f"has no iconKeys; a SkillPlatform needs an icon to "
+                                             f"display and throws without one",
+                                             entity=level_id, pointer=f"{pptr}/skillId"))
 
             # ── doors ────────────────────────────────────────────────────
             seen_dirs: dict[int, int] = {}

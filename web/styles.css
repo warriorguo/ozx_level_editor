@@ -371,6 +371,13 @@ button { color: inherit; }
 .quantity button:hover { color:#11140f; background:var(--acid); }
 .quantity input { min-width:0; width:100%; padding:0 2px; border:0; border-left:1px solid var(--line); border-right:1px solid var(--line); outline:0; color:var(--ink); background:#101512; text-align:center; font-size:10px; -moz-appearance:textfield; }
 .quantity input::-webkit-inner-spin-button, .quantity input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+/* A skill platform carries a second row: the picker for the passive skill it
+   grants. The grant is the only thing that identifies it, so it sits on the
+   row itself rather than behind a selection. */
+.skill-entry { row-gap: 5px; }
+.skill-entry .skill-picker { grid-column: 2 / -1; height: 24px; font-size: 9px; }
+.skill-entry .skill-picker:disabled { color: var(--dim); cursor: not-allowed; }
+
 .decoration-content .content-glyph { color:#10201e; background:var(--cyan); }
 .decoration-entry { grid-template-columns: 25px minmax(0,1fr) 25px; }
 .remove-decoration { width:25px; height:25px; padding:0; border:1px solid var(--line); border-radius:4px; color:var(--muted); background:#121713; cursor:pointer; }

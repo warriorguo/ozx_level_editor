@@ -313,6 +313,27 @@ function lootOptions(selected) {
   return opts.join('');
 }
 
+/** Options for a skill-platform picker.
+ *
+ *  Only passive skills are offered — SkillPlatformSpawnAdapter throws on an
+ *  active one — but whatever is already authored is kept selectable so the
+ *  picker never silently misreports the current value. There is no "none":
+ *  a skill platform without a skillId is a crash, not a valid state.
+ */
+function skillOptions(selected) {
+  const catalog = state.boot.skillCatalog || [];
+  const opts = [];
+  if (!selected) opts.push('<option value="" selected>⟨pick a skill⟩</option>');
+  for (const sk of catalog) {
+    opts.push(`<option value="${esc(sk.id)}" ${sk.id === selected ? 'selected' : ''}
+      >${esc(sk.id)}</option>`);
+  }
+  if (selected && !catalog.some((sk) => sk.id === selected)) {
+    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)} (not placeable)</option>`);
+  }
+  return opts.join('');
+}
+
 function renderRooms() {
   const floor = currentFloor();
   const rooms = floor.rooms;
@@ -334,18 +355,38 @@ function renderRooms() {
     const staticEntries = room.staticPlacements.length
       ? room.staticPlacements.map((p, i) => {
           const source = catalogItem(staticCatalog, p.kind);
-          const detail = [p.itemId, p.lootTableId, p.mountedEnemyId]
-            .filter(Boolean).join(' · ')
-            || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
+          // A skill platform names its grant in `skillId` — a SkillData id,
+          // not an item or a loot table — so it has to be read from there or
+          // the row says nothing about what the player actually picks up.
+          const isSkill = p.kind === 'skill';
+          const skill = p.skill;
+          const detail = isSkill
+            ? (p.skillId
+                ? (skill.missing
+                    ? `${p.skillId} — no SkillData with this id`
+                    : [skill.displayName, skill.skillType].filter(Boolean).join(' · '))
+                : 'no skillId — the spawn adapter throws')
+            : [p.itemId, p.lootTableId, p.mountedEnemyId]
+                .filter(Boolean).join(' · ')
+                || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
+          const broken = isSkill && (!p.skillId || skill.missing
+            || (skill.skillType && skill.skillType !== 'passive') || !skill.iconKey);
           const count = p.count != null ? p.count : p.cells.length;
-          return `<div class="content-entry${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
-            ${glyph(source.sprite, source.code)}
+          const picker = isSkill
+            ? `<select class="inline-select skill-picker"
+                       data-skill-target="${esc(p.pointer)}/skillId"
+                       title="The passive skill this platform grants"
+                       ${p.skillIdDeclared ? '' : 'disabled'}
+                       >${skillOptions(p.skillId)}</select>`
+            : '';
+          return `<div class="content-entry${isSkill ? ' skill-entry' : ''}${broken ? ' missing' : ''}${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
+            ${glyph(isSkill ? skill.sprite : source.sprite, source.code, broken ? 'missing' : '')}
             <span><strong>${esc(p.kind)}</strong><small>${esc(detail)}</small></span>
             <span class="quantity" data-static-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${count}" aria-label="${esc(p.kind)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span></div>`;
+            </span>${picker}</div>`;
         }).join('')
       : (room.staticPlacementsDeclared
           ? '<div class="inline-empty">No static placements</div>'
@@ -714,6 +755,14 @@ function wireRoomCards() {
       });
     });
 
+    card.querySelectorAll('.skill-picker').forEach((select) => {
+      select.addEventListener('click', (event) => event.stopPropagation());
+      select.addEventListener('change', async (event) => {
+        state.selectedRoomIndex = roomIndex;
+        await setSkillId(event.target.dataset.skillTarget, event.target.value);
+      });
+    });
+
     card.querySelectorAll('[data-decoration-remove]').forEach((button) =>
       button.addEventListener('click', async (event) => {
         event.stopPropagation();
@@ -1076,6 +1125,19 @@ async function setLootTable(pointer, tableId) {
     [{ op: 'set', path: pointer, value: tableId }], `loot → ${tableId}`);
 }
 
+/** Point a skill platform at the passive skill it grants.
+ *
+ *  Unlike a loot pointer this is never cleared — an absent skillId throws in
+ *  SkillPlatformSpawnAdapter rather than placing nothing, so "none" is not a
+ *  state the picker offers.
+ */
+async function setSkillId(pointer, skillId) {
+  if (!skillId) return;
+  if (pointerValue(pointer) === skillId) return;
+  await applyEdits('LevelData', state.levelId,
+    [{ op: 'set', path: pointer, value: skillId }], `skill → ${skillId}`);
+}
+
 /** Read the value a JSON pointer currently holds in the loaded level view. */
 function pointerValue(pointer) {
   const room = currentFloor().rooms.find((r) => pointer.startsWith(r.pointer + '/'));
@@ -1087,6 +1149,8 @@ function pointerValue(pointer) {
     const entry = room.cargoLoot.find((c) => c.placementIndex === Number(m[1]));
     return entry ? entry.table.id : null;
   }
+  const sk = rest.match(/^staticPlacements\/(\d+)\/skillId$/);
+  if (sk) return room.staticPlacements[Number(sk[1])].skillId;
   return null;
 }
 
@@ -1096,10 +1160,16 @@ async function addStatic(kind) {
     showToast(`${room.roomId}: staticPlacements is null — fix that first`);
     return;
   }
+  // The span writer replaces existing nodes; it cannot add a key to an
+  // object. So a kind that needs a companion field has to be born with it,
+  // or the picker for that field would have nothing to write into.
+  const value = kind === 'skill'
+    ? { kind, skillId: '', count: 1 }
+    : { kind, count: 1 };
   await applyEdits('LevelData', state.levelId, [{
     op: 'append',
     path: `${room.pointer}/staticPlacements`,
-    value: { kind, count: 1 },
+    value,
   }], `${kind} added to ${room.roomId}`);
 }
 

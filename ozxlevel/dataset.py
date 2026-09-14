@@ -329,6 +329,61 @@ class Dataset:
             "spriteKey": v.get("spriteKey"),
         }
 
+    def skill_brief(self, skill_id: str | None) -> dict:
+        """Resolve a kind="skill" placement's skillId to what it will grant.
+
+        This is SkillData, not ItemData, and the two id spaces overlap —
+        `shield_blue` is both an item and a skill — so it must never go
+        through :meth:`item_brief`. SkillPlatformSpawnAdapter throws on a
+        missing id and on a skill whose `type` is not "passive", so both are
+        reported here rather than left to a playtest.
+        """
+        if not skill_id:
+            return {"missing": True, "displayName": None, "skillType": None,
+                    "rarity": None, "sprite": None, "iconKey": None}
+        doc = self.get("SkillData", skill_id)
+        if doc is None:
+            return {"missing": True, "displayName": None, "skillType": None,
+                    "rarity": None, "sprite": None, "iconKey": None}
+        v = doc.value
+        # SkillIndicatorView.ResolveIndicatorKey(iconKeys, level) with level 1
+        # — the platform always shows the level-1 icon — is iconKeys[0].
+        icons = v.get("iconKeys") or []
+        icon_key = icons[0] if icons else None
+        return {
+            "missing": False,
+            "displayName": v.get("displayName") or skill_id,
+            "skillType": v.get("type"),
+            "rarity": v.get("rarity"),
+            "iconKey": icon_key,
+            "sprite": self.sprites.sprite_for_resource_key(icon_key),
+        }
+
+    def skill_catalog(self) -> list[dict]:
+        """Skills a SkillPlatform may grant — passive, and with an icon.
+
+        SkillPlatformSpawnAdapter throws on an active skill and again on one
+        with no `iconKeys` (the platform draws the icon in its centre), so
+        offering either would only let a designer author a crash. Whatever is
+        already in the data is still shown and validated; this list governs
+        what can be chosen, not what can be displayed.
+        """
+        out = []
+        for doc in self.of_type("SkillData"):
+            v = doc.value
+            if v.get("type") != "passive" or not (v.get("iconKeys") or []):
+                continue
+            out.append({
+                "id": doc.id,
+                "displayName": v.get("displayName") or doc.id,
+                "meta": " · ".join(x for x in (
+                    v.get("type"),
+                    f"rarity {v['rarity']}" if v.get("rarity") is not None else None,
+                ) if x),
+                "code": _code(doc.id),
+            })
+        return out
+
     def rarity_palette(self) -> dict:
         """The game's own rarity -> text colour map, from box_rarity.json.
 
@@ -517,6 +572,13 @@ class Dataset:
                          "itemId": p.get("itemId"),
                          "lootTableId": p.get("lootTableId"),
                          "mountedEnemyId": p.get("mountedEnemyId"),
+                         # kind="skill" names its grant in `skillId`, not in
+                         # itemId or a loot table, so without this a skill
+                         # platform renders as an anonymous "skill".
+                         "skillId": p.get("skillId"),
+                         "skillIdDeclared": "skillId" in p,
+                         "skill": (self.skill_brief(p.get("skillId"))
+                                   if p.get("kind") == "skill" else None),
                          "count": p.get("count"),
                          "cells": p.get("cells") or [],
                          "pointer": f"{base}/staticPlacements/{i}"}
