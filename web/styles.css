@@ -905,6 +905,51 @@ button { color: inherit; }
 }
 .when-sep { color: var(--line-bright); }
 
+/* ── plans ───────────────────────────────────────────────────────────────
+   A LevelBasePlanData is a recipe, not a level: it has no rooms until
+   something generates them. It reuses the room card's column grid so the two
+   read as the same tool, but it deliberately gets no floor map. */
+.plan-floor { grid-template-columns: minmax(230px,.85fr) minmax(170px,.6fr) minmax(190px,.7fr) minmax(210px,.8fr); }
+.plan-head { gap: 8px; }
+.plan-facts { display: grid; gap: 5px; align-content: start; }
+.plan-facts > div { display: grid; grid-template-columns: 84px minmax(0,1fr); gap: 7px; align-items: baseline; }
+.plan-facts span { color: var(--dim); font-size: 8px; letter-spacing: .11em; text-transform: uppercase; }
+.plan-facts strong { font-size: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* An absent boss is a real authoring choice (OZX-994), not an unfilled
+   field, so it is muted rather than flagged. */
+.plan-facts strong.noboss { color: var(--dim); font-weight: 400; }
+.plan-facts strong.bad { color: var(--danger); }
+.plan-stage .content-glyph { background: var(--cyan); color: #10201e; font-size: 9px; }
+
+.tilepart-list { display: flex; flex-wrap: wrap; gap: 5px; align-content: start; }
+.tilepart {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: #101512;
+  font-family: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.tilepart:hover { border-color: var(--line-bright); color: var(--ink); }
+.tilepart.on { color: #11140f; border-color: var(--acid); background: var(--acid); }
+/* Owned by the theme but kept out of the random pool — legal to name, never
+   rolled for a room that did not ask. */
+.tilepart.named-only { border-style: dashed; }
+
+.plan-nomap {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: 0 14px;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.7;
+  text-align: center;
+}
+.plan-nomap span { color: var(--muted); font-size: 9px; }
+
 /* ── what a wave drops ───────────────────────────────────────────────────
    A second row on the enemy entry. Enemy drops are authored on the encounter,
    not the room, so the Loot column cannot show them — and this is the only

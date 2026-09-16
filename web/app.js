@@ -20,6 +20,10 @@ const state = {
   levelId: null,
   floorIndex: 0,
   selectedRoomIndex: 0,
+  // 'level' (authored rooms) or 'plan' (a generation recipe with no rooms).
+  mode: 'level',
+  plan: null,
+  planId: null,
   // What a library click will act on. `kind` names the column; `pointer` is
   // set only when a specific slot was picked (e.g. one cargo box's loot
   // table) rather than the column as a whole.
@@ -204,10 +208,21 @@ async function boot() {
     return;
   }
 
-  $('levelPicker').innerHTML = levels
-    .map((l) => `<option value="${esc(l.id)}">${esc(l.id)} · ${l.rooms} rooms</option>`)
+  // Plans sit in the same picker as levels, but they are a different kind of
+  // document: a LevelData has rooms, a LevelBasePlanData has a recipe for
+  // rooms that do not exist until something generates them. Grouping them
+  // apart is the first place the UI has to say so.
+  const plans = state.boot.plans || [];
+  const levelOpts = levels
+    .map((l) => `<option value="level:${esc(l.id)}">${esc(l.id)} · ${l.rooms} rooms</option>`)
     .join('');
-  $('levelPicker').addEventListener('change', (e) => loadLevel(e.target.value));
+  const planOpts = plans
+    .map((p) => `<option value="plan:${esc(p.id)}">${esc(p.id)} · ${p.floors} floor${p.floors === 1 ? '' : 's'}</option>`)
+    .join('');
+  $('levelPicker').innerHTML =
+    `<optgroup label="Levels (authored rooms)">${levelOpts}</optgroup>`
+    + (planOpts ? `<optgroup label="Plans (generated at runtime)">${planOpts}</optgroup>` : '');
+  $('levelPicker').addEventListener('change', (e) => openDocument(e.target.value));
 
   await loadLevel(levels[0].id);
   await refreshGlobalValidation();
@@ -228,14 +243,37 @@ function resetSelection() {
                       index: null, label: null };
 }
 
+/** Open whatever the picker names — `level:<id>` or `plan:<id>`. */
+async function openDocument(value) {
+  const [kind, ...rest] = String(value).split(':');
+  const id = rest.join(':');
+  return kind === 'plan' ? loadPlan(id) : loadLevel(id);
+}
+
 async function loadLevel(levelId) {
+  state.mode = 'level';
   state.levelId = levelId;
   state.level = await api(`/api/level/${encodeURIComponent(levelId)}`);
   state.floorIndex = 0;
   state.selectedRoomIndex = 0;
   resetSelection();
-  $('levelPicker').value = levelId;
+  $('levelPicker').value = `level:${levelId}`;
   renderAll();
+}
+
+async function loadPlan(planId) {
+  state.mode = 'plan';
+  state.planId = planId;
+  state.plan = await api(`/api/plan/${encodeURIComponent(planId)}`);
+  resetSelection();
+  $('levelPicker').value = `plan:${planId}`;
+  renderPlanAll();
+}
+
+async function reloadPlan() {
+  state.plan = await api(`/api/plan/${encodeURIComponent(state.planId)}`);
+  await syncCatalogsIfStale();
+  renderPlanAll();
 }
 
 async function reloadLevel() {
@@ -699,6 +737,11 @@ function selectionMatches(libraryKind) {
 
 /** One line telling the user where a library click will land. */
 function selectionSummary(libraryKind) {
+  // In plan mode there is no room to land on. Leaving the last level's room
+  // id here would be worse than useless: `selectionRoom()` still resolves it
+  // against `state.level`, so the line would name a real target in a
+  // document the user is no longer looking at.
+  if (state.mode === 'plan') return 'plans have no rooms to add to';
   const room = selectionRoom();
   if (!room) return '';
   const kind = LIBRARY_KIND[libraryKind] ?? libraryKind;
@@ -1015,6 +1058,10 @@ function renderCatalog(list, targetId, query, kind) {
     const add = async (event) => {
       event.stopPropagation();
       if (state.busy) return;
+      if (state.mode === 'plan') {
+        showToast('A plan has no rooms — open a level to add things to one');
+        return;
+      }
       if (kind === 'static') await addStatic(card.dataset.id);
       else if (kind === 'skill') await addSkill(card.dataset.id);
       else if (kind === 'loot') await addLoot(card.dataset.id);
@@ -1037,7 +1084,179 @@ function renderLevelIssueBadge() {
   $('levelIssues').innerHTML = `<span class="issue-badge ${cls}">${text}</span>`;
 }
 
+// ── plans ────────────────────────────────────────────────────────────────
+// A plan is a recipe, not a level. It has no rooms — they are computed at
+// generation time — so none of the room-list, floor-map or library machinery
+// applies. Rendering it as a floor map would be the single most misleading
+// thing this screen could do, which is why the map panel says so out loud
+// instead of going blank.
+
+function renderPlanAll() {
+  const plan = state.plan;
+  $('floorCrumb').textContent = `${plan.floors.length} FLOORS`;
+  $('floorTitle').textContent = 'Floor plans';
+  $('levelSub').textContent = 'PLAN';
+  $('roomCount').textContent = `${plan.floors.length} floors`;
+  $('floorTabs').innerHTML = '';
+  $('addRoomBtn').hidden = true;
+  // Into the plane, NOT the scroller: #mapPlane lives inside #mapScroll, so
+  // replacing the scroller's contents deletes the plane and every later
+  // render — including the one after a write — hits a null.
+  $('mapPlane').innerHTML =
+    `<div class="plan-nomap">A plan has no rooms until it is generated.<br>
+     <span>Room layout preview needs the headless generator (OLE-1).</span></div>`;
+  renderPlanFloors();
+  renderPlanIssueBadge();
+  for (const [cat, id, box, kind] of [
+    [state.boot.enemyCatalog, 'enemyLibrary', 'enemySearch', 'enemy'],
+    [state.boot.staticCatalog, 'staticLibrary', 'staticSearch', 'static'],
+    [state.boot.skillCatalog, 'skillLibrary', 'skillSearch', 'skill'],
+    [state.boot.lootCatalog, 'lootLibrary', 'lootSearch', 'loot'],
+  ]) renderCatalog(cat, id, $(box).value, kind);
+}
+
+function renderPlanIssueBadge() {
+  const issues = state.plan.issues || [];
+  const errors = issues.filter((i) => i.severity === 'error').length;
+  const warnings = issues.filter((i) => i.severity === 'warning').length;
+  const cls = errors ? 'error' : warnings ? 'warning' : 'clean';
+  const text = errors ? `${errors} error${errors === 1 ? '' : 's'}`
+    : warnings ? `${warnings} warning${warnings === 1 ? '' : 's'}` : 'clean';
+  $('levelIssues').innerHTML = `<span class="issue-badge ${cls}">${text}</span>`;
+}
+
+function planIssuesFor(pointer) {
+  return (state.plan.issues || []).filter(
+    (i) => i.pointer === pointer || (i.pointer || '').startsWith(pointer + '/'));
+}
+
+function renderPlanFloors() {
+  $('roomsGrid').innerHTML = state.plan.floors.map((f) => {
+    const issues = planIssuesFor(f.pointer);
+    const bad = issues.some((i) => i.severity === 'error');
+
+    const stages = f.stageTypes.length
+      ? f.stageTypes.map((st) => `<div class="content-entry plan-stage">
+          <span class="content-glyph">${esc((st.stageType || '?').slice(0, 2).toUpperCase())}</span>
+          <span><strong>${esc(st.stageType || '?')}</strong><small>${
+            st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}</small></span>
+        </div>`).join('')
+      : '<div class="inline-empty">No stage slices</div>';
+
+    const pool = f.enemyPool.length
+      ? f.enemyPool.map((e) => `<div class="content-entry ${e.missing ? 'missing' : ''}">
+          <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.enemyId))}</span>
+          <span><strong>${esc(e.enemyId || '?')}</strong><small>${
+            e.missing ? 'no EnemyData with this id'
+              : `weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+          }</small></span>
+        </div>`).join('')
+      : '<div class="inline-empty">No enemy pool</div>';
+
+    // Every part the theme owns, on or off. A chip UI rather than a text
+    // field because the legal values are a closed set the theme defines, and
+    // typing a name that does not resolve throws at room load.
+    const owned = f.themeParts;
+    const chosen = f.appearance.tilePartConfigs;
+    const chips = owned.found
+      ? owned.all.map((name) => `<button class="tilepart ${chosen.includes(name) ? 'on' : ''}${
+          owned.named.includes(name) ? ' named-only' : ''}"
+          data-floor="${f.index}" data-part="${esc(name)}"
+          title="${owned.named.includes(name)
+            ? 'Owned by the theme but kept out of the random pool — addressable only by name'
+            : 'In the theme\'s random pool'}">${esc(name)}</button>`).join('')
+      : `<div class="inline-empty" style="color:var(--warn)">Cannot resolve theme ${esc(f.themeId || '(none)')}</div>`;
+
+    const appearanceNote = !chosen.length
+      ? 'none selected — rooms draw from the theme\'s full pool'
+      : chosen.length === 1
+        ? 'one group — the whole floor is pinned to it'
+        : `${chosen.length} groups — each room rolls one of them`;
+
+    return `<div class="room-list-item plan-floor${bad ? ' has-error' : ''}" data-floor="${f.index}">
+      <div class="content-column plan-head">
+        <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')}</div>
+        <div class="plan-facts">
+          <div><span>theme</span><strong>${esc(f.themeId || '—')}</strong></div>
+          <div><span>generator</span><strong>${esc(f.generatorType || 'tree (default)')}</strong></div>
+          <div><span>rooms</span><strong>${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
+          <div><span>enemies/room</span><strong>${f.enemiesPerRoom ?? '—'}</strong></div>
+          <div><span>key</span><strong>${esc(f.transitionKeyId || '—')}</strong></div>
+          <div><span>boss</span><strong class="${f.hasBoss ? (f.bossMissing ? 'bad' : '') : 'noboss'}">${
+            f.hasBoss ? esc(f.bossId) : 'none — no boss room on this floor'}</strong></div>
+        </div>
+        ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+      </div>
+      <div class="content-column">
+        <div class="content-head">Stage mix <span>${f.stageTypes.length}</span></div>
+        <div class="content-list">${stages}</div>
+        ${f.stageTypes.length ? `<div class="derived-note">portions total ${f.stagePortionTotal}</div>` : ''}
+      </div>
+      <div class="content-column">
+        <div class="content-head">Enemy pool <span>${f.enemyPool.length}</span></div>
+        <div class="content-list">${pool}</div>
+      </div>
+      <div class="content-column">
+        <div class="content-head">Tile groups <span>${chosen.length || 'all'}</span></div>
+        <div class="tilepart-list">${chips}</div>
+        <div class="derived-note">${appearanceNote}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  $('roomsGrid').querySelectorAll('.tilepart').forEach((chip) =>
+    chip.addEventListener('click', () =>
+      toggleTilePart(Number(chip.dataset.floor), chip.dataset.part)));
+}
+
+/** Add or remove one tile group from a floor's subset. */
+async function toggleTilePart(floorIndex, name) {
+  const floor = state.plan.floors[floorIndex];
+  if (!floor.appearance.declared) {
+    // The span writer replaces nodes; it cannot add a key to an object.
+    showToast('This floor has no appearance.tilePartConfigs key yet — add it in the JSON first');
+    return;
+  }
+  const current = floor.appearance.tilePartConfigs;
+  const at = current.indexOf(name);
+  // One element in or out, never a rewrite of the whole array. Setting the
+  // array would re-render it in the writer's house style — chapter_3 writes
+  // `[ "a", "b" ]` with inner padding, which is not that style — and would
+  // reorder entries the author chose. append/remove touch neither.
+  const edit = at >= 0
+    ? { op: 'remove', path: `${floor.appearance.pointer}/${at}` }
+    : { op: 'append', path: floor.appearance.pointer, value: name };
+  const after = at >= 0 ? current.filter((n) => n !== name) : [...current, name];
+  await applyPlanEdits([edit],
+    after.length ? `floor ${floorIndex + 1} tiles → ${after.join(', ')}`
+                 : `floor ${floorIndex + 1} tiles → theme default`);
+}
+
+async function applyPlanEdits(edits, message) {
+  if (!edits.length) return;
+  setBusy(true);
+  try {
+    await post('/api/edit', { dataType: 'LevelBasePlanData', id: state.planId, edits });
+    await reloadPlan();
+    markSaved(message || 'written');
+    if (message) showToast(message);
+  } catch (err) {
+    showToast(err.message || 'write failed');
+    await reloadPlan();
+  } finally {
+    setBusy(false);
+  }
+}
+
+const codeOf = (id) => {
+  const parts = String(id || '').replace(/-/g, '_').split('_').filter(Boolean);
+  if (!parts.length) return '??';
+  return (parts.length === 1 ? parts[0].slice(0, 2)
+    : parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
 function renderAll() {
+  $('addRoomBtn').hidden = false;
   const floor = currentFloor();
   const label = `FLOOR ${String(floor.index + 1).padStart(2, '0')}`;
   $('floorCrumb').textContent = label;

@@ -16,6 +16,7 @@ from typing import Any
 
 from . import jsonspan
 from .sprites import SpriteIndex
+from .themes import ThemeIndex
 
 # DoorDirection in Game.Contracts/Enums/GameEnums.cs:58 — the integer IS the
 # enum, so 0 means Up and never "absent".
@@ -128,6 +129,7 @@ class Dataset:
         }]
         ds.revision = 0
         ds.sprites = SpriteIndex(pathlib.Path("/nonexistent"))
+        ds.themes = ThemeIndex(pathlib.Path("/nonexistent"), ds.sprites)
         return ds
 
     def __init__(self, project_root: str | pathlib.Path):
@@ -144,6 +146,10 @@ class Dataset:
         # and separately — a session that never opens a catalog never pays for
         # the ~3.7k .meta files it indexes.
         self.sprites = SpriteIndex(self.root)
+        # TilePartConfig names live in Assets/Prefabs/Room/Theme/, not in
+        # GameData, so a floor plan's appearance can only be checked against
+        # the Unity tree. Lazy for the same reason as the sprite index.
+        self.themes = ThemeIndex(self.root, self.sprites)
         self.load()
 
     # ── loading ──────────────────────────────────────────────────────────
@@ -595,6 +601,78 @@ class Dataset:
                     bool(gates) and gates[0] != "immediately"),
             })
         return out
+
+    def plan_view(self, plan_id: str) -> dict:
+        """A `LevelBasePlanData` as authored — no generation involved.
+
+        A plan has no rooms: they are computed at generation time from
+        `roomCountMin/Max`, `stageTypes` portions and the generator. Rendering
+        a *sample* of that needs the headless entry point (OLE-1 / OZX-991).
+        What is on disk, and what this returns, is the recipe — every field
+        here is hand-authored and editable without running anything.
+
+        The distinction matters for the UI: nothing in this view is "what the
+        level looks like", so it must never be drawn as a floor map.
+        """
+        doc = self.get("LevelBasePlanData", plan_id)
+        if doc is None:
+            return {"id": plan_id, "missing": True, "floors": []}
+        floors = []
+        for fi, floor in enumerate(doc.value.get("floors") or []):
+            base = f"/floors/{fi}"
+            appearance = floor.get("appearance") or {}
+            theme_id = floor.get("themeId")
+            owned = self.themes.tile_parts(theme_id)
+            boss_id = floor.get("bossId")
+            stages = [
+                {"stageType": s.get("stageType"), "portion": s.get("portion"),
+                 "encounterId": s.get("encounterId"),
+                 "lootPlanId": s.get("lootPlanId"),
+                 "pointer": f"{base}/stageTypes/{si}"}
+                for si, s in enumerate(floor.get("stageTypes") or [])
+            ]
+            floors.append({
+                "index": fi,
+                "pointer": base,
+                "themeId": theme_id,
+                "generatorType": floor.get("generatorType"),
+                "roomCountMin": floor.get("roomCountMin"),
+                "roomCountMax": floor.get("roomCountMax"),
+                "enemiesPerRoom": floor.get("enemiesPerRoom"),
+                "transitionKeyId": floor.get("transitionKeyId"),
+                # Empty is a real choice (OZX-994): this floor has no boss and
+                # the room that would have been one becomes ordinary. The UI
+                # must not render it as an unfilled field.
+                "bossId": boss_id,
+                "hasBoss": bool(boss_id),
+                "bossMissing": bool(boss_id) and self.get("EnemyData", boss_id) is None,
+                "stageTypes": stages,
+                "stagePortionTotal": round(
+                    sum(s.get("portion") or 0 for s in floor.get("stageTypes") or []), 4),
+                "enemyPool": [
+                    {"index": ei, "enemyId": e.get("enemyId"),
+                     "weight": e.get("weight"), "maxPerRoom": e.get("maxPerRoom"),
+                     "dropTableId": e.get("dropTableId"),
+                     "missing": self.get("EnemyData", e.get("enemyId")) is None,
+                     "pointer": f"{base}/enemyPool/{ei}"}
+                    for ei, e in enumerate(floor.get("enemyPool") or [])
+                ],
+                "appearance": {
+                    # Absent and [] are the same to the generator (full pool),
+                    # but only `declared` can tell the UI whether there is a
+                    # node to patch — the span writer replaces, never inserts.
+                    "declared": "tilePartConfigs" in appearance,
+                    "tilePartConfigs": appearance.get("tilePartConfigs") or [],
+                    "pointer": f"{base}/appearance/tilePartConfigs",
+                },
+                "themeParts": owned,
+            })
+        return {
+            "id": doc.id,
+            "missing": False,
+            "file": doc.path.name,
+            "floors": floors,
+        }
 
     def level_view(self, level_id: str) -> dict:
         """Everything the editor needs to render one level."""

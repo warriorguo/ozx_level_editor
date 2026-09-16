@@ -119,6 +119,13 @@ class Api:
         view["revision"] = self.dataset.revision
         return view
 
+    def plan(self, plan_id: str) -> dict:
+        self.dataset.refresh()
+        view = self.dataset.plan_view(plan_id)
+        view["issues"] = validate_plan(self.dataset, plan_id)
+        view["revision"] = self.dataset.revision
+        return view
+
     def validate(self, scope: str | None, target: str | None) -> dict:
         ds = self.dataset
         ds.refresh()
@@ -316,6 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.api.bootstrap())
             if path.startswith("/api/level/"):
                 return self._json(self.api.level(path[len("/api/level/"):]))
+            if path.startswith("/api/plan/"):
+                return self._json(self.api.plan(path[len("/api/plan/"):]))
             if path == "/api/validate":
                 return self._json(self.api.validate(
                     (query.get("scope") or [None])[0],

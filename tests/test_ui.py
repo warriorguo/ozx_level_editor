@@ -71,6 +71,11 @@ def fixtures(tmp_path_factory):
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
     (out / "cfg.json").write_text(json.dumps(api.get_config()))
     (out / "lvl.json").write_text(json.dumps(api.level(chosen["id"])))
+    # A plan too: it is a different document kind with no rooms, and the
+    # client has a whole second render path for it.
+    plans = boot["plans"]
+    if plans:
+        (out / "plan.json").write_text(json.dumps(api.plan(plans[0]["id"])))
     return out
 
 

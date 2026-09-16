@@ -337,6 +337,67 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
             issues.append(_issue("error", "DATA_REFERENCE_MISSING",
                                  f"floor {fi}: bossId '{boss}' does not exist",
                                  entity=plan_id, pointer=f"{fptr}/bossId"))
+        # bossId being EMPTY is deliberate and means "no boss on this floor"
+        # (OZX-994), so there is no rule for it — the room that would have been
+        # the boss room becomes an ordinary one.
+
+        issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+    return issues
+
+
+def _tile_part_issues(ds: Dataset, plan_id: str, fi: int,
+                      fptr: str, floor: dict) -> list[dict]:
+    """`appearance.tilePartConfigs` — the floor's tile-group subset.
+
+    Two different throws sit behind this one field:
+
+    - `LevelBasePlanAssigner.AssignRoomAppearance` throws on an empty entry,
+      at generation time.
+    - the name is then stamped onto each room and resolved by
+      `TileThemeConfig.FindTilePartConfig`; `RoomInstanceView` fail-fasts on a
+      name the theme does not define, at room-load time.
+
+    Omitting the field is the default (draw from the theme's full pool), so
+    an absent or empty list is not a finding.
+    """
+    appearance = floor.get("appearance") or {}
+    parts = appearance.get("tilePartConfigs")
+    if not parts:
+        return []
+
+    aptr = f"{fptr}/appearance/tilePartConfigs"
+    issues = []
+    for pi, name in enumerate(parts):
+        if not name or not str(name).strip():
+            issues.append(_issue(
+                "error", "LEVEL_TILEPART_EMPTY",
+                f"floor {fi}: appearance.tilePartConfigs[{pi}] is empty; "
+                f"AssignRoomAppearance throws on a blank entry",
+                entity=plan_id, pointer=f"{aptr}/{pi}"))
+
+    theme_id = floor.get("themeId")
+    owned = ds.themes.tile_parts(theme_id)
+    if not owned["found"]:
+        # Could not walk themeId -> theme asset -> tileTheme. Saying nothing
+        # would silently skip the check; claiming every name is wrong would be
+        # worse. Report the inability instead.
+        issues.append(_issue(
+            "warning", "LEVEL_TILEPART_UNCHECKED",
+            f"floor {fi}: cannot resolve themeId '{theme_id}' to a theme asset, "
+            f"so its tilePartConfigs names are unverified",
+            entity=plan_id, pointer=f"{fptr}/themeId"))
+        return issues
+
+    for pi, name in enumerate(parts):
+        if not name or not str(name).strip():
+            continue
+        if name not in owned["all"]:
+            issues.append(_issue(
+                "error", "LEVEL_TILEPART_UNKNOWN",
+                f"floor {fi}: '{name}' is not a TilePartConfig of theme "
+                f"'{theme_id}'; RoomInstanceView throws when it cannot resolve "
+                f"the name. Theme owns: {', '.join(owned['all']) or '(none)'}",
+                entity=plan_id, pointer=f"{aptr}/{pi}"))
     return issues
 
 

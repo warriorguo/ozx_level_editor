@@ -23,6 +23,9 @@ const routes = {
 };
 const level = JSON.parse(fs.readFileSync(`${FIXTURES}/lvl.json`));
 routes[`/api/level/${level.id}`] = level;
+const planPath = `${FIXTURES}/plan.json`;
+const plan = fs.existsSync(planPath) ? JSON.parse(fs.readFileSync(planPath)) : null;
+if (plan) routes[`/api/plan/${plan.id}`] = plan;
 
 const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8'),
                       { runScripts: 'outside-only', pretendToBeVisual: true });
@@ -324,6 +327,94 @@ check('and says where a click will land',
           write?.body.edits[0].path.startsWith('/floors/1/'),
           write?.body.edits[0].path);
   }
+}
+
+// ── plans are a different document kind ──────────────────────────────────
+// A LevelBasePlanData has no rooms until something generates them. Drawing it
+// as a floor map, or leaving the libraries aimed at the level that was open
+// before, are the two ways this screen can lie.
+if (plan) {
+  const picker = q('#levelPicker');
+  check('the picker groups plans apart from levels',
+        qa('#levelPicker optgroup').length === 2,
+        qa('#levelPicker optgroup').map((g) => g.label).join(' | '));
+
+  picker.value = `plan:${plan.id}`;
+  picker.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle(20);
+
+  check('opening a plan renders a card per floor',
+        qa('.plan-floor').length === plan.floors.length,
+        `${qa('.plan-floor').length} floors`);
+  check('it draws no room cards', qa('.room-list-item:not(.plan-floor)').length === 0);
+  check('and says why there is no map', !!q('.plan-nomap'));
+  // #mapPlane lives inside #mapScroll; writing the notice to the scroller
+  // deleted the plane and every render after a write threw on the null.
+  check('the map plane survives for the next render', !!q('#mapPlane'));
+
+  check('every tile group the theme owns is offered',
+        qa('.plan-floor .tilepart').length ===
+          plan.floors.reduce((n, f) => n + f.themeParts.all.length, 0));
+  check('the authored subset is the one switched on',
+        qa('.plan-floor[data-floor="0"] .tilepart.on').length ===
+          plan.floors[0].appearance.tilePartConfigs.length);
+  check('a part kept out of the random pool is marked',
+        qa('.plan-floor[data-floor="0"] .tilepart.named-only').length ===
+          plan.floors[0].themeParts.named.length);
+
+  // An absent bossId is a real choice (OZX-994), never an unfilled field.
+  const noBoss = plan.floors.filter((f) => !f.hasBoss).length;
+  check('a floor with no boss says so rather than showing a blank',
+        qa('.plan-facts strong.noboss').length === noBoss, `${noBoss} bossless`);
+
+  // The target line is "→ <roomId> · <column>" in level mode. What must not
+  // survive is the arrow naming a room in the document no longer on screen —
+  // `selectionRoom()` still resolves it against state.level, so a click would
+  // land there for real.
+  check('the libraries stop aiming at the level that was open',
+        !q('#enemyLibraryTarget').textContent.trim().startsWith('→'),
+        q('#enemyLibraryTarget').textContent);
+  check('and adding a room is not offered', q('#addRoomBtn').hidden === true);
+
+  {
+    const before = posted.length;
+    click(qa('#skillLibrary .asset-card')[0]);
+    await settle();
+    check('a library click writes nothing in plan mode', posted.length === before);
+  }
+
+  {
+    const before = posted.length;
+    const off = qa('.plan-floor[data-floor="0"] .tilepart:not(.on)')[0];
+    click(off);
+    await settle();
+    const write = posted[before];
+    check('toggling a tile group on appends one entry',
+          write?.body.edits[0].op === 'append', write?.body.edits[0].op);
+    // Setting the whole array would reformat it to the writer's house style
+    // and reorder the author's entries; chapter_3 writes `[ "a", "b" ]`.
+    check('it targets the array, not a rewrite of it',
+          write?.body.edits[0].path.endsWith('/appearance/tilePartConfigs'),
+          write?.body.edits[0].path);
+    check('and it writes to the plan document',
+          write?.body.dataType === 'LevelBasePlanData', write?.body.dataType);
+  }
+
+  {
+    const before = posted.length;
+    click(qa('.plan-floor[data-floor="0"] .tilepart.on')[0]);
+    await settle();
+    check('toggling one off removes that index',
+          posted[before]?.body.edits[0].op === 'remove',
+          posted[before]?.body.edits[0].path);
+  }
+
+  // Back to a level: the level-only chrome has to come back with it.
+  picker.value = `level:${level.id}`;
+  picker.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle(20);
+  check('switching back to a level restores the room list', qa('.room-list-item').length > 0);
+  check('and restores Add room', q('#addRoomBtn').hidden === false);
 }
 
 // ── the project picker offers a path rather than an empty box ────────────
