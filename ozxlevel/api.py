@@ -128,8 +128,9 @@ class Api:
         return view
 
     def sessions(self) -> dict:
-        return {"documents": session.list_documents(),
-                "dir": str(session.session_dir() or "")}
+        root = self.dataset.root
+        return {"documents": session.list_documents(root),
+                "dir": str(session.session_root(root) or "")}
 
     def session_document(self, name: str) -> dict:
         """A played run, rendered through the ordinary level view.
@@ -140,7 +141,7 @@ class Api:
         read-only flag are added on top.
         """
         self.dataset.refresh()
-        doc = session.load(name)
+        doc = session.load(name, self.dataset.root)
         if doc is None:
             return {"name": name, "missing": True, "floors": []}
         view = self.dataset.level_view(doc.get("id") or name, document=doc,

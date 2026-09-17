@@ -144,13 +144,46 @@ def test_non_key_items_are_ignored():
 
 # ── the real dump, when there is one ─────────────────────────────────────
 
-REAL = session.list_documents()
+OZX_BASE = pathlib.Path.home() / "Codes/github.com/warriorguo/ozx_base"
+REAL = session.list_documents(OZX_BASE)
 real_only = pytest.mark.skipif(not REAL, reason="no session dump on disk")
 
 
 @pytest.fixture(scope="module")
 def dump():
-    return session.load(REAL[0]["name"])
+    return session.load(REAL[0]["name"], OZX_BASE)
+
+
+@real_only
+def test_captures_are_found_in_the_session_folder_not_persistent_data():
+    """OZX-1004 moved the dump next to the run that produced it.
+
+    `AiTelemetry.SessionRoot` is `<project>/SessionFolder`, one folder per run.
+    Globbing the pre-OZX-1004 persistentDataPath directory instead finds only
+    whatever stale capture is still lying there — which is exactly what this
+    loader did at first, showing one old run and hiding three current ones.
+    """
+    current = [d for d in REAL if not d["legacy"]]
+    assert current, "no capture found under <project>/SessionFolder"
+    assert all("/" in d["name"] for d in current), \
+        "a capture is <session>/level*.json, not a flat file"
+
+
+@real_only
+def test_more_than_one_capture_per_run_is_listed():
+    """`/api/control/reload` regenerates inside one run and
+    SessionLevelDumpNaming lands it on level_2.json. Listing one row per
+    session folder would hide every regenerate, so this globs files."""
+    for d in REAL:
+        assert d["name"].endswith(".json")
+    names = {d["name"] for d in REAL}
+    assert len(names) == len(REAL), "names must be unique keys"
+
+
+@real_only
+def test_a_capture_outside_the_root_is_refused():
+    assert session.load("../../../etc/passwd", OZX_BASE) is None
+    assert session.load("nope/level.json", OZX_BASE) is None
 
 
 @real_only
@@ -216,7 +249,4 @@ def test_a_generated_level_is_not_editable(dump):
     assert ds.level_view("chapter_1")["readOnly"] is False
 
 
-@real_only
-def test_a_document_outside_the_session_dir_is_refused():
-    assert session.load("../../../etc/passwd") is None
-    assert session.load("no_such_dump.json") is None
+

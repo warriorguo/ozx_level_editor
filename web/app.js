@@ -226,8 +226,15 @@ async function boot() {
   // recipe and not an authored level — a record of one run.
   const sessions = (await api('/api/sessions').catch(() => ({}))).documents || [];
   state.sessions = sessions;
+  // Label by run, and say which file when a run captured more than one —
+  // /api/control/reload regenerates within the same session.
   const sessionOpts = sessions
-    .map((sdoc) => `<option value="session:${esc(sdoc.name)}">${esc(sdoc.name.replace(/\.json$/, ''))}</option>`)
+    .map((sdoc) => {
+      const file = sdoc.name.split('/').pop().replace(/\.json$/, '');
+      const extra = file === 'level' ? '' : ` · ${file}`;
+      return `<option value="session:${esc(sdoc.name)}">${esc(sdoc.session)}${extra}${
+        sdoc.legacy ? ' (legacy)' : ''}</option>`;
+    })
     .join('');
   $('levelPicker').innerHTML =
     `<optgroup label="Levels (authored rooms)">${levelOpts}</optgroup>`

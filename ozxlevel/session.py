@@ -26,53 +26,79 @@ from __future__ import annotations
 import json
 import pathlib
 
-# Where the Unity player writes its session dumps. `Application.persistentDataPath`
-# on macOS is ~/Library/Application Support/<company>/<product>.
-SESSION_DIRS = (
-    pathlib.Path.home() / "Library/Application Support/DefaultCompany/new_ozx/sessiondata",
-)
+# OZX-1004 put the level next to the run that produced it: one session, one
+# directory. `AiTelemetry.SessionRoot` is `<project>/SessionFolder`, a sibling
+# of Assets/ so Unity never imports it, and each run is a
+# `<yyyy-MM-dd_HHmmss>/` folder holding session.json, the movement log, the
+# per-room event folders — and level.json.
+#
+# Before that move the dump was a flat file under the player's
+# persistentDataPath. That directory is still read, last and marked legacy, so
+# an older capture does not silently vanish; nothing new is written there.
+SESSION_SUBDIR = "SessionFolder"
+LEGACY_DIR = (pathlib.Path.home()
+              / "Library/Application Support/DefaultCompany/new_ozx/sessiondata")
 
 
-def session_dir() -> pathlib.Path | None:
-    for candidate in SESSION_DIRS:
-        if candidate.is_dir():
-            return candidate
-    return None
+def session_root(project_root) -> pathlib.Path | None:
+    """`<project>/SessionFolder`, if the mounted checkout has one."""
+    if not project_root:
+        return None
+    root = pathlib.Path(project_root) / SESSION_SUBDIR
+    return root if root.is_dir() else None
 
 
-def list_documents() -> list[dict]:
-    """Every dump on disk, newest first.
+def list_documents(project_root=None) -> list[dict]:
+    """Every captured level, newest first.
 
-    Cheap: filename and mtime only. The file is ~160KB, and a picker that
-    parsed all of them to build a list would pay that for nothing.
+    A session folder can hold more than one: `/api/control/reload` generates
+    again within the same run, and `SessionLevelDumpNaming.NextFreePath` lands
+    those on `level_2.json`, `level_3.json`. So this globs the files, not the
+    folders — listing one per session would hide every regenerate.
+
+    Cheap on purpose: name, session and mtime only. These are ~160KB each and
+    a picker that parsed them all to build a list would pay that for nothing.
     """
-    root = session_dir()
-    if root is None:
-        return []
     out = []
-    for path in root.glob("*.json"):
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        out.append({
-            "name": path.name,
-            # The stem is `<timestamp>_<planId>_m<seed>`; showing the raw name
-            # is honest and sorts correctly, so it is not parsed apart here.
-            "size": stat.st_size,
-            "mtime": int(stat.st_mtime),
-        })
+    root = session_root(project_root)
+    if root is not None:
+        for path in root.glob("*/level*.json"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            out.append({
+                # Relative to the session root, so it is both the display name
+                # and the key `load()` takes back.
+                "name": str(path.relative_to(root)),
+                "session": path.parent.name,
+                "legacy": False,
+                "size": stat.st_size,
+                "mtime": int(stat.st_mtime),
+            })
+    if LEGACY_DIR.is_dir():
+        for path in LEGACY_DIR.glob("*.json"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            out.append({"name": f"legacy/{path.name}", "session": "(pre-OZX-1004)",
+                        "legacy": True, "size": stat.st_size,
+                        "mtime": int(stat.st_mtime)})
     return sorted(out, key=lambda d: d["mtime"], reverse=True)
 
 
-def load(name: str) -> dict | None:
-    """Parse one dump by filename. Returns None for anything outside the dir."""
-    root = session_dir()
-    if root is None:
+def load(name: str, project_root=None) -> dict | None:
+    """Parse one capture by the `name` that `list_documents` gave it."""
+    if name.startswith("legacy/"):
+        base, rel = LEGACY_DIR, name[len("legacy/"):]
+    else:
+        base, rel = session_root(project_root), name
+    if base is None:
         return None
-    # Resolve and contain: `name` arrives from an HTTP query.
-    target = (root / name).resolve()
-    if not str(target).startswith(str(root.resolve())) or not target.is_file():
+    # Resolve and contain: `name` arrives from an HTTP path.
+    target = (base / rel).resolve()
+    if not str(target).startswith(str(base.resolve())) or not target.is_file():
         return None
     try:
         return json.loads(target.read_text(encoding="utf-8-sig"))
