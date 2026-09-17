@@ -12,10 +12,11 @@ import pathlib
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import Config, ResolvedConfig, discover_project, looks_like_project
 from .dataset import DIRECTION_IDS, DIRECTION_TWIN, Dataset, ExternallyModified
+from . import session
 from .validate import (validate_all, validate_encounter, validate_level,
                        validate_loot, validate_plan)
 
@@ -125,6 +126,13 @@ class Api:
         view["issues"] = validate_plan(self.dataset, plan_id)
         view["revision"] = self.dataset.revision
         return view
+
+    def sessions(self) -> dict:
+        return {"documents": session.list_documents(),
+                "dir": str(session.session_dir() or "")}
+
+    def session_document(self, name: str) -> dict:
+        return session.document_view(name)
 
     def validate(self, scope: str | None, target: str | None) -> dict:
         ds = self.dataset
@@ -325,6 +333,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.api.level(path[len("/api/level/"):]))
             if path.startswith("/api/plan/"):
                 return self._json(self.api.plan(path[len("/api/plan/"):]))
+            if path == "/api/sessions":
+                return self._json(self.api.sessions())
+            if path.startswith("/api/session/"):
+                return self._json(self.api.session_document(
+                    unquote(path[len("/api/session/"):])))
             if path == "/api/validate":
                 return self._json(self.api.validate(
                     (query.get("scope") or [None])[0],

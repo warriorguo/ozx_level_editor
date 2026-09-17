@@ -24,6 +24,9 @@ const state = {
   mode: 'level',
   plan: null,
   planId: null,
+  session: null,
+  sessionName: null,
+  sessions: [],
   // What a library click will act on. `kind` names the column; `pointer` is
   // set only when a specific slot was picked (e.g. one cargo box's loot
   // table) rather than the column as a whole.
@@ -219,9 +222,17 @@ async function boot() {
   const planOpts = plans
     .map((p) => `<option value="plan:${esc(p.id)}">${esc(p.id)} · ${p.floors} floor${p.floors === 1 ? '' : 's'}</option>`)
     .join('');
+  // A third kind: a level that was actually generated and played. Not a
+  // recipe and not an authored level — a record of one run.
+  const sessions = (await api('/api/sessions').catch(() => ({}))).documents || [];
+  state.sessions = sessions;
+  const sessionOpts = sessions
+    .map((sdoc) => `<option value="session:${esc(sdoc.name)}">${esc(sdoc.name.replace(/\.json$/, ''))}</option>`)
+    .join('');
   $('levelPicker').innerHTML =
     `<optgroup label="Levels (authored rooms)">${levelOpts}</optgroup>`
-    + (planOpts ? `<optgroup label="Plans (generated at runtime)">${planOpts}</optgroup>` : '');
+    + (planOpts ? `<optgroup label="Plans (generated at runtime)">${planOpts}</optgroup>` : '')
+    + (sessionOpts ? `<optgroup label="Sessions (a run that happened)">${sessionOpts}</optgroup>` : '');
   $('levelPicker').addEventListener('change', (e) => openDocument(e.target.value));
 
   await loadLevel(levels[0].id);
@@ -247,7 +258,9 @@ function resetSelection() {
 async function openDocument(value) {
   const [kind, ...rest] = String(value).split(':');
   const id = rest.join(':');
-  return kind === 'plan' ? loadPlan(id) : loadLevel(id);
+  if (kind === 'plan') return loadPlan(id);
+  if (kind === 'session') return loadSession(id);
+  return loadLevel(id);
 }
 
 async function loadLevel(levelId) {
@@ -268,6 +281,15 @@ async function loadPlan(planId) {
   resetSelection();
   $('levelPicker').value = `plan:${planId}`;
   renderPlanAll();
+}
+
+async function loadSession(name) {
+  state.mode = 'session';
+  state.sessionName = name;
+  state.session = await api(`/api/session/${encodeURIComponent(name)}`);
+  resetSelection();
+  $('levelPicker').value = `session:${name}`;
+  renderSessionAll();
 }
 
 async function reloadPlan() {
@@ -742,6 +764,7 @@ function selectionSummary(libraryKind) {
   // against `state.level`, so the line would name a real target in a
   // document the user is no longer looking at.
   if (state.mode === 'plan') return 'plans have no rooms to add to';
+  if (state.mode === 'session') return 'a session is read-only';
   const room = selectionRoom();
   if (!room) return '';
   const kind = LIBRARY_KIND[libraryKind] ?? libraryKind;
@@ -1062,6 +1085,10 @@ function renderCatalog(list, targetId, query, kind) {
         showToast('A plan has no rooms — open a level to add things to one');
         return;
       }
+      if (state.mode === 'session') {
+        showToast('A session is a record of a run, not an editable level');
+        return;
+      }
       if (kind === 'static') await addStatic(card.dataset.id);
       else if (kind === 'skill') await addSkill(card.dataset.id);
       else if (kind === 'loot') await addLoot(card.dataset.id);
@@ -1082,6 +1109,75 @@ function renderLevelIssueBadge() {
     : warnings ? `${warnings} warning${warnings === 1 ? '' : 's'}`
     : 'clean';
   $('levelIssues').innerHTML = `<span class="issue-badge ${cls}">${text}</span>`;
+}
+
+// ── sessions ─────────────────────────────────────────────────────────────
+// A generated level that was actually played. Read-only on purpose: there is
+// no source file to patch, and the run already happened.
+
+function renderSessionAll() {
+  const doc = state.session;
+  $('floorCrumb').textContent = `SEED ${doc.masterSeed}`;
+  $('floorTitle').textContent = `${doc.id} · ${doc.generation.source || 'generated'}`;
+  $('levelSub').textContent = 'SESSION';
+  $('roomCount').textContent =
+    `${doc.floors.reduce((n, f) => n + f.rooms.length, 0)} rooms`;
+  $('floorTabs').innerHTML = '';
+  $('addRoomBtn').hidden = true;
+  const stuck = doc.unreachable.length;
+  $('mapPlane').innerHTML =
+    `<div class="plan-nomap">${esc(doc.generation.planId || doc.id)} · seed ${doc.masterSeed}<br>
+     <span>${doc.generatedTableCount} synthesised loot tables</span><br>
+     <span class="${stuck ? 'stuck' : 'ok'}">${stuck
+        ? `${stuck} room${stuck === 1 ? '' : 's'} unreachable`
+        : 'every room reachable'}</span></div>`;
+  $('levelIssues').innerHTML = `<span class="issue-badge ${stuck ? 'error' : 'clean'}">${
+    stuck ? `${stuck} unreachable` : 'reachable'}</span>`;
+  renderSessionFloors();
+  for (const [cat, id, box, kind] of [
+    [state.boot.enemyCatalog, 'enemyLibrary', 'enemySearch', 'enemy'],
+    [state.boot.staticCatalog, 'staticLibrary', 'staticSearch', 'static'],
+    [state.boot.skillCatalog, 'skillLibrary', 'skillSearch', 'skill'],
+    [state.boot.lootCatalog, 'lootLibrary', 'lootSearch', 'loot'],
+  ]) renderCatalog(cat, id, $(box).value, kind);
+}
+
+function renderSessionFloors() {
+  $('roomsGrid').innerHTML = state.session.floors.map((f) => {
+    const rooms = f.rooms.map((r) => {
+      const tags = [];
+      if (r.roomId === f.startRoomId) tags.push('<span class="stag start">start</span>');
+      if (r.roomId === f.bossRoomId) tags.push('<span class="stag boss">boss</span>');
+      if (r.isFinalRoom) tags.push('<span class="stag boss">final</span>');
+      for (const k of r.dropsKeys) tags.push(`<span class="stag key">${esc(k)}</span>`);
+      for (const d of r.lockedDoors) {
+        tags.push(`<span class="stag lock">🔒 ${esc(d.keyId || '?')} → ${esc(d.toRoomId || '?')}</span>`);
+      }
+      // The whole point of the view: a room the player could not have got to.
+      return `<div class="sroom ${r.reachable ? '' : 'unreachable'}">
+        <span class="sroom-id">${esc(r.roomId)}</span>
+        <span class="sroom-meta">${esc(r.stageType || '?')} · ${r.enemyCount} enem${
+          r.enemyCount === 1 ? 'y' : 'ies'} in ${r.waveCount} wave${r.waveCount === 1 ? '' : 's'}${
+          r.staticCount ? ` · ${r.staticCount} static` : ''}</span>
+        <span class="sroom-tags">${tags.join('')}${
+          r.reachable ? '' : '<span class="stag stuck">unreachable</span>'}</span>
+      </div>`;
+    }).join('');
+    return `<div class="room-list-item session-floor">
+      <div class="content-column">
+        <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')} <span>${f.rooms.length}</span></div>
+        <div class="plan-facts">
+          <div><span>start</span><strong>${esc(f.startRoomId || '—')}</strong></div>
+          <div><span>boss</span><strong class="${f.bossRoomId ? '' : 'noboss'}">${esc(f.bossRoomId || 'none')}</strong></div>
+          <div><span>theme</span><strong>${esc(f.themeId || '—')}</strong></div>
+        </div>
+      </div>
+      <div class="content-column session-rooms">
+        <div class="content-head">Rooms as generated</div>
+        <div class="content-list">${rooms}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ── plans ────────────────────────────────────────────────────────────────
