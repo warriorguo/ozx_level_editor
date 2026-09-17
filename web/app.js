@@ -283,13 +283,23 @@ async function loadPlan(planId) {
   renderPlanAll();
 }
 
+/** A played run. Rendered by the ordinary level path, not a view of its own.
+ *
+ *  A generated level is the same LevelData shape, so it earns the same floor
+ *  map, room cards, enemy rows and loot columns. Only two things differ: the
+ *  reachability overlay, and that nothing may be edited — there is no source
+ *  file to patch.
+ */
 async function loadSession(name) {
   state.mode = 'session';
   state.sessionName = name;
-  state.session = await api(`/api/session/${encodeURIComponent(name)}`);
+  state.level = await api(`/api/session/${encodeURIComponent(name)}`);
+  state.levelId = state.level.id;
+  state.floorIndex = 0;
+  state.selectedRoomIndex = 0;
   resetSelection();
   $('levelPicker').value = `session:${name}`;
-  renderSessionAll();
+  renderAll();
 }
 
 async function reloadPlan() {
@@ -384,7 +394,11 @@ function lootOptions(selected) {
     opts.push(`<option value="${esc(t.id)}" ${t.id === selected ? 'selected' : ''}>${esc(t.id)}</option>`);
   }
   if (selected && !catalog.some((t) => t.id === selected)) {
-    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)} (missing)</option>`);
+    // On a generated level this is the normal case, not a fault: the
+    // assigner synthesised the table in memory and it exists nowhere on
+    // disk, so the GameData catalog cannot contain it.
+    const why = state.level && state.level.readOnly ? 'synthesised' : 'missing';
+    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)} (${why})</option>`);
   }
   return opts.join('');
 }
@@ -593,7 +607,10 @@ function renderRooms() {
     const lootEntries = [
       lootRow(room.roomClearLoot, 'room clear', `${room.pointer}/lootPlanId`, 'LevelData', state.levelId),
       ...room.cargoLoot.map((c) =>
-        lootRow(c.table, `${c.kind} #${c.placementIndex}`, c.pointer, 'LevelData', state.levelId)),
+        // Guaranteed cargo is pinned to the room, not to one box, so it has
+        // no placement index to name.
+        lootRow(c.table, c.placementIndex == null ? c.kind : `${c.kind} #${c.placementIndex}`,
+                c.pointer, 'LevelData', state.levelId)),
     ].filter(Boolean).join('')
       || '<div class="inline-empty">No loot on this room</div>';
 
@@ -627,6 +644,11 @@ function renderRooms() {
             <h4>${esc(room.roomId)}</h4>
           </div>
           <div class="room-actions">
+            ${(room.dropsKeys || []).map((k) =>
+              `<span class="chip key" title="This room yields ${esc(k)}">${esc(k)}</span>`).join('')}
+            ${room.reachable === false
+              ? '<span class="chip stuck" title="No route here from the start room without a key that is itself unreachable">unreachable</span>'
+              : ''}
             ${room.isFinalRoom ? '<span class="issue-badge clean">FINAL</span>' : ''}
           </div>
         </div>
@@ -1016,6 +1038,8 @@ function renderMap() {
     if (room.roomId === floor.layout.startRoomId) cls.push('is-start');
     if (room.isFinalRoom) cls.push('is-final');
     if (room.parentRoomId) cls.push('is-sub');
+    // On a generated level, a room the player could never have opened.
+    if (room.reachable === false) cls.push('unreachable');
 
     const units = room.enemies.reduce((sum, e) => sum + (e.count || 0), 0);
     const chips = [];
@@ -1101,6 +1125,12 @@ function renderCatalog(list, targetId, query, kind) {
 }
 
 function renderLevelIssueBadge() {
+  if (state.level && state.level.readOnly) {
+    const stuck = (state.level.unreachable || []).length;
+    $('levelIssues').innerHTML = `<span class="issue-badge ${stuck ? 'error' : 'clean'}">${
+      stuck ? `${stuck} unreachable` : 'all reachable'}</span>`;
+    return;
+  }
   const issues = state.level.issues || [];
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.filter((i) => i.severity === 'warning').length;
@@ -1109,75 +1139,6 @@ function renderLevelIssueBadge() {
     : warnings ? `${warnings} warning${warnings === 1 ? '' : 's'}`
     : 'clean';
   $('levelIssues').innerHTML = `<span class="issue-badge ${cls}">${text}</span>`;
-}
-
-// ── sessions ─────────────────────────────────────────────────────────────
-// A generated level that was actually played. Read-only on purpose: there is
-// no source file to patch, and the run already happened.
-
-function renderSessionAll() {
-  const doc = state.session;
-  $('floorCrumb').textContent = `SEED ${doc.masterSeed}`;
-  $('floorTitle').textContent = `${doc.id} · ${doc.generation.source || 'generated'}`;
-  $('levelSub').textContent = 'SESSION';
-  $('roomCount').textContent =
-    `${doc.floors.reduce((n, f) => n + f.rooms.length, 0)} rooms`;
-  $('floorTabs').innerHTML = '';
-  $('addRoomBtn').hidden = true;
-  const stuck = doc.unreachable.length;
-  $('mapPlane').innerHTML =
-    `<div class="plan-nomap">${esc(doc.generation.planId || doc.id)} · seed ${doc.masterSeed}<br>
-     <span>${doc.generatedTableCount} synthesised loot tables</span><br>
-     <span class="${stuck ? 'stuck' : 'ok'}">${stuck
-        ? `${stuck} room${stuck === 1 ? '' : 's'} unreachable`
-        : 'every room reachable'}</span></div>`;
-  $('levelIssues').innerHTML = `<span class="issue-badge ${stuck ? 'error' : 'clean'}">${
-    stuck ? `${stuck} unreachable` : 'reachable'}</span>`;
-  renderSessionFloors();
-  for (const [cat, id, box, kind] of [
-    [state.boot.enemyCatalog, 'enemyLibrary', 'enemySearch', 'enemy'],
-    [state.boot.staticCatalog, 'staticLibrary', 'staticSearch', 'static'],
-    [state.boot.skillCatalog, 'skillLibrary', 'skillSearch', 'skill'],
-    [state.boot.lootCatalog, 'lootLibrary', 'lootSearch', 'loot'],
-  ]) renderCatalog(cat, id, $(box).value, kind);
-}
-
-function renderSessionFloors() {
-  $('roomsGrid').innerHTML = state.session.floors.map((f) => {
-    const rooms = f.rooms.map((r) => {
-      const tags = [];
-      if (r.roomId === f.startRoomId) tags.push('<span class="stag start">start</span>');
-      if (r.roomId === f.bossRoomId) tags.push('<span class="stag boss">boss</span>');
-      if (r.isFinalRoom) tags.push('<span class="stag boss">final</span>');
-      for (const k of r.dropsKeys) tags.push(`<span class="stag key">${esc(k)}</span>`);
-      for (const d of r.lockedDoors) {
-        tags.push(`<span class="stag lock">🔒 ${esc(d.keyId || '?')} → ${esc(d.toRoomId || '?')}</span>`);
-      }
-      // The whole point of the view: a room the player could not have got to.
-      return `<div class="sroom ${r.reachable ? '' : 'unreachable'}">
-        <span class="sroom-id">${esc(r.roomId)}</span>
-        <span class="sroom-meta">${esc(r.stageType || '?')} · ${r.enemyCount} enem${
-          r.enemyCount === 1 ? 'y' : 'ies'} in ${r.waveCount} wave${r.waveCount === 1 ? '' : 's'}${
-          r.staticCount ? ` · ${r.staticCount} static` : ''}</span>
-        <span class="sroom-tags">${tags.join('')}${
-          r.reachable ? '' : '<span class="stag stuck">unreachable</span>'}</span>
-      </div>`;
-    }).join('');
-    return `<div class="room-list-item session-floor">
-      <div class="content-column">
-        <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')} <span>${f.rooms.length}</span></div>
-        <div class="plan-facts">
-          <div><span>start</span><strong>${esc(f.startRoomId || '—')}</strong></div>
-          <div><span>boss</span><strong class="${f.bossRoomId ? '' : 'noboss'}">${esc(f.bossRoomId || 'none')}</strong></div>
-          <div><span>theme</span><strong>${esc(f.themeId || '—')}</strong></div>
-        </div>
-      </div>
-      <div class="content-column session-rooms">
-        <div class="content-head">Rooms as generated</div>
-        <div class="content-list">${rooms}</div>
-      </div>
-    </div>`;
-  }).join('');
 }
 
 // ── plans ────────────────────────────────────────────────────────────────
@@ -1352,16 +1313,25 @@ const codeOf = (id) => {
 };
 
 function renderAll() {
-  $('addRoomBtn').hidden = false;
+  const readOnly = !!(state.level && state.level.readOnly);
+  $('addRoomBtn').hidden = readOnly;
+  document.querySelector('.room-canvas').classList.toggle('read-only', readOnly);
   const floor = currentFloor();
   const label = `FLOOR ${String(floor.index + 1).padStart(2, '0')}`;
-  $('floorCrumb').textContent = label;
+  $('floorCrumb').textContent = readOnly
+    ? `${label} · seed ${state.level.masterSeed}` : label;
   $('floorTitle').textContent = label;
   if (state.selectedRoomIndex >= floor.rooms.length) state.selectedRoomIndex = 0;
   renderFloorTabs();
   $('levelSub').textContent = label;
   renderMap();
   renderRooms();
+  if (readOnly) {
+    // Belt and braces: the CSS makes them unclickable, this makes them inert
+    // even to a keyboard or a script.
+    $('roomsGrid').querySelectorAll('input, select, button')
+      .forEach((el) => { el.disabled = true; });
+  }
   renderLevelIssueBadge();
   renderCatalog(state.boot.enemyCatalog, 'enemyLibrary', $('enemySearch').value, 'enemy');
   renderCatalog(state.boot.staticCatalog, 'staticLibrary', $('staticSearch').value, 'static');
@@ -1373,6 +1343,10 @@ function renderAll() {
 
 async function applyEdits(dataType, id, edits, message) {
   if (!edits.length) return;
+  if (state.level && state.level.readOnly) {
+    showToast('This is a record of a run — there is no source file to edit');
+    return;
+  }
   setBusy(true);
   try {
     await post('/api/edit', { dataType, id, edits });

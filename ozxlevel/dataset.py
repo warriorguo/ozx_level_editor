@@ -421,7 +421,8 @@ class Dataset:
         return {e.get("rarity"): e.get("textColor")
                 for e in doc.value.get("entries") or [] if e.get("rarity")}
 
-    def loot_table_view(self, table_id: str | None) -> dict | None:
+    def loot_table_view(self, table_id: str | None,
+                        tables: dict | None = None) -> dict | None:
         """Resolve a loot table into rows with their effective drop chance.
 
         The two weight semantics are genuinely different and the UI must not
@@ -434,11 +435,17 @@ class Dataset:
         """
         if not table_id:
             return None
-        doc = self.get("LootTableData", table_id)
-        if doc is None:
-            return {"id": table_id, "missing": True, "entries": [], "pickOne": False}
-        entries = doc.value.get("entries") or []
-        pick_one = bool(doc.value.get("pickOne"))
+        # A generated level references tables the assigner synthesised in
+        # memory; they exist nowhere on disk, so they have to win over the
+        # GameData lookup or every one of them reads as a missing table.
+        table = (tables or {}).get(table_id)
+        if table is None:
+            doc = self.get("LootTableData", table_id)
+            if doc is None:
+                return {"id": table_id, "missing": True, "entries": [], "pickOne": False}
+            table = doc.value
+        entries = table.get("entries") or []
+        pick_one = bool(table.get("pickOne"))
         total = sum(max(0, e.get("weight", 0)) for e in entries)
         rows = []
         for index, e in enumerate(entries):
@@ -491,7 +498,7 @@ class Dataset:
                  "sprite": self.sprites.sprite_for_prefab_key(f"prefab/{k}")}
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
-    def wave_drop(self, action: dict) -> dict:
+    def wave_drop(self, action: dict, tables: dict | None = None) -> dict:
         """What one launch wave drops when it dies — the Effective Drop view.
 
         `EventBindings.OnEnemyDied` resolves exactly one table, in this order
@@ -521,7 +528,7 @@ class Dataset:
         else:
             table_id, source = None, "fallback"
 
-        view = self.loot_table_view(table_id) if table_id else None
+        view = self.loot_table_view(table_id, tables) if table_id else None
         items = []
         if view and not view.get("missing"):
             items = [{"itemId": e["itemId"], "displayName": e["displayName"],
@@ -541,19 +548,29 @@ class Dataset:
             "hasSkill": any(i["itemType"] == "skill" for i in items),
         }
 
-    def encounter_enemies(self, encounter_id: str | None) -> list[dict]:
+    def encounter_enemies(self, encounter_id: str | None,
+                          inline: dict | None = None,
+                          tables: dict | None = None) -> list[dict]:
         """The Effective Enemy view for a room.
 
         Room enemies are not authored on the room — they come from the
         EncounterData its `encounterId` points at. Each `launch` step
         contributes its own count; a step with no `action` is a pure wait.
         """
-        if not encounter_id:
+        # A generated room carries its waves inline and leaves `encounterId`
+        # empty, so the inline copy is the encounter when there is one. Same
+        # steps, same shape — only the source differs.
+        if inline:
+            value = inline
+            encounter_id = encounter_id or inline.get("id") or "(inline)"
+        elif not encounter_id:
             return []
-        doc = self.get("EncounterData", encounter_id)
-        if doc is None:
-            return [{"id": encounter_id, "count": 0, "missing": True,
-                     "meta": "encounter not found"}]
+        else:
+            doc = self.get("EncounterData", encounter_id)
+            if doc is None:
+                return [{"id": encounter_id, "count": 0, "missing": True,
+                         "meta": "encounter not found"}]
+            value = doc.value
         out = []
         # A pure wait (a step with no action) blocks the playhead, so the
         # launches after it inherit that gate. Carrying the waits forward is
@@ -561,7 +578,7 @@ class Dataset:
         # the step's own condition alone would claim the former.
         pending_gates: list[str] = []
 
-        for index, step in enumerate(doc.value.get("steps") or []):
+        for index, step in enumerate(value.get("steps") or []):
             action = step.get("action")
             condition = step.get("condition")
 
@@ -595,7 +612,7 @@ class Dataset:
                 "missing": self.get("EnemyData", enemy_id) is None,
                 # When this wave appears, including the waits it sits behind.
                 "appearsWhen": " → ".join(gates),
-                "drop": self.wave_drop(action),
+                "drop": self.wave_drop(action, tables),
                 "conditionKind": (condition or {}).get("kind"),
                 "gatedByWait": len(gates) > 1 or (
                     bool(gates) and gates[0] != "immediately"),
@@ -674,13 +691,33 @@ class Dataset:
             "floors": floors,
         }
 
-    def level_view(self, level_id: str) -> dict:
-        """Everything the editor needs to render one level."""
-        doc = self.get("LevelData", level_id)
-        if doc is None:
-            raise KeyError(level_id)
+    def level_view(self, level_id: str, *, document: dict | None = None,
+                   file_name: str | None = None) -> dict:
+        """Everything the editor needs to render one level.
+
+        `document` renders a GENERATED level instead of one from GameData — a
+        session dump or the headless CLI's output. It is the same `LevelData`
+        shape, so it goes through this one view rather than a second, thinner
+        one: a generated level deserves the floor map, the enemy rows and the
+        loot columns exactly like an authored one.
+
+        Two fields differ and are handled where they are read, not here: the
+        generator leaves `encounterId` and `lootPlanId` empty and puts the
+        real content in `inlineEncounter` / `floorLootTableId`, and the loot
+        ids it uses are synthesised in memory and live in the document's own
+        `generatedLootTables`.
+        """
+        if document is None:
+            doc = self.get("LevelData", level_id)
+            if doc is None:
+                raise KeyError(level_id)
+            value, file_name, level_id = doc.value, doc.path.name, doc.id
+        else:
+            value = document
+            level_id = document.get("id") or level_id
+        tables = (document or {}).get("generatedLootTables") or {}
         floors = []
-        for f_index, floor in enumerate(doc.value.get("floors") or []):
+        for f_index, floor in enumerate(value.get("floors") or []):
             rooms = []
             for r_index, room in enumerate(floor.get("rooms") or []):
                 base = f"/floors/{f_index}/rooms/{r_index}"
@@ -739,15 +776,29 @@ class Dataset:
                          "pointer": f"{base}/decorations/{i}"}
                         for i, d in enumerate(room.get("decorations") or [])
                     ],
-                    "enemies": self.encounter_enemies(room.get("encounterId")),
-                    "roomClearLoot": self.loot_table_view(room.get("lootPlanId")),
+                    # `inlineEncounter` / `floorLootTableId` are the
+                    # generator's channels; on an authored room both are
+                    # absent and these fall back to the authored ids.
+                    "enemies": self.encounter_enemies(
+                        room.get("encounterId") or None,
+                        inline=room.get("inlineEncounter"), tables=tables),
+                    "roomClearLoot": self.loot_table_view(
+                        room.get("lootPlanId") or room.get("floorLootTableId"),
+                        tables),
                     "cargoLoot": [
                         {"placementIndex": i,
                          "kind": p.get("kind"),
                          "pointer": f"{base}/staticPlacements/{i}/lootTableId",
-                         "table": self.loot_table_view(p.get("lootTableId"))}
+                         "table": self.loot_table_view(p.get("lootTableId"), tables)}
                         for i, p in enumerate(room.get("staticPlacements") or [])
                         if p.get("lootTableId")
+                    ] + [
+                        # Guaranteed cargo is a generated-only channel: the
+                        # assigner pins these tables onto the room's boxes.
+                        {"placementIndex": None, "kind": "guaranteed",
+                         "pointer": None,
+                         "table": self.loot_table_view(t, tables)}
+                        for t in room.get("guaranteedCargoTableIds") or []
                     ],
                 })
             layout = self.floor_layout(floor)
@@ -769,10 +820,15 @@ class Dataset:
                 "rooms": rooms,
             })
         return {
-            "id": doc.id,
-            "displayName": doc.value.get("displayName") or doc.id,
-            "file": doc.path.name,
+            "id": level_id,
+            "displayName": value.get("displayName") or level_id,
+            "file": file_name,
             "floors": floors,
+            # Present only for a generated level; the client uses it to drop
+            # every edit control, because there is no source file to patch.
+            "generation": value.get("generation"),
+            "masterSeed": value.get("masterSeed"),
+            "readOnly": document is not None,
         }
 
 

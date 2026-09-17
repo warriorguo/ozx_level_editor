@@ -178,13 +178,42 @@ def test_the_real_dump_carries_its_keys_in_the_death_channel(dump):
 
 
 @real_only
-def test_the_view_is_read_only(dump):
-    """A run that already happened has no source file to patch, so nothing in
-    the projection may offer a pointer to write through."""
-    view = session.document_view(REAL[0]["name"])
-    for floor in view["floors"]:
-        for r in floor["rooms"]:
-            assert "pointer" not in r
+def test_a_generated_level_renders_through_the_ordinary_level_view(dump):
+    """One view, not two.
+
+    A generated level is the same LevelData shape, so it earns the floor map,
+    the enemy rows and the loot columns like an authored one. A second,
+    thinner projection was the first thing built here and it was wrong — it
+    silently dropped the map and the loot.
+    """
+    from ozxlevel.dataset import Dataset
+
+    ds = Dataset(pathlib.Path.home() / "Codes/github.com/warriorguo/ozx_base")
+    view = ds.level_view(dump["id"], document=dump, file_name="dump.json")
+    assert view["readOnly"] is True
+    assert view["masterSeed"] == dump["masterSeed"]
+
+    rooms = [r for f in view["floors"] for r in f["rooms"]]
+    # The generator leaves encounterId empty and puts the waves inline, so a
+    # view that only read encounterId would call every room quiet.
+    assert any(r["enemies"] for r in rooms), "no room resolved any enemies"
+    # Loot ids are synthesised in memory; resolving them against GameData
+    # alone reports every one as a missing table.
+    resolved = [r for r in rooms
+                if r["roomClearLoot"] and not r["roomClearLoot"]["missing"]]
+    assert resolved, "no synthesised loot table resolved"
+    # And the layout has to survive, or there is no floor map.
+    assert any(r["hasLayout"] for r in rooms)
+
+
+@real_only
+def test_a_generated_level_is_not_editable(dump):
+    """A run that already happened has no source file to patch."""
+    from ozxlevel.dataset import Dataset
+
+    ds = Dataset(pathlib.Path.home() / "Codes/github.com/warriorguo/ozx_base")
+    assert ds.level_view(dump["id"], document=dump)["readOnly"] is True
+    assert ds.level_view("chapter_1")["readOnly"] is False
 
 
 @real_only

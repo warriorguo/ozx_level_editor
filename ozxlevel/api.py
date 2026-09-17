@@ -132,7 +132,34 @@ class Api:
                 "dir": str(session.session_dir() or "")}
 
     def session_document(self, name: str) -> dict:
-        return session.document_view(name)
+        """A played run, rendered through the ordinary level view.
+
+        Deliberately not a view of its own: a generated level is the same
+        LevelData shape, so it gets the floor map, the enemy rows and the loot
+        columns like any other. Only the reachability overlay and the
+        read-only flag are added on top.
+        """
+        self.dataset.refresh()
+        doc = session.load(name)
+        if doc is None:
+            return {"name": name, "missing": True, "floors": []}
+        view = self.dataset.level_view(doc.get("id") or name, document=doc,
+                                       file_name=name)
+        reach = {r["roomId"]: r for r in session.reachability(doc)}
+        for floor in view["floors"]:
+            for room in floor["rooms"]:
+                info = reach.get(room["roomId"], {})
+                room["reachable"] = info.get("reachable", False)
+                room["dropsKeys"] = info.get("dropsKeys", [])
+        view["name"] = name
+        view["missing"] = False
+        view["unreachable"] = [r["roomId"] for f in view["floors"]
+                               for r in f["rooms"] if not r["reachable"]]
+        view["keyRooms"] = {rid: sorted(keys)
+                            for rid, keys in session.key_sources(doc).items()}
+        view["issues"] = []
+        view["revision"] = self.dataset.revision
+        return view
 
     def validate(self, scope: str | None, target: str | None) -> dict:
         ds = self.dataset

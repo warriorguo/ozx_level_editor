@@ -952,40 +952,19 @@ button { color: inherit; }
 .plan-nomap span.stuck { color: var(--danger); }
 .plan-nomap span.ok { color: var(--acid); }
 
-/* ── a session: the level a run actually generated ───────────────────────
-   Read-only. The one thing it must make obvious is a room the player could
-   not have reached, because that is what people open it to find. */
-.session-floor { grid-template-columns: minmax(200px,.5fr) minmax(0,2fr); }
-.session-rooms { min-width: 0; }
-.session-rooms .content-list { gap: 4px; }
-.sroom {
-  display: grid;
-  grid-template-columns: minmax(120px,.8fr) minmax(0,1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 7px;
-  border: 1px solid rgba(86,97,89,.55);
-  border-radius: 5px;
-  background: rgba(8,12,10,.34);
-}
-.sroom-id { font-size: 10px; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.sroom-meta { color: var(--dim); font-size: 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.sroom-tags { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.sroom.unreachable { border-color: var(--danger); background: rgba(255,90,120,.07); }
-.sroom.unreachable .sroom-id { color: var(--danger); }
-.stag {
-  padding: 1px 5px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: var(--muted);
-  font-size: 8px;
-  white-space: nowrap;
-}
-.stag.start { color: #11140f; border-color: var(--acid); background: var(--acid); }
-.stag.boss  { color: var(--danger); border-color: rgba(255,90,120,.5); }
-.stag.key   { color: #11140f; border-color: var(--amber); background: var(--amber); }
-.stag.lock  { color: var(--cyan); border-color: rgba(116,216,211,.45); }
-.stag.stuck { color: #fff; border-color: var(--danger); background: var(--danger); }
+/* ── a played run, shown read-only ───────────────────────────────────────
+   Same room cards as an authored level — a generated level earns the same
+   view. These only take the edit affordances away and mark what the player
+   could not reach. */
+.room-canvas.read-only .quantity,
+.room-canvas.read-only .inline-select,
+.room-canvas.read-only .remove-decoration,
+.room-canvas.read-only .decoration-add { opacity: .4; pointer-events: none; }
+.room-canvas.read-only .content-entry,
+.room-canvas.read-only .loot-table { cursor: default; }
+.chip.key { color: #11140f; background: var(--amber); }
+.chip.stuck { color: #fff; background: var(--danger); }
+.map-room.unreachable { outline: 2px solid var(--danger); outline-offset: 1px; }
 
 /* ── what a wave drops ───────────────────────────────────────────────────
    A second row on the enemy entry. Enemy drops are authored on the encounter,
