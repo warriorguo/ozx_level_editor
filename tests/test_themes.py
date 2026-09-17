@@ -41,9 +41,10 @@ def floor(ds):
     that edits one must put it back.
     """
     f = ds.get("LevelBasePlanData", "chapter_3").value["floors"][0]
-    before = dict(f["appearance"]), f["themeId"]
+    before = dict(f["appearance"]), f["themeId"], f.get("transitionKeyId")
     yield f
     f["appearance"], f["themeId"] = dict(before[0]), before[1]
+    f["transitionKeyId"] = before[2]
 
 
 # ── resolving the theme ──────────────────────────────────────────────────
@@ -238,3 +239,51 @@ def test_editing_tile_groups_leaves_the_file_byte_identical(ds, tmp_path):
     index = len(jsonspan.parse(added).value["floors"][0]["appearance"]["tilePartConfigs"]) - 1
     back = jsonspan.patch(doc2, [{"op": "remove", "path": f"{ptr}/{index}"}])
     assert back.encode("utf-8") == before
+
+
+# ── the floor's cross-floor key (OLE-4 / OZX-996) ────────────────────────
+
+
+def test_every_shipped_transition_key_resolves(ds):
+    """OZX-996 made transitionKeyId the single source for which key drops.
+
+    It is synthesised into `loot_key_f{n}` at generation, so a name that
+    resolves to nothing yields a key room dropping a non-existent item and an
+    unopenable floor.
+    """
+    for plan_id in ds.ids_of("LevelBasePlanData"):
+        for fi, f in enumerate(ds.get("LevelBasePlanData", plan_id).value["floors"]):
+            key = f.get("transitionKeyId")
+            if key:
+                item = ds.get("ItemData", key)
+                assert item is not None, (plan_id, fi, key)
+                assert item.value.get("type") == "key", (plan_id, fi, key)
+
+
+def key_codes(ds):
+    return [f'{i["severity"]}/{i["code"]}' for i in validate_plan(ds, "chapter_3")
+            if "transitionKeyId" in (i.get("pointer") or "")]
+
+
+def test_an_unknown_transition_key_is_an_error(ds, floor):
+    floor["transitionKeyId"] = "no_such_key"
+    assert key_codes(ds) == ["error/DATA_REFERENCE_MISSING"]
+
+
+def test_a_non_key_item_warns(ds, floor):
+    """Legal to author, but only a key item opens a locked door."""
+    floor["transitionKeyId"] = "item_exp_small"
+    assert key_codes(ds) == ["warning/TYPE_VALUE_UNKNOWN"]
+
+
+def test_any_key_id_is_accepted_not_just_key_silver(ds, floor):
+    """OZX-996 lifted the de-facto key_silver restriction; chapter_3 floor 1
+    already ships key_gold. Nothing here may re-impose it."""
+    floor["transitionKeyId"] = "key_gold"
+    assert key_codes(ds) == []
+
+
+def test_a_floor_without_a_transition_key_is_fine(ds, floor):
+    """The last floor of a plan has nowhere to transition to."""
+    floor["transitionKeyId"] = None
+    assert key_codes(ds) == []

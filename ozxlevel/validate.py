@@ -341,6 +341,30 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
         # (OZX-994), so there is no rule for it — the room that would have been
         # the boss room becomes an ordinary one.
 
+        # The floor's cross-floor key. OZX-996 made this the single source for
+        # which key the room channel drops — it is synthesised into
+        # `loot_key_f{n}` at generation — so a name that resolves to nothing
+        # now produces a key-room whose table drops a non-existent item, and
+        # the floor is unopenable. Any key id is legal (it no longer has to be
+        # key_silver); it does have to exist.
+        key_id = floor.get("transitionKeyId")
+        if key_id:
+            key_item = ds.get("ItemData", key_id)
+            if key_item is None:
+                issues.append(_issue(
+                    "error", "DATA_REFERENCE_MISSING",
+                    f"floor {fi}: transitionKeyId '{key_id}' is not an ItemData; "
+                    f"the synthesised key table would drop nothing and the floor "
+                    f"could not be unlocked",
+                    entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
+            elif key_item.value.get("type") != "key":
+                issues.append(_issue(
+                    "warning", "TYPE_VALUE_UNKNOWN",
+                    f"floor {fi}: transitionKeyId '{key_id}' is type "
+                    f"'{key_item.value.get('type')}', not 'key'; only a key item "
+                    f"is consumed by a locked door",
+                    entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
+
         issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
