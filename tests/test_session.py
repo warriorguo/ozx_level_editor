@@ -90,6 +90,48 @@ def test_a_key_behind_its_own_lock_is_a_deadlock():
     assert reach == {"a": True, "b": False, "c": False}
 
 
+def test_stair_links_carry_the_cross_floor_edge():
+    """Floors are not joined by doors.
+
+    The generator moved to `stairLinks` — {roomIdA, roomIdB, targetFloor},
+    each direction its own entry — and there are no cross-floor doors at all.
+    A door-only walk never leaves floor 0 and calls every later floor
+    unreachable while the game plays through fine. That was live: two captures
+    reported 24 and 26 stranded rooms that were nothing of the sort.
+    """
+    d = doc([
+        {"startRoomId": "a", "rooms": [room("a")],
+         "stairLinks": [{"roomIdA": "a", "roomIdB": "b", "targetFloor": 1}]},
+        {"startRoomId": "b", "rooms": [room("b", [door("c")]), room("c")]},
+    ])
+    reach = {r["roomId"]: r["reachable"] for r in session.reachability(d)}
+    assert reach == {"a": True, "b": True, "c": True}
+
+
+def test_a_stair_is_walked_into_not_unlocked():
+    """The key gates the ROOM the stair sits in, as an ordinary locked door.
+    The stair edge itself carries no lock, so it must not invent one."""
+    d = doc([
+        {"startRoomId": "a",
+         "rooms": [room("a", [door("s", locked=True, key="key_silver")]), room("s")],
+         "stairLinks": [{"roomIdA": "s", "roomIdB": "b", "targetFloor": 1}]},
+        {"startRoomId": "b", "rooms": [room("b")]},
+    ])
+    reach = {r["roomId"]: r["reachable"] for r in session.reachability(d)}
+    # Locked out of the stair room, so the floor beyond it is out too.
+    assert reach == {"a": True, "s": False, "b": False}
+
+
+def test_the_older_door_based_crossing_still_works():
+    """Captures from before the change join floors with a plain door and
+    leave stairLinks null. Both shapes have to walk."""
+    d = doc([
+        {"startRoomId": "a", "rooms": [room("a", [door("b")])], "stairLinks": None},
+        {"startRoomId": "b", "rooms": [room("b")], "stairLinks": None},
+    ])
+    assert all(r["reachable"] for r in session.reachability(d))
+
+
 def test_the_walk_crosses_floors():
     """Locks in this data gate the floor transition, not movement within one.
 

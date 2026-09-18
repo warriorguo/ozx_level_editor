@@ -124,13 +124,29 @@ def reachability(document: dict) -> list[dict]:
     fully reachable and find nothing.
     """
     rooms = {}
-    for fi, floor in enumerate(document.get("floors") or []):
+    floors = document.get("floors") or []
+    for fi, floor in enumerate(floors):
         for room in floor.get("rooms") or []:
             rid = room.get("roomId")
             if rid:
                 rooms[rid] = (fi, room)
 
-    floors = document.get("floors") or []
+    # Floors are not joined by doors. `stairLinks` carries the cross-floor
+    # edges — `{caveId, roomIdA, roomIdB, targetFloor}`, each direction
+    # declared as its own entry — and a walk that followed only `doors` never
+    # leaves floor 0, marking every later floor unreachable while the game
+    # plays through fine.
+    #
+    # Older captures did it the other way round (a door straight to the next
+    # floor's start, stairLinks null), so both have to work: the door walk
+    # below still crosses those, and these edges are additional.
+    stairs: dict[str, list[str]] = {}
+    for floor in floors:
+        for link in floor.get("stairLinks") or []:
+            a, b = link.get("roomIdA"), link.get("roomIdB")
+            if a and b:
+                stairs.setdefault(a, []).append(b)
+
     start = floors[0].get("startRoomId") if floors else None
     drops = key_sources(document)
 
@@ -165,6 +181,9 @@ def reachability(document: dict) -> list[dict]:
                     blocked.append((current, nxt, key_id))
                     continue
                 queue.append(nxt)
+            # A stair is walked into, not unlocked: the key gates the room the
+            # stair sits in, which is an ordinary locked door handled above.
+            queue.extend(stairs.get(current, ()))
         if seen_this_pass - reached:
             progressed = True
         reached |= seen_this_pass
