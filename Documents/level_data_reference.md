@@ -2,6 +2,7 @@
 
 - 面向读者：OZX Level Studio 的实现者
 - 数据与代码快照：`ozx_base` `main@d867b644`，2026-09-11
+- 增量复核：§5.4 / §5.5 与相关条目核对于 `main@bc3f3f24`（2026-09-24），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047；其余仍是 `d867b644` 快照的实测数字。
 - 配套文档：`ozx_level_data_editor_td.md`（工具的技术设计）、`level_referenced_data.md`（level 指向的 encounter / enemy / loot / item / tilemap 五个数据族）。本文只描述**磁盘上的数据长什么样、运行时怎么读它**，不重复工具架构。
 
 编辑器要「能干活」，最低限度必须吃透三件事：字段语义（§3-§5）、plan 编译成 level 的过程（§6）、以及运行时已经在强制的校验（§7）。§8 是据此得出的实现清单。
@@ -278,7 +279,7 @@ LevelBasePlanData
 | `probabilistic[]` | `itemId`, `weight`(0=1.0), `minCount`/`maxCount`(0=1), `floorCap`(0=无限) | 采样成每房的 `inlineLootPlan`，并合成楼层表 |
 | `guaranteed[]` | `itemId`, `count`, 三选一绑定：`boundEnemyId` / `boundRoomId` / ~~`boundWaveLastEnemy`~~ | **必须且只能设一个绑定**；`boundWaveLastEnemy` 现在无条件抛错（named wave 已移除） |
 | `categoryCaps[]` | `category`（taxonomy 节点）, `maxPerFloor` | 每层每类上限 |
-| `stageWeights[]` | `stageType`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法 |
+| `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
 | `stageMustDrop[]` | `stageType`, `drops[{itemId,count}]` | 该 stage 的**每个房间**各生成一个装着该 item 的 cargo |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
@@ -317,6 +318,38 @@ LevelBasePlanData
 2. `minionId` 不是同层 `enemyPool` 成员 → 绕过池成员身份的三重保证（一次 run 见得到、role 在本层每张 tilemap 上都有生成格、带 elite 块），半路 `EnemyService.Spawn` 抛错。
 3. 不能产自己 → 无界增长，`maxAlive` 门的是整条 step，管不到通道里面。
 4. 不能产另一台 spawner → 链式生产没有人口上界。
+
+### 5.5 stageWeights 的 category 维度（OZX-1044，核对于 `ozx_base@c87c6236`）
+
+`stageWeights[]` 从 `{ stageType, weight }` 变成 `{ stageType, category?, weight }`。`category` 是 `item_taxonomy.json` 的节点名，**按子树匹配**（写 `equipment` 覆盖 `weapon` / `core` / `drive`）；留空 = 该 stage 的兜底倍率，也就是这个字段出现之前每一条的含义，向后兼容。
+
+**这才是这个字段存在的理由**：光有 stageWeights 只能说「peak 掉得多」，说不出「peak 掉更多**装备**」。stage × 品类这个叉积是四个 stage 旋钮里唯一没人能表达的——`categoryCaps` 有品类没 stage 而且是上限，`room_drop_caps` 两者都有但只管 `equipment` 且是降级不是导向，`stageMustDrop` 一次只钉一个具名道具。
+
+```jsonc
+{ "stageType": "peak", "weight": 1.4 },                          // 兜底：什么都 ×1.4
+{ "stageType": "peak", "category": "equipment", "weight": 1.8 }  // 装备另外 ×1.8
+```
+
+**对预览的影响**：`WireFloorLootToSpawnEntries` 在 `stageWeights` 非空时**本来就为每个 stage 合成一张表** `loot_floor_f{n}_{stage}`（OZX-477 起），变的是 `RegisterScaledTable` 从「整表乘同一个标量」改成「逐条目按 taxonomy 品类查倍率」。**所以同一张合成表内，不同条目的 weight 不再等比**——凡是按「整表等比缩放」做过反推的地方，现在都对不上。
+
+解析顺序（`StageWeightResolver.Resolve`，逐个道具）：
+
+1. 该 stage 下、**道具自己所属品类**的条目；
+2. 逐级向上，每个祖先品类各试一次（`core_cinder_reactor` → `core` → `equipment`）；
+3. 该 stage 的**无品类**条目；
+4. 都没有 → 1.0。
+
+最具体的优先。这条顺序是会静默出错的地方：挑错条目照样产出一个数字，表看起来正常，只有掉落手感不对。
+
+**三条 fail-fast**（`StageWeightResolver.Build`，编辑器前移为 Error）：
+
+- 负权重；
+- `category` 不是 taxonomy 节点——拼错的名字匹配不到任何道具，这个 stage 会无声地退回兜底权重；
+- 同一个 `(stage, category)` 写了两条——输家永远不会生效，谁赢取决于书写顺序。
+
+**注意 `effectiveStageWeight`**：品类一旦参与，一个 stage 就没有单一数字了。HUD 报的是该 stage 的**无品类兜底值**（`StageWeightResolver.StageFallback`），也就是「没被特别圈定的东西的倍率」——不要把它当成整个 stage 的倍率显示。
+
+**「没写 category 的 plan 永远不查 taxonomy」是刻意的闸门**：这样一份早于本字段的 plan 不会因为 taxonomy 没收录某个道具而突然开始抛错。
 
 ---
 

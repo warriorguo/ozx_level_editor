@@ -453,6 +453,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                                      entity=plan_id,
                                      pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
         issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
+        issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
         boss = floor.get("bossId")
         if boss and ds.get("EnemyData", boss) is None:
             issues.append(_issue("error", "DATA_REFERENCE_MISSING",
@@ -487,6 +488,100 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                     entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
 
         issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+    return issues
+
+
+def _stage_weight_issues(ds: Dataset, plan_id: str, fi: int,
+                         fptr: str, floor: dict) -> list[dict]:
+    """`floorLootPlan.stageWeights` — the per-stage loot multipliers.
+
+    OZX-1044 added an optional `category` (a node of `item_taxonomy.json`,
+    matched down its subtree), which is what lets a chapter say "peak drops
+    1.4× of everything and 1.8× of gear". Before it, `stageWeights` could only
+    say "peak drops more" — `RegisterScaledTable` multiplied every entry in
+    the synthesised table by one scalar. The multiplier is now resolved per
+    ENTRY, so weights inside one synthesised table are no longer in proportion
+    to each other.
+
+    `StageWeightResolver.Build` refuses three shapes at synthesis, and each is
+    the kind that otherwise leaves a plan reading as tuned and behaving as
+    untuned:
+
+    - a negative weight;
+    - a category that is not a taxonomy node — a typo matches no item and
+      leaves the stage on its fallback weight without a word;
+    - two entries for one `(stage, category)` pair, where the loser is simply
+      unreachable and which of them wins would depend on authoring order.
+
+    Resolution order, which anything recomputing these has to match: the
+    item's own category, then each ancestor in turn, then the stage's
+    category-free entry, then 1.0.
+    """
+    plan = floor.get("floorLootPlan") or {}
+    entries = plan.get("stageWeights") or []
+    if not entries:
+        return []
+
+    wptr = f"{fptr}/floorLootPlan/stageWeights"
+    known = ds.taxonomy()
+    issues: list[dict] = []
+    seen: set[tuple] = set()
+
+    for wi, entry in enumerate(entries):
+        eptr = f"{wptr}/{wi}"
+        stage = entry.get("stageType")
+        if not stage:
+            # The resolver skips these outright, so they are dead lines rather
+            # than a failure — but a weight nobody applies is worth saying.
+            issues.append(_issue(
+                "warning", "LEVEL_STAGE_WEIGHT_UNSCOPED",
+                f"floor {fi}: stageWeights[{wi}] has no stageType and is skipped",
+                entity=plan_id, pointer=eptr))
+            continue
+        if stage not in STAGE_TYPES:
+            issues.append(_issue(
+                "warning", "TYPE_VALUE_UNKNOWN",
+                f"floor {fi}: stageWeights[{wi}] names stage '{stage}', which is "
+                f"not a stage type; no room will ever match it",
+                entity=plan_id, pointer=f"{eptr}/stageType"))
+
+        weight = entry.get("weight", 0)
+        if weight < 0:
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_WEIGHT_NEGATIVE",
+                f"floor {fi}: stageWeights[{wi}] weight is {weight}; it must be "
+                f">= 0 (0 means this stage drops nothing)",
+                entity=plan_id, pointer=f"{eptr}/weight"))
+
+        category = entry.get("category") or None
+        if category:
+            if not known["found"]:
+                issues.append(_issue(
+                    "warning", "LEVEL_STAGE_WEIGHT_UNCHECKED",
+                    f"floor {fi}: stageWeights[{wi}] scopes its multiplier to "
+                    f"category '{category}', but item_taxonomy.json is not loaded, "
+                    f"so the name is unverified",
+                    entity=plan_id, pointer=f"{eptr}/category"))
+            elif category not in known["parentOf"]:
+                issues.append(_issue(
+                    "error", "LEVEL_STAGE_WEIGHT_CATEGORY_UNKNOWN",
+                    f"floor {fi}: stageWeights[{wi}] names category '{category}', "
+                    f"which is not a node in item_taxonomy.json. A misspelled "
+                    f"category matches no item and leaves the stage on its fallback "
+                    f"weight without a word",
+                    entity=plan_id, pointer=f"{eptr}/category"))
+
+        key = (stage, category or "")
+        if key in seen:
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_WEIGHT_DUPLICATE",
+                f"floor {fi}: stageWeights has two entries for stage '{stage}'"
+                + (f" and category '{category}'" if category
+                   else " with no category")
+                + "; one of them would never apply, and which one would depend on "
+                  "authoring order",
+                entity=plan_id, pointer=eptr))
+        seen.add(key)
     return issues
 
 

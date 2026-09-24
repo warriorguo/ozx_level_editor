@@ -1274,6 +1274,29 @@ function renderPlanFloors() {
         }).join('')
       : '<div class="inline-empty">No enemy pool</div>';
 
+    // OZX-1044: a stage weight may scope itself to a taxonomy category, so
+    // this is a sparse (stage × category) table, not one row per stage. The
+    // category-free row is the stage's fallback — what anything the designer
+    // did not scope gets — so it is labelled as such rather than left blank,
+    // which would read as a missing value.
+    const weights = f.stageWeights.length
+      ? f.stageWeights.map((w) => `<div class="content-entry weight-entry${
+            w.unknownCategory ? ' missing' : ''}">
+          <span class="content-glyph">${esc((w.stageType || '?').slice(0, 2).toUpperCase())}</span>
+          <span><strong>${esc(w.stageType || '?')}</strong><small>${
+            w.category
+              ? `${esc(w.category)}${w.unknownCategory ? ' — not a taxonomy node' : ''}`
+              : 'everything else on this stage'}</small></span>
+          <span class="weight-value${w.weight === 0 ? ' zero' : ''}"
+                title="${w.weight === 0 ? 'this stage drops nothing of that kind' : 'multiplier'}">×${w.weight ?? 1}</span>
+        </div>`).join('')
+      : '<div class="inline-empty">No stage weights — every stage is ×1</div>';
+
+    const scoped = f.stageWeights.filter((w) => w.category).length;
+    const weightNote = scoped
+      ? `${scoped} scoped by category · most specific wins, then the stage fallback, then ×1`
+      : 'no category scoping — each row scales everything that stage drops';
+
     // Every part the theme owns, on or off. A chip UI rather than a text
     // field because the legal values are a closed set the theme defines, and
     // typing a name that does not resolve throws at room load.
@@ -1316,6 +1339,11 @@ function renderPlanFloors() {
       <div class="content-column">
         <div class="content-head">Enemy pool <span>${f.enemyPool.length}</span></div>
         <div class="content-list">${pool}</div>
+      </div>
+      <div class="content-column">
+        <div class="content-head">Stage weights <span>${f.stageWeights.length || '—'}</span></div>
+        <div class="content-list">${weights}</div>
+        ${f.stageWeights.length ? `<div class="derived-note">${weightNote}</div>` : ''}
       </div>
       <div class="content-column">
         <div class="content-head">Tile groups <span>${chosen.length || 'all'}</span></div>

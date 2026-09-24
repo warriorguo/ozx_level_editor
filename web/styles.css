@@ -1047,6 +1047,19 @@ button { color: inherit; }
   color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
 }
 
+/* OZX-1044: stage weights are a sparse (stage × category) table, so the
+   multiplier needs a column of its own — reading it out of the same line as
+   the category is how ×0 gets missed. */
+.weight-value {
+  flex: none;
+  font-size: 10px;
+  color: var(--acid);
+  text-align: right;
+  min-width: 34px;
+}
+/* 0 is not a small number here; it is "this stage drops none of that kind". */
+.weight-value.zero { color: var(--muted); }
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

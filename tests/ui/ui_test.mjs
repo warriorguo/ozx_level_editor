@@ -384,6 +384,27 @@ if (plan) {
           qa('.plan-floor .pool-entry').length > lines.length);
   }
 
+  // ── stage weights are a table, not a list ──────────────────────────────
+  // OZX-1044: an entry may scope itself to a taxonomy category, so a stage
+  // has several rows and the multiplier needs its own column — reading ×0 out
+  // of the same line as the category is how "this stage drops nothing" gets
+  // missed.
+  {
+    const authored = plan.floors.flatMap((f) => f.stageWeights);
+    const rows = qa('.plan-floor .weight-entry');
+    check('a floor lists the stage weights it authored',
+          rows.length === authored.length, `${rows.length} of ${authored.length}`);
+    check('every row shows its multiplier',
+          rows.every((r) => /^×/.test(r.querySelector('.weight-value')?.textContent || '')),
+          rows[0]?.querySelector('.weight-value')?.textContent);
+    check('a zero is muted rather than read as a small number',
+          qa('.plan-floor .weight-value.zero').length ===
+            authored.filter((w) => w.weight === 0).length,
+          `${qa('.plan-floor .weight-value.zero').length} zeros`);
+    check('a category-free row says it is the fallback',
+          rows.some((r) => r.textContent.includes('everything else on this stage')));
+  }
+
   check('every tile group the theme owns is offered',
         qa('.plan-floor .tilepart').length ===
           plan.floors.reduce((n, f) => n + f.themeParts.all.length, 0));

@@ -2,6 +2,7 @@
 
 - 面向读者：OZX Level Studio 的实现者
 - 数据与代码快照：`ozx_base` `main@d867b644`，2026-09-11
+- 增量复核：§1.6 与相关条目核对于 `main@bc3f3f24`（2026-09-24），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047；其余仍是 `d867b644` 快照的实测数字。
 - 姊妹篇：`level_data_reference.md`（`GameData/levels/` 本身）。本文覆盖 level 数据**指向外部**的五个数据族，是引用选择器、跳转、校验和 Effective 视图的依据。
 
 本文所有分布数字都是在上述快照上实测的，不是估计。
@@ -41,6 +42,7 @@
 | `floorLootPlan.guaranteed[].boundEnemyId` | EnemyData | 三选一 |
 | `floorLootPlan.guaranteed[].boundRoomId` | 本层 roomId | 三选一 |
 | `floorLootPlan.categoryCaps[].category` | ItemTaxonomy 节点 | 必需 |
+| `floorLootPlan.stageWeights[].category` | ItemTaxonomy 节点 | 可选；留空 = 该 stage 的兜底倍率 |
 | `caves[]/stairs[].encounterId`、`lootPlanId` | EncounterData / LootTableData | 可选 |
 
 ### 数据族之间
@@ -284,7 +286,9 @@ consumable
  ├ exp(3) / heal(3) / key(2)
 ```
 
-`floorLootPlan.categoryCaps[].category` 填的就是这里的节点名（如 `weapon`、`equipment`）。编辑器的 category 选择器必须从这棵树取值，不能自由输入。
+`floorLootPlan.categoryCaps[].category` 和 `stageWeights[].category`（OZX-1044）填的都是这里的节点名（如 `weapon`、`equipment`）。编辑器的 category 选择器必须从这棵树取值，不能自由输入。
+
+两处读法不同，别混：`categoryCaps` 是**上限**，`stageWeights` 是**倍率**，而且后者按子树匹配、**最具体的优先**——`core_cinder_reactor` 依次试 `core`、`equipment`，都没有才落到该 stage 的无品类条目、最后才是 1.0（`level_data_reference.md` §5.5）。一个节点即使自己不直接挂道具也是合法节点，所以「这个名字存不存在」要查节点表，不能用「它底下有没有道具」来判断——上游为此专门加了 `HasCategory`。
 
 ---
 
@@ -386,6 +390,7 @@ consumable
 - `at` / 推导出的类别 → 目标模板必须有该生成层的格子。
 - `viaSpawner` → 静态证明不了就 warning，不要报错（运行时能力）。
 - `categoryCaps.category` → 必须是 taxonomy 节点。
+- `stageWeights.category` → 必须是 taxonomy 节点；同一个 `(stage, category)` 不能有两条。
 - 房间的门 mask → 用 §5.6 的现算矩阵判断能否匹配到模板，匹配失败时列出参与匹配的 folder / stage / shape / mask 和最接近的模板，而不是只说「找不到模板」。
 - 被引用的空 loot 表 → warning。
 

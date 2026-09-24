@@ -341,6 +341,45 @@ class Dataset:
             "spriteKey": v.get("spriteKey"),
         }
 
+    def taxonomy(self) -> dict:
+        """`item_taxonomy.json` as name -> parent, plus name -> its items.
+
+        Two questions get asked of it, and `GetItemsIn` returning empty cannot
+        answer the first: does this node EXIST (a typo has to be told apart
+        from a real node that holds no items of its own), and what is an
+        item's category chain, leaf first, so the most specific authored
+        multiplier wins.
+
+        Returns `found: False` rather than raising when the file is absent —
+        a plan that names no category never consults it at all, which is the
+        back-compat gate `StageWeightResolver` is built around.
+        """
+        doc = self.get("ItemTaxonomyData", "item_taxonomy")
+        if doc is None:
+            return {"found": False, "parentOf": {}, "categoryOfItem": {}}
+        parent_of: dict[str, str] = {}
+        category_of_item: dict[str, str] = {}
+        for node in doc.value.get("nodes") or []:
+            name = node.get("name")
+            if not name:
+                continue
+            parent_of[name] = node.get("parent") or ""
+            for item_id in node.get("items") or []:
+                if item_id:
+                    category_of_item[item_id] = name
+        return {"found": True, "parentOf": parent_of,
+                "categoryOfItem": category_of_item}
+
+    def categories_of(self, item_id: str | None) -> list[str]:
+        """An item's taxonomy chain, leaf first. Empty if it has no node."""
+        tax = self.taxonomy()
+        current = tax["categoryOfItem"].get(item_id or "")
+        chain: list[str] = []
+        while current and current not in chain:
+            chain.append(current)
+            current = tax["parentOf"].get(current) or ""
+        return chain
+
     def _table_doc(self, table_id: str | None,
                    tables: dict | None = None) -> dict | None:
         """One loot table, generated-first then GameData. None if unknown."""
@@ -744,6 +783,38 @@ class Dataset:
             })
         return out
 
+    def _stage_weights(self, floor: dict, base: str) -> list[dict]:
+        """`floorLootPlan.stageWeights` — per-stage loot multipliers.
+
+        OZX-1044 gave an entry an optional `category`, so a stage can say
+        "×1.4 of everything and ×1.8 of gear" in two lines. That makes the
+        list a sparse (stage × category) table rather than one row per stage,
+        and the resolution order — the item's own category, then each ancestor,
+        then the stage's category-free entry, then 1.0 — is the part that
+        fails quietly: a rule picking the wrong entry still produces a number,
+        so the table looks fine and only the loot feels wrong.
+
+        The rows are returned in authored order. Sorting them would hide the
+        one shape the validator cares about, two entries for the same pair.
+        """
+        plan = floor.get("floorLootPlan") or {}
+        known = self.taxonomy()["parentOf"]
+        out = []
+        for wi, entry in enumerate(plan.get("stageWeights") or []):
+            category = entry.get("category") or None
+            out.append({
+                "index": wi,
+                "stageType": entry.get("stageType"),
+                # Empty means "everything this stage drops" — which is what
+                # every entry meant before the field existed, and is still the
+                # fallback when no scoped entry matches an item.
+                "category": category,
+                "weight": entry.get("weight", 0),
+                "unknownCategory": bool(category) and category not in known,
+                "pointer": f"{base}/floorLootPlan/stageWeights/{wi}",
+            })
+        return out
+
     def plan_view(self, plan_id: str) -> dict:
         """A `LevelBasePlanData` as authored — no generation involved.
 
@@ -808,6 +879,7 @@ class Dataset:
                      "pointer": f"{base}/enemyPool/{ei}"}
                     for ei, e in enumerate(floor.get("enemyPool") or [])
                 ],
+                "stageWeights": self._stage_weights(floor, base),
                 "appearance": {
                     # Absent and [] are the same to the generator (full pool),
                     # but only `declared` can tell the UI whether there is a

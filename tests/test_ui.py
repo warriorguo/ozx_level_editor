@@ -101,6 +101,17 @@ def fixtures(tmp_path_factory):
             (v for v in views
              if any(e["isSpawner"] for f in v["floors"] for e in f["enemyPool"])),
             views[0])
+        # The stage-weight column is only exercised by a plan that writes the
+        # weights on its floors. chapter_3 keeps them in floorDefaults, which
+        # this side does not merge yet (OLE-9), so they are borrowed from
+        # whichever plan does rather than leaving the column untested.
+        if not any(f["stageWeights"] for f in chosen_plan["floors"]):
+            donor = next((v for v in views
+                          if any(f["stageWeights"] for f in v["floors"])), None)
+            if donor:
+                rows = next(f["stageWeights"] for f in donor["floors"]
+                            if f["stageWeights"])
+                chosen_plan["floors"][0]["stageWeights"] = rows
         (out / "plan.json").write_text(json.dumps(chosen_plan))
     return out
 
