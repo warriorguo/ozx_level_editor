@@ -341,6 +341,72 @@ class Dataset:
             "spriteKey": v.get("spriteKey"),
         }
 
+    def _table_doc(self, table_id: str | None,
+                   tables: dict | None = None) -> dict | None:
+        """One loot table, generated-first then GameData. None if unknown."""
+        if not table_id:
+            return None
+        table = (tables or {}).get(table_id)
+        if table is not None:
+            return table
+        doc = self.get("LootTableData", table_id)
+        return doc.value if doc else None
+
+    def table_items(self, table_id: str | None, tables: dict | None = None,
+                    _seen: frozenset = frozenset()) -> list[str]:
+        """Every itemId a table can yield, following table-valued entries.
+
+        The flattened roster, not the rolled one — `LootTableDraw.PossibleItems`
+        answers the same question upstream, and for the same reason: some
+        decisions are about the outcomes a slot could have rather than about
+        the slot. Here it is "does a skill reach the player through this",
+        which a one-level read of a table whose entries are themselves tables
+        would answer `no` to.
+
+        Self-reference would be an authoring bug rather than a shape, but this
+        walks user data, so `_seen` keeps it from recursing forever.
+        """
+        table = self._table_doc(table_id, tables)
+        if table is None or table_id in _seen:
+            return []
+        seen = _seen | {table_id}
+        out: list[str] = []
+        for e in table.get("entries") or []:
+            if e.get("itemId"):
+                out.append(e["itemId"])
+            elif e.get("tableId"):
+                out.extend(self.table_items(e["tableId"], tables, seen))
+        return out
+
+    def _entry_brief(self, item_id: str | None, table_id: str | None,
+                     tables: dict | None = None) -> dict:
+        """What one loot-table row shows, whether it names an item or a table.
+
+        A table-valued entry has no single item to describe, so it is labelled
+        by the table and carries the roster it could draw from. `missing` then
+        means what it means for an item — the thing this row names cannot be
+        resolved — plus the two shapes `LootTableDraw.Require` refuses: a
+        table that is not `pickOne` (its count would stop meaning anything)
+        and one with no entries.
+        """
+        if not table_id:
+            return self.item_brief(item_id)
+        table = self._table_doc(table_id, tables)
+        entries = (table or {}).get("entries") or []
+        drawable = bool(table) and bool(table.get("pickOne")) and bool(entries)
+        return {
+            "missing": not drawable,
+            "sprite": None,
+            "displayName": table_id,
+            # Deliberately not an item type: the row is a family, and a family
+            # of skills and a family of weapons must not look alike here.
+            "itemType": None,
+            "rarity": None,
+            "value": None,
+            "spriteKey": None,
+            "drawsFrom": self.table_items(table_id, tables),
+        }
+
     def skill_brief(self, skill_id: str | None) -> dict:
         """Resolve a kind="skill" placement's skillId to what it will grant.
 
@@ -455,16 +521,21 @@ class Dataset:
             else:
                 chance = min(100.0, max(0.0, float(weight)))
             item_id = e.get("itemId")
+            nested = e.get("tableId")
             row = {
                 "index": index,
                 "itemId": item_id,
+                # OZX-1047: an entry may name a `pickOne` TABLE instead of an
+                # item. The weight is still this entry's own chance; what
+                # changes is that hitting it draws the identity from there.
+                "tableId": nested,
                 "weight": weight,
                 "minCount": e.get("minCount", 0),
                 "maxCount": e.get("maxCount", 0),
                 "chance": round(chance, 1),
                 "pointer": f"/entries/{index}",
             }
-            row.update(self.item_brief(item_id))
+            row.update(self._entry_brief(item_id, nested, tables))
             rows.append(row)
         return {
             "id": table_id,
@@ -498,26 +569,74 @@ class Dataset:
                  "sprite": self.sprites.sprite_for_prefab_key(f"prefab/{k}")}
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
+    def wave_pin(self, action: dict, tables: dict | None = None) -> dict | None:
+        """OZX-1041: the prize pinned to this launch, or None.
+
+        A pin is paid ON TOP of whatever the table rolled, to the first
+        `count` enemies of the launch — exactly parallel to `eliteCount`
+        promoting the first k. It is a second channel, not a variant of the
+        first: `dropTableId` answers "what does this group roll",
+        `guaranteedDrop` answers "what is pinned here". They were one string
+        (`dropTableIdOverride`) taking turns overwriting itself, which handed
+        the prize to every enemy in the launch and cost the carriers the loot
+        they would otherwise have dropped.
+
+        JsonUtility materialises an omitted `[Serializable]` field, so the
+        object being present means nothing upstream and nothing here: a pin
+        exists iff it names an item or a table.
+        """
+        pin = action.get("guaranteedDrop") or {}
+        item_id = pin.get("itemId") or None
+        table_id = pin.get("tableId") or None
+        if not item_id and not table_id:
+            return None
+        brief = self._entry_brief(item_id, table_id, tables)
+        items = [item_id] if item_id else brief.get("drawsFrom") or []
+        chance = pin.get("chance") or 0
+        return {
+            "itemId": item_id,
+            "tableId": table_id,
+            "count": pin.get("count", 0),
+            # 0 is "not authored", which fires every time. The UI must not
+            # render that as a 0% pin, so the resolved figure is separate
+            # from the authored one.
+            "chance": chance,
+            "chancePercent": round((chance or 1) * 100, 1),
+            "displayName": brief["displayName"],
+            "itemType": brief["itemType"],
+            "missing": brief["missing"],
+            "drawsFrom": brief.get("drawsFrom") or [],
+            "hasSkill": any(self.item_brief(i)["itemType"] == "skill"
+                            for i in items),
+        }
+
     def wave_drop(self, action: dict, tables: dict | None = None) -> dict:
         """What one launch wave drops when it dies — the Effective Drop view.
 
         `EventBindings.OnEnemyDied` resolves exactly one table, in this order
-        (OZX-289), and the editor must not approximate it:
+        (OZX-289/1041), and the editor must not approximate it:
 
-            action.dropTableIdOverride  →  EnemyData.dropTableId  →  item_exp_small
+            action.dropTableId  →  EnemyData.dropTableId  →  item_exp_small
+
+        and then pays `action.guaranteedDrop` on top of it, to the first
+        `count` enemies of the launch (`wave_pin`).
 
         This is the channel skills reach the player through: an ItemData of
         `type: "skill"` in the rolled table is picked up by `ItemService`,
         which hands `item.id` to `SkillService.AddPassive`. It is separate
         from, and additive to, the room-clear and cargo tables the Loot column
         already shows — an enemy drop is authored on the encounter, not on the
-        room, so nothing in that column would ever reveal it.
+        room, so nothing in that column would ever reveal it. A pinned skill
+        is invisible in exactly the same way, so it counts too.
 
         The elite bonus is `item_exp_large` on top of whatever rolled, never
         instead of it.
         """
         enemy_id = action.get("enemyId")
-        override = action.get("dropTableIdOverride") or None
+        # OZX-1041 renamed this field. The two meanings that used to share it
+        # are now `dropTableId` (what this group rolls) and `guaranteedDrop`
+        # (what is pinned to it), and they no longer overwrite each other.
+        override = action.get("dropTableId") or None
         enemy = self.get("EnemyData", enemy_id) if enemy_id else None
         intrinsic = (enemy.value.get("dropTableId") or None) if enemy else None
 
@@ -531,21 +650,27 @@ class Dataset:
         view = self.loot_table_view(table_id, tables) if table_id else None
         items = []
         if view and not view.get("missing"):
-            items = [{"itemId": e["itemId"], "displayName": e["displayName"],
+            items = [{"itemId": e["itemId"], "tableId": e["tableId"],
+                      "displayName": e["displayName"],
                       "itemType": e["itemType"], "chance": e["chance"],
                       "missing": e["missing"]}
                      for e in view["entries"]]
+        pin = self.wave_pin(action, tables)
+        rolled_skill = any(
+            self.item_brief(i)["itemType"] == "skill"
+            for i in self.table_items(table_id, tables)) if table_id else False
         return {
             "tableId": table_id,
             "source": source,
             "missing": bool(view and view.get("missing")),
             "empty": bool(view and view.get("empty")),
             "items": items,
+            "pin": pin,
             # Named rather than inlined so the UI never has to hardcode them.
             "fallbackItemId": FALLBACK_DROP_ITEM if source == "fallback" else None,
             "eliteBonusItemId": (ELITE_BONUS_DROP_ITEM
                                  if action.get("eliteCount") else None),
-            "hasSkill": any(i["itemType"] == "skill" for i in items),
+            "hasSkill": rolled_skill or bool(pin and pin["hasSkill"]),
         }
 
     def encounter_enemies(self, encounter_id: str | None,
@@ -793,10 +918,23 @@ class Dataset:
                         for i, p in enumerate(room.get("staticPlacements") or [])
                         if p.get("lootTableId")
                     ] + [
-                        # Guaranteed cargo is a generated-only channel: the
-                        # assigner pins these tables onto the room's boxes.
+                        # Guaranteed cargo is a generated-only channel. It used
+                        # to be a list of one-entry table ids the assigner
+                        # synthesised; OZX-1041 made it a pin instead, so the
+                        # crate now rolls the room's ORDINARY table and pays
+                        # this on top. The room therefore drops strictly more
+                        # than it did — the extra is the cargo loot the old
+                        # wrapper table displaced.
                         {"placementIndex": None, "kind": "guaranteed",
-                         "pointer": None,
+                         "pointer": None, "table": None,
+                         "pin": self.wave_pin({"guaranteedDrop": c}, tables)}
+                        for c in room.get("guaranteedCargo") or []
+                    ] + [
+                        # Pre-OZX-1041 captures still on disk. Reading them is
+                        # free and refusing to would make an older session look
+                        # like one with no guaranteed cargo at all.
+                        {"placementIndex": None, "kind": "guaranteed",
+                         "pointer": None, "pin": None,
                          "table": self.loot_table_view(t, tables)}
                         for t in room.get("guaranteedCargoTableIds") or []
                     ],

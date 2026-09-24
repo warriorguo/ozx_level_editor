@@ -165,10 +165,23 @@ def test_keys_are_found_in_every_loot_channel():
         room("static", staticPlacements=[{"lootTableId": "t"}]),
         room("named", staticPlacements=[{"kind": "equipment", "itemId": "key_gold"}]),
         room("wave", inlineEncounter={"steps": [
+            {"action": {"enemyId": "x", "dropTableId": "t"}}]}),
+        # OZX-1041: the channel the cross-floor keys actually ride now — the
+        # key is named on the launch, and no table is synthesised for it.
+        room("pin", inlineEncounter={"steps": [
+            {"action": {"enemyId": "x",
+                        "guaranteedDrop": {"itemId": "key_gold", "count": 1}}}]}),
+        room("pinTable", inlineEncounter={"steps": [
+            {"action": {"enemyId": "x",
+                        "guaranteedDrop": {"tableId": "t", "count": 1}}}]}),
+        room("cargoPin", guaranteedCargo=[{"itemId": "key_gold", "count": 1}]),
+        # Pre-OZX-1041 captures are still on disk and still have to read.
+        room("legacyWave", inlineEncounter={"steps": [
             {"action": {"enemyId": "x", "dropTableIdOverride": "t"}}]}),
     ]
     found = session.key_sources(doc([{"startRoomId": "plan", "rooms": rooms}], tables))
-    assert set(found) == {"plan", "floor", "cargo", "static", "named", "wave"}
+    assert set(found) == {"plan", "floor", "cargo", "static", "named", "wave",
+                          "pin", "pinTable", "cargoPin", "legacyWave"}
 
 
 def test_a_table_that_is_not_in_the_document_yields_nothing():
@@ -240,9 +253,10 @@ def test_the_real_dump_parses_as_one_document(dump):
 
 @real_only
 def test_the_real_dump_carries_its_keys_in_the_death_channel(dump):
-    """Not on the room: the cross-floor keys ride a wave's
-    dropTableIdOverride, which is InjectGuaranteedDrops. A view that only read
-    room-level loot would report no key anywhere."""
+    """Not on the room: the cross-floor keys ride a wave's guaranteedDrop
+    pin, which is InjectGuaranteedDrops. A view that only read room-level loot
+    would report no key anywhere — and one still looking for the synthesised
+    `loot_story_f{n}_0` table would too, since OZX-1041 deleted it."""
     sources = session.key_sources(dump)
     assert sources, "no key source found in a dump that has locked doors"
     locked = [d for f in dump["floors"] for r in f["rooms"]

@@ -214,6 +214,22 @@ check('immediate waves are not highlighted',
       whens.filter((w) => w.textContent.trim() === 'immediately')
            .every((w) => !w.classList.contains('gated')));
 
+// ── a pinned prize is drawn BESIDE the drop, not instead of it ───────────
+// OZX-1041: `guaranteedDrop` is paid on top of whatever the table rolled, so
+// a page that replaced the drop line with it would understate every pinned
+// wave by a whole table.
+{
+  const pins = qa('.enemy-content .pin-line');
+  check('a pinned prize gets its own line', pins.length === 1, `${pins.length} pins`);
+  const carrier = pins[0]?.closest('.drop-carrier');
+  check('the wave still shows the table it rolls',
+        !!carrier?.querySelector('.drop-line'));
+  check('the pin names what it pays and to how many',
+        /×1\s+Silver Key/.test(pins[0]?.textContent || ''), pins[0]?.textContent);
+  check('an authored chance is shown as odds',
+        (pins[0]?.textContent || '').includes('7%'), pins[0]?.textContent);
+}
+
 // ── a skill platform says which skill it grants ──────────────────────────
 // Its skillId is the only thing that distinguishes one platform from another;
 // without it the row reads "skill / random" and names nothing.

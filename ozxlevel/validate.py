@@ -282,12 +282,25 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                                      f"step {index}: min {lo} exceeds max {hi}",
                                      entity=encounter_id, pointer=f"{sptr}/action"))
 
-            drop = action.get("dropTableIdOverride")
+            # OZX-1041 renamed this field from `dropTableIdOverride`. The old
+            # name is not a back-compat alias: JsonUtility drops a field it
+            # does not declare without a word, so a file still carrying it
+            # falls silently back to the enemy's own table.
+            drop = action.get("dropTableId")
             if drop and ds.get("LootTableData", drop) is None:
                 issues.append(_issue("error", "LOOT_TABLE_MISSING",
-                                     f"step {index}: dropTableIdOverride '{drop}' does not exist",
+                                     f"step {index}: dropTableId '{drop}' does not exist",
                                      entity=encounter_id,
-                                     pointer=f"{sptr}/action/dropTableIdOverride"))
+                                     pointer=f"{sptr}/action/dropTableId"))
+            if "dropTableIdOverride" in action:
+                issues.append(_issue(
+                    "error", "ENCOUNTER_DROP_FIELD_RENAMED",
+                    f"step {index}: `dropTableIdOverride` was renamed to `dropTableId` "
+                    f"(OZX-1041). JsonUtility discards the undeclared field in silence, "
+                    f"so this launch quietly falls back to the enemy's own table",
+                    entity=encounter_id,
+                    pointer=f"{sptr}/action/dropTableIdOverride"))
+            issues.extend(_pin_issues(ds, encounter_id, index, sptr, action))
 
         condition = step.get("condition")
         if condition:
@@ -296,6 +309,113 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                 issues.append(_issue("warning", "TYPE_VALUE_UNKNOWN",
                                      f"step {index}: unknown condition kind '{kind}'",
                                      entity=encounter_id, pointer=f"{sptr}/condition/kind"))
+    return issues
+
+
+def _pin_issues(ds: Dataset, encounter_id: str, index: int,
+                sptr: str, action: dict) -> list[dict]:
+    """`EncounterAction.guaranteedDrop` — the prize pinned to a launch.
+
+    OZX-1041 split the one `dropTableIdOverride` string into two fields
+    because the two meanings kept overwriting each other: pinning a prize used
+    to mean replacing the launch's drop table, which handed the prize to every
+    enemy the launch spawned and cost them the loot they would have dropped.
+
+    Every rule here is `EncounterValidator` / `LootTableDraw.Require`, moved
+    forward to editing time, and every one of them guards a failure that is
+    otherwise silent or arrives mid-room:
+
+    - a half-filled pin pays nobody, and JsonUtility materialises the object
+      whether or not it was authored, so `guaranteedDrop != null` proves
+      nothing — a pin exists iff it names an item or a table;
+    - an `itemId` that is really a loot table id drops nothing;
+    - a `tableId` that is not `pickOne` rolls each entry independently, so the
+      pin's count stops meaning anything;
+    - a pin on a `viaSpawner` launch can be discarded with the request (the
+      spawner dies, the room changes) — and the pin can be the floor's key.
+    """
+    pin = action.get("guaranteedDrop")
+    if not isinstance(pin, dict):
+        return []
+    pptr = f"{sptr}/action/guaranteedDrop"
+    item_id = pin.get("itemId") or None
+    table_id = pin.get("tableId") or None
+    count = pin.get("count") or 0
+    chance = pin.get("chance") or 0
+    issues: list[dict] = []
+
+    if item_id and table_id:
+        return [_issue(
+            "error", "ENCOUNTER_PIN_AMBIGUOUS",
+            f"step {index}: guaranteedDrop names both itemId '{item_id}' and "
+            f"tableId '{table_id}'; a pin drops one named thing or draws from "
+            f"one table, never both",
+            entity=encounter_id, pointer=pptr)]
+
+    if not item_id and not table_id:
+        if count or chance:
+            issues.append(_issue(
+                "error", "ENCOUNTER_PIN_EMPTY",
+                f"step {index}: guaranteedDrop names neither itemId nor tableId, "
+                f"so nothing would be dropped",
+                entity=encounter_id, pointer=pptr))
+        return issues
+
+    if item_id:
+        if ds.get("ItemData", item_id) is None:
+            named_table = ds.get("LootTableData", item_id) is not None
+            issues.append(_issue(
+                "error", "ENCOUNTER_PIN_ITEM_MISSING",
+                f"step {index}: guaranteedDrop.itemId '{item_id}' is not an ItemData"
+                + (" — it is a loot table; a pin that draws from a table uses "
+                   "`tableId`" if named_table else ""),
+                entity=encounter_id, pointer=f"{pptr}/itemId"))
+    else:
+        table = ds.get("LootTableData", table_id)
+        if table is None:
+            issues.append(_issue(
+                "error", "LOOT_TABLE_MISSING",
+                f"step {index}: guaranteedDrop.tableId '{table_id}' does not exist",
+                entity=encounter_id, pointer=f"{pptr}/tableId"))
+        elif not table.value.get("pickOne"):
+            issues.append(_issue(
+                "error", "ENCOUNTER_PIN_TABLE_NOT_PICKONE",
+                f"step {index}: guaranteedDrop.tableId '{table_id}' is not pickOne; "
+                f"an ordinary table rolls every entry independently, so it can yield "
+                f"none or all of them and the pin's count stops meaning anything",
+                entity=encounter_id, pointer=f"{pptr}/tableId"))
+        elif not (table.value.get("entries") or []):
+            issues.append(_issue(
+                "error", "ENCOUNTER_PIN_TABLE_EMPTY",
+                f"step {index}: guaranteedDrop.tableId '{table_id}' has no entries; "
+                f"there is nothing for the pin to draw",
+                entity=encounter_id, pointer=f"{pptr}/tableId"))
+
+    if count < 1:
+        issues.append(_issue(
+            "error", "ENCOUNTER_PIN_COUNT_INVALID",
+            f"step {index}: guaranteedDrop pins '{item_id or table_id}' with count "
+            f"{count}; a pin that reaches no enemy is never what was meant",
+            entity=encounter_id, pointer=f"{pptr}/count"))
+
+    # 0 is "not authored" and fires every time. Outside (0, 1] is a mistake:
+    # a literal 0 almost certainly means "remove this pin", and reading it as
+    # "always" is the opposite of what was asked.
+    if chance < 0 or chance > 1:
+        issues.append(_issue(
+            "error", "ENCOUNTER_PIN_CHANCE_INVALID",
+            f"step {index}: guaranteedDrop.chance is {chance}; it must be in (0, 1], "
+            f"or omitted for a pin that always fires. To switch a pin off, delete it",
+            entity=encounter_id, pointer=f"{pptr}/chance"))
+
+    if action.get("viaSpawner"):
+        issues.append(_issue(
+            "error", "ENCOUNTER_PIN_ON_SPAWNER_CHANNEL",
+            f"step {index}: guaranteedDrop cannot ride a viaSpawner launch. A channel "
+            f"request can be legitimately discarded — the spawner is killed, "
+            f"emitMaxTotal is spent, the room changes — so the pin would be lost in "
+            f"silence, and a pin can be the key the floor is gated on",
+            entity=encounter_id, pointer=pptr))
     return issues
 
 
@@ -465,6 +585,40 @@ def _skill_drop_issues(ds: Dataset, table_id: str, index: int,
     return issues
 
 
+def _nested_table_issues(ds: Dataset, table_id: str, index: int,
+                         eptr: str, nested: str) -> list[dict]:
+    """A loot entry that draws its identity from another table (OZX-1047).
+
+    Same two refusals `LootTableDraw.Require` makes everywhere a slot points
+    at a table: it has to be `pickOne`, because an ordinary table rolls each
+    entry independently and so yields anywhere from nothing to everything, and
+    it has to have entries to draw from. Self-reference is checked here rather
+    than upstream because the runtime resolves one level at a time and a cycle
+    only shows up as a stack overflow at drop time.
+    """
+    doc = ds.get("LootTableData", nested)
+    if doc is None:
+        return [_issue("error", "LOOT_TABLE_MISSING",
+                       f"entry {index}: tableId '{nested}' does not exist",
+                       entity=table_id, pointer=f"{eptr}/tableId")]
+    if nested == table_id:
+        return [_issue("error", "LOOT_TABLE_CYCLE",
+                       f"entry {index}: tableId '{nested}' is this table",
+                       entity=table_id, pointer=f"{eptr}/tableId")]
+    if not doc.value.get("pickOne"):
+        return [_issue("error", "LOOT_ENTRY_TABLE_NOT_PICKONE",
+                       f"entry {index}: tableId '{nested}' is not pickOne; an "
+                       f"ordinary table rolls every entry independently, so this "
+                       f"entry's count would stop meaning anything",
+                       entity=table_id, pointer=f"{eptr}/tableId")]
+    if not (doc.value.get("entries") or []):
+        return [_issue("error", "LOOT_TABLE_EMPTY",
+                       f"entry {index}: tableId '{nested}' has no entries; there "
+                       f"is nothing for it to draw",
+                       entity=table_id, pointer=f"{eptr}/tableId")]
+    return []
+
+
 def validate_loot(ds: Dataset, table_id: str) -> list[dict]:
     doc = ds.get("LootTableData", table_id)
     if doc is None:
@@ -481,7 +635,20 @@ def validate_loot(ds: Dataset, table_id: str) -> list[dict]:
     for index, entry in enumerate(entries):
         eptr = f"/entries/{index}"
         item_id = entry.get("itemId")
-        if not item_id:
+        nested = entry.get("tableId")
+        if item_id and nested:
+            issues.append(_issue(
+                "error", "LOOT_ENTRY_AMBIGUOUS",
+                f"entry {index} names both itemId '{item_id}' and tableId "
+                f"'{nested}'; an entry drops one named item or draws from one "
+                f"table, never both",
+                entity=table_id, pointer=eptr))
+        elif nested:
+            # OZX-1047: the entry's weight is still its own chance; what it
+            # draws is one item from a nested pickOne table. The same two
+            # refusals as a pin — see LootTableDraw.Require.
+            issues.extend(_nested_table_issues(ds, table_id, index, eptr, nested))
+        elif not item_id:
             issues.append(_issue("error", "LOOT_ITEM_MISSING",
                                  f"entry {index} has no itemId",
                                  entity=table_id, pointer=eptr))

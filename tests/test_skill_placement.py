@@ -270,9 +270,13 @@ def test_the_drop_chain_follows_the_runtime_order(ds):
 
     `EventBindings.OnEnemyDied` picks exactly one table by this order. Getting
     it wrong shows a designer a table the game will never roll.
+
+    The action's field is `dropTableId` since OZX-1041 — the old
+    `dropTableIdOverride` carried two meanings that overwrote each other, and
+    the pin half moved to `guaranteedDrop`.
     """
     over = ds.wave_drop({"enemyId": "blight_sac_stalker",
-                         "dropTableIdOverride": "loot_ch1_build3_skill"})
+                         "dropTableId": "loot_ch1_build3_skill"})
     assert over["source"] == "override"
     assert over["tableId"] == "loot_ch1_build3_skill"
 

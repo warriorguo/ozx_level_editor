@@ -439,9 +439,34 @@ function skillOptions(selected) {
  *  room's own lootPlanId and its cargo — can never reveal it. This is the
  *  channel skills reach the player through, and it was invisible.
  */
+/** What a pin says in one line: how many carriers, of what, how often.
+ *
+ * OZX-1041 split "what this group rolls" from "what is pinned here", so a pin
+ * is drawn beside the table rather than in place of it — it is paid on top.
+ * `chance: 0` means the field was never authored and the pin always fires,
+ * which is why the percentage is only shown when it is really below 1.
+ */
+function pinRow(pin, label) {
+  if (!pin) return '';
+  const what = pin.tableId
+    ? `${pin.tableId} — one of ${pin.drawsFrom.length}`
+    : (pin.displayName || pin.itemId);
+  const odds = pin.chance > 0 && pin.chance < 1 ? ` · ${pin.chancePercent}%` : '';
+  const cls = ['pin-line', pin.hasSkill ? 'has-skill' : '',
+               pin.missing ? 'bad' : ''].filter(Boolean).join(' ');
+  const title = pin.missing
+    ? (pin.tableId
+        ? 'a pin may only draw from a pickOne table that has entries'
+        : 'no ItemData with this id')
+    : 'guaranteedDrop — paid on top of whatever the table rolled';
+  return `<span class="${cls}" title="${esc(title)}">
+    <span class="drop-tag">${esc(label)}</span>${esc(`×${pin.count} ${what}${odds}`)}</span>`;
+}
+
 function dropLine(drop) {
   if (!drop) return '';
-  const names = drop.items.map((i) => i.displayName || i.itemId);
+  const names = drop.items.map((i) => i.tableId
+    ? `${i.tableId} (one of)` : (i.displayName || i.itemId));
   let body;
   if (drop.missing) body = `${drop.tableId} — table not found`;
   else if (drop.source === 'fallback') body = `${drop.fallbackItemId} — no table on this enemy`;
@@ -460,12 +485,12 @@ function dropLine(drop) {
     drop.source === 'override' ? 'authored' : '',
   ].filter(Boolean).join(' ');
   const title = drop.source === 'override'
-    ? 'dropTableIdOverride on this wave — overrides the enemy\'s own table'
+    ? 'dropTableId on this wave — replaces the enemy\'s own table'
     : drop.source === 'enemy'
       ? "the enemy's own dropTableId"
       : 'no table anywhere in the chain; the last-resort fallback drops instead';
   return `<span class="${cls}" title="${esc(title)}">
-    <span class="drop-tag">drops</span>${esc(body)}</span>`;
+    <span class="drop-tag">drops</span>${esc(body)}</span>${pinRow(drop.pin, 'pinned')}`;
 }
 
 function renderRooms() {
@@ -576,8 +601,21 @@ function renderRooms() {
       const rows = table.entries.map((e) => {
         const count = e.minCount === e.maxCount ? `×${e.minCount}` : `×${e.minCount}–${e.maxCount}`;
         if (e.missing) {
-          return `<div class="loot-item missing" title="no ItemData with this id">
-            <span class="li-name">${esc(e.itemId)}<small>item not found</small></span>
+          return `<div class="loot-item missing" title="${esc(e.tableId
+              ? 'a slot may only draw from a pickOne table that has entries'
+              : 'no ItemData with this id')}">
+            <span class="li-name">${esc(e.tableId || e.itemId)}<small>${
+              esc(e.tableId ? 'not a usable pickOne table' : 'item not found')}</small></span>
+            <span class="li-count">${count}</span>
+            <span class="li-chance">${e.chance}%</span>
+          </div>`;
+        }
+        // OZX-1047: the entry names a table, so the weight is still its own
+        // chance but the identity is drawn per roll. Naming the family is the
+        // honest row — picking one member of it to show would be a lie.
+        if (e.tableId) {
+          return `<div class="loot-item from-table" title="${esc(e.drawsFrom.join(', '))}">
+            <span class="li-name">${esc(e.tableId)}<small>one of ${e.drawsFrom.length} — drawn per roll</small></span>
             <span class="li-count">${count}</span>
             <span class="li-chance">${e.chance}%</span>
           </div>`;
@@ -615,9 +653,11 @@ function renderRooms() {
       lootRow(room.roomClearLoot, 'room clear', `${room.pointer}/lootPlanId`, 'LevelData', state.levelId),
       ...room.cargoLoot.map((c) =>
         // Guaranteed cargo is pinned to the room, not to one box, so it has
-        // no placement index to name.
-        lootRow(c.table, c.placementIndex == null ? c.kind : `${c.kind} #${c.placementIndex}`,
-                c.pointer, 'LevelData', state.levelId)),
+        // no placement index to name. Since OZX-1041 it is a pin rather than
+        // a wrapper table, and a pin has no table row to draw.
+        (c.pin ? pinRow(c.pin, 'guaranteed cargo')
+               : lootRow(c.table, c.placementIndex == null ? c.kind : `${c.kind} #${c.placementIndex}`,
+                         c.pointer, 'LevelData', state.levelId))),
     ].filter(Boolean).join('')
       || '<div class="inline-empty">No loot on this room</div>';
 

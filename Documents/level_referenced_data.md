@@ -49,7 +49,11 @@
 |---|---|
 | `EncounterAction.enemyId` / `condition.enemyId`（`killed`） | EnemyData |
 | `EncounterAction.viaSpawner` | EnemyData（**必须是房间里活着的那种敌人**，见 §1.4） |
-| `EncounterAction.dropTableIdOverride` | LootTableData |
+| `EncounterAction.dropTableId` | LootTableData |
+| `EncounterAction.guaranteedDrop.itemId` | ItemData（**不是 loot table**） |
+| `EncounterAction.guaranteedDrop.tableId` | LootTableData（必须 `pickOne`） |
+| `RoomNodeData.guaranteedCargo[].itemId` / `.tableId` | ItemData / LootTableData（`[NonSerialized]`） |
+| `LootEntryData.tableId` | LootTableData（必须 `pickOne`） |
 | `EncounterCondition.triggerId`（`touch`） | 房间里 `kind="trigger"` 的 placement |
 | `EnemyData.dropTableId` | LootTableData |
 | `EnemyData.deathSpawnEnemyId` / `hatchEnemyId` / `spawnConfig.enemyIds[]` | EnemyData |
@@ -98,7 +102,8 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 | `enemyId` | 必填 | 205 |
 | `min` / `max` | 数量区间，闭区间随机 | 最常见是 min==max |
 | `eliteCount` | 前 N 只以 elite 出生 | 11 step |
-| `dropTableIdOverride` | 覆盖这批敌人的掉落表 | 10 step |
+| `dropTableId` | 这批敌人摇的表（替换 `EnemyData.dropTableId`） | 10 step |
+| `guaranteedDrop` | 钉在这次 launch 上的奖品，见 §1.6 | 手写数据 **0**（生成期注入） |
 | `viaSpawner` | 走生产者通道，见 §1.4 | 20 step（6 个 spawner 类型） |
 | `at` | 生成点类别覆盖 | **0** |
 
@@ -112,8 +117,41 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 已有（结构性，抛异常）：verb 非 `launch`、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
 
-**没有**做的（编辑器必须补）：`enemyId` 是否存在、`dropTableIdOverride` 是否存在、`viaSpawner` 是否可达、`eliteCount > 0` 的敌人是否有 elite 配置、`at` 类别在目标模板里有没有点、`cleared` 之前是否真的有会产生活体的 step。
+**没有**做的（编辑器必须补）：`enemyId` 是否存在、`dropTableId` 是否存在、`guaranteedDrop.itemId` 是不是 item（而不是 loot table）、`guaranteedDrop.tableId` 指的表是否存在、`viaSpawner` 是否可达、`eliteCount > 0` 的敌人是否有 elite 配置、`at` 类别在目标模板里有没有点、`cleared` 之前是否真的有会产生活体的 step。
 
+### 1.6 掉落表与「钉住的奖品」是两个字段（OZX-1041，核对于 `ozx_base@d2c67d1e`）
+
+`EncounterAction.dropTableIdOverride` 曾经同时表达两件事——「这批敌人摇哪张表」和「这里钉了什么奖品」——两个写入方互相覆盖。把奖品钉上去意味着替换整批敌人的掉落表，于是**这批里每一只都掉一份**（OZX-1040：一个钥匙房掉四把钥匙），而且携带者失去了本该掉的战利品。现在拆成两个字段：
+
+| 字段 | 回答的问题 | 语义 |
+|---|---|---|
+| `dropTableId` | 这批敌人摇哪张表 | 替换 `EnemyData.dropTableId`；`EventBindings.OnEnemyDied` 的解析链是 `action.dropTableId → EnemyData.dropTableId → item_exp_small` |
+| `guaranteedDrop` | 这里钉了什么 | **额外**支付，不替换；只给这次 launch 的**前 `count` 只**，与 `eliteCount` 提拔前 k 只完全平行 |
+
+`guaranteedDrop` 的形状（`EncounterData.cs:99`，`GuaranteedDrop`）：
+
+```jsonc
+"guaranteedDrop": { "itemId": "key_silver", "count": 1 }          // 一个具名道具
+"guaranteedDrop": { "tableId": "loot_equipment_f0", "count": 1,   // 或从一张 pickOne 表里抽
+                    "chance": 0.07 }
+```
+
+编辑器必须按下面这几条读写，每一条对应的失败都是静默的：
+
+- **「有没有钉东西」不是 `guaranteedDrop != null`。** JsonUtility 会把省略掉的 `[Serializable]` 字段实例化出来，所以对象永远非空。**钉住成立当且仅当 `itemId` 或 `tableId` 非空**。
+- `itemId` 与 `tableId` **互斥**；`itemId` 指向 `items/`，`tableId` 指向 `loot_tables/` 且**必须 `pickOne`**（普通表每条独立摇，产出数量从 0 到全部，`count` 就不再有意义——`LootTableDraw.Require`）。
+- `count >= 1`。`chance` 在 `(0, 1]`，**0 = 没写过 = 每次都掉**；要关掉一个 pin 是删掉它，不是把 `chance` 写成 0。
+- **不能与 `viaSpawner` 同用**：通道请求可以被合法丢弃（spawner 被打死、`emitMaxTotal` 用完、换房间），而 pin 可能正是这层的钥匙。
+- **旧名不是别名。** 文件里还写着 `dropTableIdOverride` 时，JsonUtility 静默丢弃未声明字段，这次 launch 会无声地退回敌人自带的表。编辑器把它报成 Error（`ENCOUNTER_DROP_FIELD_RENAMED`）。
+
+**钥匙不再是一张表。** `InjectGuaranteedDrops` 过去合成一张单条目表 `loot_story_f{n}_0` 盖到钥匙房最后一个 launch 上，还要靠 `CarveKeyCarrier` 把携带者切成独立的一步——那个补丁已经删除，**钥匙房的 step 列表就是 `PoolSampler` 的原样**。现在钥匙是那一步上的 `guaranteedDrop { transitionKeyId, count: 1 }`。同理 `RoomNodeData.guaranteedCargoTableIds`（表 id 列表）变成了 `guaranteedCargo`（`{itemId|tableId, count, chance}` 列表）。
+
+后果有两个，凡是复算掉落的地方都要跟上：
+
+1. **合成表只剩三族**：`loot_floor_f*`、`loot_floor_f*_{stage}`、`loot_key_f{n}`。所有单条目包装表都没有了——「预览里一堆只有一个条目的合成表」这个噪音源消失了。
+2. **guaranteed 箱子掉得比以前多**：它现在既摇房间的常规表、又额外付 pin；以前它只摇那张单条目包装表，也就是只掉那一个道具。多出来的正是这个房间本来该给的常规 cargo 掉落。
+
+**`LootEntryData.tableId`（OZX-1047）**：loot table 的条目本身也可以指向另一张 `pickOne` 表——权重仍是这条自己的机会，变的是命中后从那张表里抽身份。`loot_equipment_f0` 的四条里有两条是这样。把它当成「缺 `itemId` 的条目」会报出一串假的悬空引用，把它当成 `itemId` 直接读会漏掉整棵子树里的道具（比如一次 pin 能不能掉出技能）。
 ---
 
 ## 2. EnemyData（68 份，`GameData/enemies/`）

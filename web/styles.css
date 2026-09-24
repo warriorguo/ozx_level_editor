@@ -1000,6 +1000,32 @@ button { color: inherit; }
 .drop-line.has-skill .drop-tag { color: #11140f; border-color: var(--acid); background: var(--acid); }
 .drop-line.bad, .drop-line.bad .drop-tag { color: var(--danger); border-color: rgba(255,90,120,.5); }
 
+/* OZX-1041: a pin sits BESIDE the drop line, not in place of it — it is paid
+   on top of whatever the table rolled. Same shape as .drop-line so the two
+   read as one block, with a filled tag because a pin is a promise rather than
+   a roll. */
+.pin-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: #c2c8c2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pin-line .drop-tag { color: #11140f; background: var(--cyan); border-color: var(--cyan); }
+.pin-line.has-skill { color: var(--acid); }
+.pin-line.has-skill .drop-tag { background: var(--acid); border-color: var(--acid); }
+.pin-line.bad, .pin-line.bad .drop-tag {
+  color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
+}
+/* An entry whose identity is drawn from a nested pickOne table (OZX-1047):
+   the row names a family, so it is muted the way a derived value is. */
+.loot-item.from-table .li-name { color: var(--cyan); }
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

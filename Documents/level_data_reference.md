@@ -50,7 +50,7 @@
 
 未知字段不是假设：`level_test.json` 的 `f0_room_0_0` 上有 `"pinballHammers": 1`，当前 `RoomNodeData` 里没有这个字段。任何「读 typed → 写 typed」的工具都会把它删掉。
 
-`[NonSerialized]` 字段（`inlineEncounter`、`inlineLootPlan`、`guaranteedCargoTableIds`、`floorLootTableId`、`effectiveStageWeight`）是运行时合成结果，**磁盘上永远不存在，也永远不能写回**。
+`[NonSerialized]` 字段（`inlineEncounter`、`inlineLootPlan`、`guaranteedCargo`、`floorLootTableId`、`effectiveStageWeight`）是运行时合成结果，**磁盘上永远不存在，也永远不能写回**。（`guaranteedCargo` 在 OZX-1041 之前叫 `guaranteedCargoTableIds`，是一串表 id；现在是 `{itemId|tableId, count, chance}` 的列表——箱子照旧摇房间的常规表，pin 是额外支付的。）
 
 ---
 
@@ -300,8 +300,8 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 1. **stage 按 BFS 顺序分配**（`OrderRoomsByBFS`，从 start 房开始），比例用**最大余数法**（`PortionResolver`）换算成整数房间数，保证总和等于房间数。
 2. **stage 赋值会覆盖房间的 `encounterId` 和 `lootPlanId`**——包括把它们覆盖成 `null`。在 plan 驱动的楼层里，`FloorPlanData.rooms` 上手写的 encounter 会被 stage 条目盖掉。
 3. 比例分配后剩下的房间走 overflow，默认 `stageType = pressure`、`lootPlanId = loot_common`。
-4. enemy pool 先合成 `inlineEncounter`；只要 floor 的 `probabilistic` 非空，随后合成的楼层表就会覆盖这些 action 的 `dropTableIdOverride`——**enemy pool entry 自带的 `dropTableId` 因此可能不生效**。
-5. `guaranteed.boundEnemyId` 再覆盖第一个匹配的 inline action；自动过渡钥匙还可能覆盖 peak 房最后一个 action。
+4. enemy pool 先合成 `inlineEncounter`；只要 floor 的 `probabilistic` 非空，随后合成的楼层表就会覆盖这些 action 的 `dropTableId`——**enemy pool entry 自带的 `dropTableId` 因此可能不生效**。
+5. `guaranteed.boundEnemyId` 写的是第一个匹配 action 的 `guaranteedDrop` pin，**不再覆盖它的 `dropTableId`**（OZX-1041）；过渡钥匙同理，落在钥匙房最后一个 launch 的 pin 上。两个字段互不覆盖，所以第 4 步和第 5 步之间**不再有写入顺序依赖**——这是过去「我改的 drop 没生效」的主要来源之一。
 6. 编译产物落在 `[NonSerialized]` 字段上（§2），因此源 json 无法解释「这个 seed 下这个房间到底有什么」。这正是工具要提供 Effective 视图的原因。
 
 ---
@@ -363,7 +363,8 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 
 **不要做**
 
-- 不要把 `inlineEncounter` / `inlineLootPlan` / `floorLootTableId` / `guaranteedCargoTableIds` / `effectiveStageWeight` 写进 json。
+- 不要把 `inlineEncounter` / `inlineLootPlan` / `floorLootTableId` / `guaranteedCargo` / `effectiveStageWeight` 写进 json。
+- 不要再写 `EncounterAction.dropTableIdOverride`：OZX-1041 把它改名为 `dropTableId`，JsonUtility 会静默丢弃未声明字段，漏改不报错，只是无声退回敌人自带的表。
 - 不要把 `masterSeed`、`topRoomIds`、`topMiddleRoomId`、`exitRoomId` 作为手写字段推荐。
 - 不要为 `boundWaveLastEnemy` 和 `buffDurationSeconds` 提供新建入口（前者抛错，后者不再读取）。
 - 不要用文件名推断 id，也不要因为普通编辑就重命名文件。

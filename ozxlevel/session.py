@@ -205,18 +205,39 @@ def key_sources(document: dict) -> dict[str, set[str]]:
 
     Keys reach the player through every loot channel, so all of them are
     walked: the room's own plan, its floor table, its guaranteed cargo, a
-    static placement's table, and — the one that actually carries the
-    cross-floor keys in this data — a `dropTableIdOverride` on an
-    `inlineEncounter` wave, which is `InjectGuaranteedDrops`' death channel.
+    static placement's table, and the waves of its `inlineEncounter`.
+
+    The one that actually carries the cross-floor keys in this data has moved.
+    Before OZX-1041 it was a synthesised one-entry table stamped onto a wave's
+    `dropTableIdOverride`; now it is a `guaranteedDrop` pin naming the key
+    item outright, and `loot_story_f{n}_0` does not exist any more. So a key
+    is looked for in two shapes — inside a table, and named directly on a pin
+    — because a capture taken before the change is still a capture.
     """
     tables = document.get("generatedLootTables") or {}
+
+    def is_key(item_id):
+        return bool(item_id) and str(item_id).startswith("key_")
 
     def keys_in(table_id):
         table = tables.get(table_id)
         if not table:
             return set()
-        return {e.get("itemId") for e in table.get("entries") or []
-                if str(e.get("itemId") or "").startswith("key_")}
+        found = {e.get("itemId") for e in table.get("entries") or []
+                 if is_key(e.get("itemId"))}
+        # OZX-1047: an entry may draw from a nested table instead.
+        for e in table.get("entries") or []:
+            nested = e.get("tableId")
+            if nested and nested != table_id:
+                found |= keys_in(nested)
+        return found
+
+    def keys_on_pin(pin):
+        """A `{itemId|tableId, count}` pin — on a launch, or on a cargo box."""
+        if not isinstance(pin, dict):
+            return set()
+        found = {pin["itemId"]} if is_key(pin.get("itemId")) else set()
+        return found | keys_in(pin.get("tableId"))
 
     out: dict[str, set[str]] = {}
     for floor in document.get("floors") or []:
@@ -227,18 +248,23 @@ def key_sources(document: dict) -> dict[str, set[str]]:
             found: set[str] = set()
             for table_id in (room.get("lootPlanId"), room.get("floorLootTableId")):
                 found |= keys_in(table_id)
+            for cargo in room.get("guaranteedCargo") or []:
+                found |= keys_on_pin(cargo)
+            # Pre-OZX-1041 captures: guaranteed cargo was a list of table ids.
             for table_id in room.get("guaranteedCargoTableIds") or []:
                 found |= keys_in(table_id)
             for placement in room.get("staticPlacements") or []:
                 found |= keys_in(placement.get("lootTableId"))
                 # An equipment/cargo placement can also name the item outright.
                 item = placement.get("itemId")
-                if item and str(item).startswith("key_"):
+                if is_key(item):
                     found.add(item)
             encounter = room.get("inlineEncounter") or {}
             for step in encounter.get("steps") or []:
                 action = step.get("action") or {}
-                found |= keys_in(action.get("dropTableIdOverride"))
+                found |= keys_in(action.get("dropTableId"))
+                found |= keys_in(action.get("dropTableIdOverride"))  # legacy
+                found |= keys_on_pin(action.get("guaranteedDrop"))
             if found:
                 out[rid] = found
     return out
