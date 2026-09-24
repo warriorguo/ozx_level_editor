@@ -796,6 +796,15 @@ class Dataset:
                      "weight": e.get("weight"), "maxPerRoom": e.get("maxPerRoom"),
                      "dropTableId": e.get("dropTableId"),
                      "missing": self.get("EnemyData", e.get("enemyId")) is None,
+                     # OZX-1032: the spawner channel. A `category: "spawner"`
+                     # enemy produces nothing on its own — it only drains what
+                     # an encounter queued into it — so a spawner dropped into
+                     # a pool without these two fields is an inert body with
+                     # the HP of a wall. Declared iff BOTH are set.
+                     "minionId": e.get("minionId") or None,
+                     "minionsPerSpawner": e.get("minionsPerSpawner") or 0,
+                     "isSpawner": bool(e.get("minionId")
+                                       and (e.get("minionsPerSpawner") or 0) > 0),
                      "pointer": f"{base}/enemyPool/{ei}"}
                     for ei, e in enumerate(floor.get("enemyPool") or [])
                 ],

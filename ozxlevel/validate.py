@@ -452,6 +452,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                                      f"floor {fi}: enemyPool '{ref}' does not exist",
                                      entity=plan_id,
                                      pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
+        issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
         boss = floor.get("bossId")
         if boss and ds.get("EnemyData", boss) is None:
             issues.append(_issue("error", "DATA_REFERENCE_MISSING",
@@ -486,6 +487,91 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                     entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
 
         issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+    return issues
+
+
+def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
+                         fptr: str, floor: dict) -> list[dict]:
+    """`enemyPool[].minionId` / `minionsPerSpawner` — the spawner channel.
+
+    OZX-1032. A `category: "spawner"` enemy produces NOTHING on its own:
+    `EnemyEmitController` only drains what an encounter queued into it through
+    `EncounterAction.viaSpawner`, and `produceIntervalSeconds` merely paces
+    that drain. A hand-authored encounter always writes the spawner and its
+    minion step as a pair; a procedural floor had no way to say the second
+    half, so a spawner dropped into an `enemyPool` came out as an inert body
+    with the HP of a wall. These two fields are that second half, and every
+    rule below guards a failure that is otherwise silent:
+
+    - a half-declared pair reads as a spawner to a designer and as an ordinary
+      enemy to the sampler, so the factory ships inert — the exact condition
+      the channel was added to end;
+    - a minion from outside the pool slips a type past every guarantee pool
+      membership carries (one run meets it, its role has spawn cells on every
+      tilemap the floor can draw, it carries an elite block), and surfaces as
+      `EnemyService.Spawn` throwing mid-room;
+    - a spawner producing itself, or another spawner, builds a chain whose
+      population nothing bounds — `maxAlive` gates whole encounter steps and
+      cannot stop it.
+    """
+    pool = floor.get("enemyPool") or []
+    if not pool:
+        return []
+
+    spawner_ids = {e.get("enemyId") for e in pool
+                   if e.get("minionId") and (e.get("minionsPerSpawner") or 0) > 0}
+    member_ids = {e.get("enemyId") for e in pool}
+
+    issues: list[dict] = []
+    for ei, entry in enumerate(pool):
+        eptr = f"{fptr}/enemyPool/{ei}"
+        minion = entry.get("minionId") or None
+        count = entry.get("minionsPerSpawner") or 0
+        if not minion and count <= 0:
+            continue
+        who = f"floor {fi}: enemyPool[{ei}] ('{entry.get('enemyId')}')"
+
+        if bool(minion) != (count > 0):
+            issues.append(_issue(
+                "error", "LEVEL_SPAWNER_PAIR_INCOMPLETE",
+                f"{who} declares half a spawner pair: minionId={minion!r}, "
+                f"minionsPerSpawner={count}. Both are required — with one missing "
+                f"the entry is sampled as an ordinary enemy, and a spawner handed "
+                f"no minions stands in the room producing nothing",
+                entity=plan_id, pointer=eptr))
+            continue
+
+        if minion == entry.get("enemyId"):
+            issues.append(_issue(
+                "error", "LEVEL_SPAWNER_SELF_MINION",
+                f"{who} names itself as its own minion. A spawner emitting itself "
+                f"grows without bound; maxAlive gates whole encounter steps and "
+                f"cannot stop it",
+                entity=plan_id, pointer=f"{eptr}/minionId"))
+        elif minion in spawner_ids:
+            issues.append(_issue(
+                "error", "LEVEL_SPAWNER_CHAINED",
+                f"{who} has minionId '{minion}', which is itself a spawner on this "
+                f"floor. Chained production has no population bound — keep a "
+                f"spawner's minion an ordinary enemy",
+                entity=plan_id, pointer=f"{eptr}/minionId"))
+        elif minion not in member_ids:
+            issues.append(_issue(
+                "error", "LEVEL_SPAWNER_MINION_NOT_IN_POOL",
+                f"{who} has minionId '{minion}', which is not in this floor's "
+                f"enemyPool. The minion has to be a pool member so it inherits what "
+                f"membership guarantees: one run meets it, its role has spawn cells "
+                f"on every tilemap this floor can draw, and it carries an elite "
+                f"block. Add it to the pool — weight 0 is not a way to hide it",
+                entity=plan_id, pointer=f"{eptr}/minionId"))
+
+        # Not a rule upstream (the pool check above already covers the pool),
+        # but a minion naming nothing at all would be reported by neither.
+        if minion and minion in member_ids and ds.get("EnemyData", minion) is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{who}: minionId '{minion}' does not exist",
+                entity=plan_id, pointer=f"{eptr}/minionId"))
     return issues
 
 

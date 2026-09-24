@@ -113,6 +113,8 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 **`viaSpawner` 不是「生成器类型」，是敌人 id。** 它要求房间里**有活着的该类型敌人**充当生产通道，请求排队直到有实例空闲。当前使用的 6 个都是敌人：`evil_ground_factory`(6)、`big_mouth`(5)、`husk`(4)、`kolossoxenophis`(3)、`evil_watcher`(1)、`broodwing`(1)。注意 **没有任何敌人配置了 `spawnConfig.enemyIds`**，所以不能用那个字段来筛选合法的 spawner——能不能生产是运行时能力，不是数据声明。编辑器能静态证明的只有「该 encounter 在此之前 launch 过这种敌人」或「房间的 placement 挂了这种敌人」；证明不了就给 warning。
 
+程序化楼层是例外：`FloorPlanData.enemyPool` 的条目现在可以自带 `minionId` / `minionsPerSpawner`（OZX-1032），`PoolSampler` 为每台抽到的 spawner 合成一条 `viaSpawner` step，id 形如 `jammer_via_evil_ground_factory`。这种 step 的 `viaSpawner` 一定可达——同一个房间刚刚放下了那台 spawner——所以**不要**对它报 warning。校验规则见 `level_data_reference.md` §5.4。
+
 ### 1.5 校验（`EncounterValidator` 已有 + 需要补的）
 
 已有（结构性，抛异常）：verb 非 `launch`、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。

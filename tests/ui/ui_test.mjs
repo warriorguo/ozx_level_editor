@@ -368,6 +368,22 @@ if (plan) {
   // deleted the plane and every render after a write threw on the null.
   check('the map plane survives for the next render', !!q('#mapPlane'));
 
+  // ── the spawner channel is on the pool row ─────────────────────────────
+  // OZX-1032: a spawner produces nothing on its own, so an enemy-pool row
+  // that shows only weight and max/room says nothing about the four jammers
+  // each drawn factory adds on top of the floor's enemies/room budget.
+  {
+    const spawners = plan.floors.flatMap((f) => f.enemyPool.filter((e) => e.isSpawner));
+    const lines = qa('.plan-floor .spawner-line');
+    check('a spawner pool entry says what it spawns',
+          lines.length === spawners.length, `${lines.length} of ${spawners.length}`);
+    check('and how many of them each one is fed',
+          lines.every((l) => new RegExp(`×\\d+ \\S+ each`).test(l.textContent)),
+          lines[0]?.textContent);
+    check('an ordinary pool entry gets no such line',
+          qa('.plan-floor .pool-entry').length > lines.length);
+  }
+
   check('every tile group the theme owns is offered',
         qa('.plan-floor .tilepart').length ===
           plan.floors.reduce((n, f) => n + f.themeParts.all.length, 0));

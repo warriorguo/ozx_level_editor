@@ -93,7 +93,15 @@ def fixtures(tmp_path_factory):
     # client has a whole second render path for it.
     plans = boot["plans"]
     if plans:
-        (out / "plan.json").write_text(json.dumps(api.plan(plans[0]["id"])))
+        # Prefer one that uses the spawner channel (OZX-1032): the pool row
+        # has a second line only when a floor declares one, so a plan without
+        # it would skip that check in silence.
+        views = [api.plan(p["id"]) for p in plans]
+        chosen_plan = next(
+            (v for v in views
+             if any(e["isSpawner"] for f in v["floors"] for e in f["enemyPool"])),
+            views[0])
+        (out / "plan.json").write_text(json.dumps(chosen_plan))
     return out
 
 

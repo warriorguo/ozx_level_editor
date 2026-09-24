@@ -253,7 +253,7 @@ LevelBasePlanData
 | `roomCountMin/Max` | 房间数区间，编译时随机取 | 18 |
 | `themeId` | 楼层主题 | 18 |
 | `stageTypes` | stage 比例，见 §5.2 | 18 |
-| `enemyPool` + `enemiesPerRoom` | 敌人名册。**设了 `enemyPool` 就必须给 `enemiesPerRoom > 0`**，否则 fail-fast | 12 |
+| `enemyPool` + `enemiesPerRoom` | 敌人名册。**设了 `enemyPool` 就必须给 `enemiesPerRoom > 0`**，否则 fail-fast。条目可另带 spawner 通道，见 §5.4 | 12 |
 | `floorLootPlan` | 楼层掉落方案，见 §5.3 | 12 |
 | `transitionKeyId` | 过渡钥匙 item id；编译期自动绑到 peak/跨层流程并插锁门 | 10 |
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
@@ -282,6 +282,41 @@ LevelBasePlanData
 | `stageMustDrop[]` | `stageType`, `drops[{itemId,count}]` | 该 stage 的**每个房间**各生成一个装着该 item 的 cargo |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
+
+### 5.4 EnemyPoolEntryData 的 spawner 通道（OZX-1032，核对于 `ozx_base@bc3f3f24`）
+
+`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner? }`。
+
+**`category: "spawner"` 的敌人自己什么都不产。** `EnemyEmitController` 只排干「encounter 通过 `EncounterAction.viaSpawner` 塞进去的请求」，`produceIntervalSeconds` 只是排干的节奏。手写 encounter 一直是把 spawner 和它的 minion step 成对写的；程序化楼层过去没法说出后半句，所以丢进 `enemyPool` 的 spawner 出来就是一具血厚如墙的哑火躯体。这两个字段就是那后半句：
+
+| 字段 | 语义 |
+|---|---|
+| `minionId` | 这台 spawner 产什么。非空 = 本条目是 spawner 锚点。**必须是同层 `enemyPool` 的另一个成员** |
+| `minionsPerSpawner` | 一台 spawner 喂几只；乘以本房抽到的该 spawner 只数 |
+
+**两者必须同时非空或同时缺省**，旧 plan 不写这两个字段，行为不变。
+
+采样时 `PoolSampler` 为每台抽到的 spawner 合成一条 `viaSpawner` step：
+
+```jsonc
+{ "id": "jammer_via_evil_ground_factory",
+  "action": { "verb": "launch", "enemyId": "jammer", "min": 6, "max": 6,
+              "viaSpawner": "evil_ground_factory" } }
+```
+
+预览要跟上的三条语义：
+
+- 这些 minion **不计入** `enemiesPerRoom`，也**不计入** encounter 的 `maxAlive`（后者只数直接放置的）。有工厂的房间实际身体数是 `enemiesPerRoom + minionsPerSpawner × n`。
+- **spawner 条目不参与 elite round-robin**（它产的 minion 参与——`viaSpawner` 通道端到端带着 `eliteCount`），所以预览里工厂的 `eliteCount` 恒为 0。提拔 spawner 会缩放它的 root，把 SpawnPoints 的发射锚点和血条一起拖走。
+- 合成出来那条 step 的 `dropTableId` 来自 **minion 自己的** pool 条目，不是 spawner 的——死的是 minion。
+- pin 不能骑在 `viaSpawner` 的 launch 上（§1.6）——通道请求可以被合法丢弃。
+
+`LevelPlanValidator.ValidateSpawnerPairs` 的四条，每条挡的都是静默或半路抛的失败：
+
+1. 只写了一半 → 按普通敌人采样，工厂哑火站着（**无报错**）。
+2. `minionId` 不是同层 `enemyPool` 成员 → 绕过池成员身份的三重保证（一次 run 见得到、role 在本层每张 tilemap 上都有生成格、带 elite 块），半路 `EnemyService.Spawn` 抛错。
+3. 不能产自己 → 无界增长，`maxAlive` 门的是整条 step，管不到通道里面。
+4. 不能产另一台 spawner → 链式生产没有人口上界。
 
 ---
 
@@ -334,6 +369,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - `steamTrain: true` 但房间模板没有 rail 层 → 抛错。
 - `generatorType: "static"` 但 `rooms` 为空 → 抛错。
 - `enemyPool` 非空但 `enemiesPerRoom <= 0` → 抛错。
+- spawner 通道四条（`LevelPlanValidator.ValidateSpawnerPairs`，见 §5.4）→ 抛错。
 - `guaranteed` 条目绑定数 ≠ 1 → 抛错；`boundWaveLastEnemy` 无条件抛错。
 - `endsRunOnClear: true` 但楼层没有 boss 房 → 抛错。
 
@@ -341,6 +377,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 
 - **重复 `(dataType, id)`**：后加载者直接覆盖，无任何提示。
 - **未知 `generatorType`**：静默变成 `tree`。
+- **spawner 条目只写了一半**：`minionId` 或 `minionsPerSpawner` 缺一个时 `EnemyPoolEntry.IsSpawner` 判定为假，这条按普通敌人采样——工厂原地站着不产任何东西，没有任何报错（OZX-1032，见 §5.4）。
 - **跨层门没有配 stairLinks**：静默死路。
 - **新的 `openDoors` 组合没有对应模板**：生成器重映射时把门封掉，源数据看起来完全正常。
 - **只填 `bossId` 的静态 boss 房**：不刷任何怪。

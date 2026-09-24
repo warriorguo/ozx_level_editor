@@ -1026,6 +1026,27 @@ button { color: inherit; }
    the row names a family, so it is muted the way a derived value is. */
 .loot-item.from-table .li-name { color: var(--cyan); }
 
+/* OZX-1032: the spawner channel on a plan's enemy-pool row. Same second-line
+   shape as a wave's drop, because it answers the same kind of question — what
+   else does this entry put in the room that its own numbers do not say. */
+.pool-entry { row-gap: 4px; }
+.spawner-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: #c2c8c2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spawner-line .drop-tag { color: #11140f; background: var(--cyan); border-color: var(--cyan); }
+.spawner-line.bad, .spawner-line.bad .drop-tag {
+  color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
+}
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

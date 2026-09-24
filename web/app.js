@@ -1248,13 +1248,30 @@ function renderPlanFloors() {
       : '<div class="inline-empty">No stage slices</div>';
 
     const pool = f.enemyPool.length
-      ? f.enemyPool.map((e) => `<div class="content-entry ${e.missing ? 'missing' : ''}">
-          <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.enemyId))}</span>
-          <span><strong>${esc(e.enemyId || '?')}</strong><small>${
-            e.missing ? 'no EnemyData with this id'
-              : `weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
-          }</small></span>
-        </div>`).join('')
+      ? f.enemyPool.map((e) => {
+          // OZX-1032: a spawner produces nothing on its own, so the pair that
+          // makes it produce anything has to be visible on the row. These
+          // minions are ON TOP of enemies/room — the room's real body count
+          // is enemiesPerRoom + minionsPerSpawner × however many drew.
+          const channel = e.isSpawner
+            ? `<span class="spawner-line" title="OZX-1032: each of these that a room draws is paired with a viaSpawner launch of ${esc(e.minionId)}, on top of the room's enemies/room budget">
+                 <span class="drop-tag">spawns</span>${esc(`×${e.minionsPerSpawner} ${e.minionId} each`)}</span>`
+            // Half a pair reads as a spawner to a designer and as an ordinary
+            // enemy to the sampler. The validator errors; the row says why.
+            : (e.minionId || e.minionsPerSpawner)
+              ? `<span class="spawner-line bad" title="Both minionId and minionsPerSpawner are required; with one missing this is sampled as an ordinary enemy">
+                   <span class="drop-tag">spawns</span>${esc(
+                     e.minionId ? `${e.minionId} — no minionsPerSpawner`
+                                : `×${e.minionsPerSpawner} — no minionId`)}</span>`
+              : '';
+          return `<div class="content-entry pool-entry ${e.missing ? 'missing' : ''}">
+            <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.enemyId))}</span>
+            <span><strong>${esc(e.enemyId || '?')}</strong><small>${
+              e.missing ? 'no EnemyData with this id'
+                : `weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+            }</small></span>${channel}
+          </div>`;
+        }).join('')
       : '<div class="inline-empty">No enemy pool</div>';
 
     // Every part the theme owns, on or off. A chip UI rather than a text
