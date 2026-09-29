@@ -383,6 +383,20 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                     pointer=f"{sptr}/action/dropTableIdOverride"))
             issues.extend(_pin_issues(ds, encounter_id, index, sptr, action))
 
+            # OZX-1063: the sampler copies a pool entry's variant and clump
+            # fields onto the step it synthesises, so an action carries the
+            # same four. The role rule is NOT repeated here — an action has
+            # no pool to take a representative's spawn layer from, and
+            # EncounterValidator does not check it either.
+            aptr = f"{sptr}/action"
+            issues.extend(_variant_issues(
+                ds, encounter_id, f"step {index}", aptr, action.get("enemyId"),
+                list(action.get("variantIds") or []),
+                via_spawner=bool(action.get("viaSpawner"))))
+            issues.extend(_cluster_issues(
+                encounter_id, f"step {index}", aptr, action,
+                via_spawner=bool(action.get("viaSpawner"))))
+
         condition = step.get("condition")
         if condition:
             kind = condition.get("kind")
@@ -534,6 +548,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                                      entity=plan_id,
                                      pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
         issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
+        issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
         issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
 
         # The same entries a room carries, applied to every generated room of
@@ -672,6 +687,153 @@ def _stage_weight_issues(ds: Dataset, plan_id: str, fi: int,
                   "authoring order",
                 entity=plan_id, pointer=eptr))
         seen.add(key)
+    return issues
+
+
+def _cluster_issues(entity: str, where: str, ptr: str, source: dict,
+                    *, is_spawner: bool = False,
+                    via_spawner: bool = False) -> list[dict]:
+    """OZX-1063 clumping — on a pool entry or on an encounter action.
+
+    Both carry the same four fields (the sampler copies an entry's onto the
+    step it synthesises), and both are validated the same way upstream, so
+    one function serves `LevelPlanValidator.ValidateClusterShape` and
+    `EncounterValidator.ValidateVariantsAndClump`.
+
+    The radius is the load-bearing one. Inside a clump the executor's
+    minimum-spacing guard is deliberately WAIVED — that waiver is what a
+    clump is — so nothing else keeps the bodies off a single point.
+    """
+    lo = source.get("clusterSizeMin") or 0
+    hi = source.get("clusterSizeMax") or 0
+    radius = source.get("clusterRadius") or 0
+    issues: list[dict] = []
+
+    if hi <= 1 and lo <= 1:
+        if radius > 0:
+            issues.append(_issue(
+                "error", "CLUSTER_RADIUS_UNUSED",
+                f"{where} sets clusterRadius {radius} but no clump size, so nothing "
+                f"ever uses the radius. Set clusterSizeMin/Max, or drop it",
+                entity=entity, pointer=f"{ptr}/clusterRadius"))
+        return issues
+
+    if lo > hi:
+        issues.append(_issue(
+            "error", "CLUSTER_SIZE_RANGE_INVALID",
+            f"{where} has clusterSizeMin {lo} above clusterSizeMax {hi}",
+            entity=entity, pointer=f"{ptr}/clusterSizeMin"))
+    if radius <= 0:
+        issues.append(_issue(
+            "error", "CLUSTER_RADIUS_MISSING",
+            f"{where} clumps up to {hi} bodies but clusterRadius is {radius}. "
+            f"Inside a clump the launch's minimum-spacing guard is waived on "
+            f"purpose, so the radius is the only thing keeping the bodies off one "
+            f"point",
+            entity=entity, pointer=f"{ptr}/clusterRadius"))
+
+    if is_spawner:
+        issues.append(_issue(
+            "error", "CLUSTER_ON_SPAWNER_ANCHOR",
+            f"{where} is a spawner anchor AND asks for clumps. The minions go out "
+            f"through the viaSpawner channel, which places them at the spawner's own "
+            f"emit anchors and never reads these fields, so the clump would apply to "
+            f"the spawners themselves — say that deliberately or not at all",
+            entity=entity, pointer=ptr))
+    if via_spawner:
+        issues.append(_issue(
+            "error", "CLUSTER_ON_SPAWNER_CHANNEL",
+            f"{where} routes through viaSpawner, which places bodies at the "
+            f"spawner's emit anchors and never reads the clump fields",
+            entity=entity, pointer=ptr))
+    return issues
+
+
+def _variant_issues(ds: Dataset, entity: str, where: str, ptr: str,
+                    representative: str | None, variants: list,
+                    *, role_of=None, via_spawner: bool = False) -> list[dict]:
+    """OZX-1063 variant groups — several forms of ONE creature in one entry.
+
+    The entry is sampled, capped and counted as a single type; each body it
+    places draws its concrete id from `{enemyId} + variantIds`, uniformly and
+    with replacement. The three Blight-Sac plants were three entries with
+    three weights and three caps, which made "2-3 sprouts in a patch"
+    unsayable: the sampler counts entries, so a patch had to be one entry
+    before it could have a size.
+
+    `role_of` is passed only where the role rule applies (a pool entry). The
+    group stands on ONE spawn layer, taken from the representative, so a
+    variant with a different role would be dropped onto a layer that is not
+    its own — silently, in whatever fraction of bodies the draw gave it.
+    """
+    issues: list[dict] = []
+    if via_spawner and variants:
+        issues.append(_issue(
+            "error", "VARIANT_ON_SPAWNER_CHANNEL",
+            f"{where} routes through viaSpawner and also names variantIds; the "
+            f"channel emits the spawner's own minion type and never reads them",
+            entity=entity, pointer=f"{ptr}/variantIds"))
+
+    rep_role = role_of(representative) if (role_of and representative) else None
+    for vi, variant in enumerate(variants):
+        vptr = f"{ptr}/variantIds/{vi}"
+        if not variant:
+            issues.append(_issue(
+                "error", "VARIANT_EMPTY_SLOT",
+                f"{where}: variantIds[{vi}] is empty. The per-body draw is uniform "
+                f"over the whole list, so an empty slot takes its share and that "
+                f"share of the group fails to spawn",
+                entity=entity, pointer=vptr))
+            continue
+        if variant == representative:
+            issues.append(_issue(
+                "error", "VARIANT_REPEATS_REPRESENTATIVE",
+                f"{where}: variantIds[{vi}] repeats the entry's own enemyId "
+                f"'{representative}'. The representative is already in the draw; "
+                f"listing it again doubles its share, which is a weight expressed "
+                f"by accident",
+                entity=entity, pointer=vptr))
+            continue
+        if ds.get("EnemyData", variant) is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{where}: variantIds[{vi}] names '{variant}', which is not an "
+                f"EnemyData",
+                entity=entity, pointer=vptr))
+            continue
+        if role_of is not None:
+            variant_role = role_of(variant)
+            if variant_role != rep_role:
+                issues.append(_issue(
+                    "error", "VARIANT_ROLE_MISMATCH",
+                    f"{where}: representative '{representative}' has role "
+                    f"'{rep_role}' but variant '{variant}' has role "
+                    f"'{variant_role}'. The group takes ONE spawn layer, chosen from "
+                    f"the representative, so the odd variant would stand on a layer "
+                    f"that was never authored for it. Split it into its own pool "
+                    f"entry, or give it the same role",
+                    entity=entity, pointer=vptr))
+    return issues
+
+
+def _pool_variant_issues(ds: Dataset, plan_id: str, fi: int,
+                         fptr: str, floor: dict) -> list[dict]:
+    """Variant and clump fields on one floor's `enemyPool`."""
+    def role_of(enemy_id):
+        doc = ds.get("EnemyData", enemy_id)
+        return doc.value.get("role") if doc else None
+
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        eptr = f"{fptr}/enemyPool/{ei}"
+        where = f"floor {fi}: enemyPool[{ei}] ('{entry.get('enemyId')}')"
+        issues.extend(_variant_issues(
+            ds, plan_id, where, eptr, entry.get("enemyId"),
+            list(entry.get("variantIds") or []), role_of=role_of))
+        issues.extend(_cluster_issues(
+            plan_id, where, eptr, entry,
+            is_spawner=bool(entry.get("minionId")
+                            and (entry.get("minionsPerSpawner") or 0) > 0)))
     return issues
 
 

@@ -1098,6 +1098,27 @@ button { color: inherit; }
   color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
 }
 
+/* OZX-1063: a variant group and/or a clump. The count on the row belongs to
+   the GROUP, so the row has to say the group exists — a reader who sees only
+   the representative reads one creature at one weight, which is exactly the
+   arithmetic that folding three entries into one changed. */
+.group-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: #c2c8c2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-line .drop-tag { color: #11140f; background: var(--acid); border-color: var(--acid); }
+.group-line.bad, .group-line.bad .drop-tag {
+  color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
+}
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

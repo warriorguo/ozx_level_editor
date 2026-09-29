@@ -439,6 +439,36 @@ function skillOptions(selected) {
  *  room's own lootPlanId and its cargo — can never reveal it. This is the
  *  channel skills reach the player through, and it was invisible.
  */
+/** OZX-1063: a variant group and/or a clump, on a pool entry or on a wave.
+ *
+ * The count belongs to the GROUP — it is sampled, capped and counted as one
+ * type — and which form each body takes is drawn at placement time. Saying
+ * that out loud is the point: a reader who sees only the representative will
+ * read the row as one creature at one weight, which is the arithmetic the
+ * fold changed. A clump then decides how those bodies stand: groups of
+ * [min, max] around a shared anchor, overflow starting another clump.
+ */
+function groupLine(e) {
+  const variants = e.variantIds || [];
+  const c = e.cluster;
+  if (!variants.length && !c) return '';
+  const bits = [];
+  if (variants.length) bits.push(`1 of ${variants.length + 1} forms per body`);
+  if (c && c.declared) {
+    const size = c.sizeMin === c.sizeMax ? `${c.sizeMax}` : `${c.sizeMin}–${c.sizeMax}`;
+    bits.push(`clumps of ${size} @ r${c.radius}`);
+  } else if (c) {
+    // A radius with no size is authored text that does nothing.
+    bits.push(`clusterRadius ${c.radius} with no clump size`);
+  }
+  const bad = c && !c.declared;
+  return `<span class="group-line${bad ? ' bad' : ''}"
+    title="${esc(variants.length
+      ? `Sampled, capped and counted as ONE type: ${[e.id || e.enemyId, ...variants].join(', ')}`
+      : 'Inside a clump the minimum-spacing guard is waived, so the radius is what keeps the bodies apart')}">
+    <span class="drop-tag">group</span>${esc(bits.join(' · '))}</span>`;
+}
+
 /** Bodies in a room: the ones placed on spawn points, plus the ones hatched.
  *
  * OZX-1063 made the second number real. Eggs open into 1..N occupants each
@@ -635,7 +665,7 @@ function renderRooms() {
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${e.count}" aria-label="${esc(e.id)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span>${hatchLine(e)}${dropLine(e.drop)}</div>`;
+            </span>${groupLine(e)}${hatchLine(e)}${dropLine(e.drop)}</div>`;
         }).join('')
       : `<div class="inline-empty">${room.encounterId
             ? 'Encounter has no launch steps'
@@ -1334,7 +1364,7 @@ function renderPlanFloors() {
             <span><strong>${esc(e.enemyId || '?')}</strong><small>${
               e.missing ? 'no EnemyData with this id'
                 : `weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
-            }</small></span>${channel}
+            }</small></span>${groupLine(e)}${channel}
           </div>`;
         }).join('')
       : '<div class="inline-empty">No enemy pool</div>';

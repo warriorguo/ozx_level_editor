@@ -813,6 +813,12 @@ class Dataset:
                 "hatch": hatch,
                 "hatchedMin": (hatch["countMin"] * bodies) if hatch else 0,
                 "hatchedMax": (hatch["countMax"] * bodies) if hatch else 0,
+                # OZX-1063: the sampler copies a pool entry's variant and
+                # clump fields onto the step it synthesises, so a wave can
+                # carry them too. The count is the GROUP's; which variant
+                # each body is is drawn at placement time.
+                "variantIds": [v for v in (action.get("variantIds") or [])],
+                "cluster": _cluster_brief(action),
                 "stepIndex": index,
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),
@@ -922,6 +928,15 @@ class Dataset:
                      "minionsPerSpawner": e.get("minionsPerSpawner") or 0,
                      "isSpawner": bool(e.get("minionId")
                                        and (e.get("minionsPerSpawner") or 0) > 0),
+                     # OZX-1063: variants of ONE creature folded into one
+                     # entry. `enemyId` stays the representative — the entry
+                     # is sampled, capped and counted as one type, and each
+                     # body draws its concrete id from the group. Folding is
+                     # not free: the coverage tier deals one per ENTRY, so
+                     # the group gets one guaranteed body instead of three.
+                     "variantIds": [v for v in (e.get("variantIds") or [])],
+                     "isVariantGroup": bool(e.get("variantIds")),
+                     "cluster": _cluster_brief(e),
                      "pointer": f"{base}/enemyPool/{ei}"}
                     for ei, e in enumerate(floor.get("enemyPool") or [])
                 ],
@@ -1275,6 +1290,28 @@ def describe_condition(condition: dict | None) -> str:
     if kind == "custom":
         return f"on {condition.get('key') or '?'}"
     return f"on {kind or 'unknown'}"
+
+
+def _cluster_brief(source: dict) -> dict | None:
+    """OZX-1063 clumping, off a pool entry or off an encounter action.
+
+    The two carry the same four fields — the sampler copies an entry's values
+    onto the step it synthesises — so one reader serves both.
+
+    Clumping is declared by a size above one. `clusterRadius` alone declares
+    nothing, which is a finding rather than a shape: inside a clump the
+    executor's minimum-spacing guard is waived, so the radius is the only
+    thing keeping the bodies off one point.
+    """
+    lo = source.get("clusterSizeMin") or 0
+    hi = source.get("clusterSizeMax") or 0
+    radius = source.get("clusterRadius") or 0
+    if hi <= 1 and lo <= 1:
+        # A radius with no size still has to reach the view: it is authored
+        # text that does nothing, and the row is where that gets noticed.
+        return {"declared": False, "sizeMin": lo, "sizeMax": hi,
+                "radius": radius} if radius else None
+    return {"declared": True, "sizeMin": lo, "sizeMax": hi, "radius": radius}
 
 
 def _code(identifier: str) -> str:
