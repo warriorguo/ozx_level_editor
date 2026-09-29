@@ -1051,6 +1051,24 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 "error", "DATA_REFERENCE_MISSING",
                 f"{who}: minionId '{minion}' does not exist",
                 entity=plan_id, pointer=f"{eptr}/minionId"))
+
+        # OZX-1064 made the line a request rather than a promise: it is now
+        # charged to the floor's enemiesPerRoom AND capped by the MINION's
+        # own maxPerRoom, because a minion is the same enemy arriving through
+        # a second door. Whichever runs out first truncates it. So a
+        # minionsPerSpawner above the minion's cap is a number that can never
+        # be met — not an error (the spawner still shows up, producing fewer),
+        # but the plan says one thing and the room does another, every time.
+        minion_entry = next((e for e in pool if e.get("enemyId") == minion), None)
+        minion_cap = (minion_entry or {}).get("maxPerRoom") or 0
+        if minion_cap and count > minion_cap:
+            issues.append(_issue(
+                "warning", "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED",
+                f"{who} asks for {count} minions per spawner, above '{minion}'s "
+                f"maxPerRoom of {minion_cap}. Since OZX-1064 the line is capped by "
+                f"the minion's own cap and charged to enemiesPerRoom, so it is "
+                f"truncated every time — the room gets at most {minion_cap}",
+                entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
     return issues
 
 

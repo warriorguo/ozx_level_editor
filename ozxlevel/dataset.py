@@ -32,6 +32,10 @@ DIRECTION_TWIN = {0: 1, 1: 0, 2: 3, 3: 2}
 FALLBACK_DROP_ITEM = "item_exp_small"
 ELITE_BONUS_DROP_ITEM = "item_exp_large"
 
+# StaticPlacementPolicy.OilTankKind — the one placement kind a generated room
+# can be refused on the strength of which room it is.
+OIL_TANK_KIND = "oiltank"
+
 # ISkillService.DefaultDropLevelCap — what `skillDropLevelCap` resolves to
 # when a plan leaves it at 0. There is no "no cap" value; a plan that wants
 # the filter out of the way writes a number above every maxLevel it can drop.
@@ -976,6 +980,14 @@ class Dataset:
                      "chancePercent": round((p.get("chance") or 1) * 100, 1),
                      "placement": p.get("placement"),
                      "pinned": bool(p.get("cells")),
+                     # OZX-1057: the one room-level exception. The start room
+                     # is the only one the player does not choose to enter —
+                     # they materialise in it at launch and after every death
+                     # — and an oil tank is a chain-reaction hazard that
+                     # damages them. The rule lives in code because the
+                     # authoring handle cannot express it: this list applies
+                     # to a whole floor and never names a room.
+                     "skipsStartRoom": p.get("kind") == OIL_TANK_KIND,
                      "pointer": f"{base}/defaultStaticPlacements/{pi}"}
                     for pi, p in enumerate(
                         floor.get("defaultStaticPlacements") or [])

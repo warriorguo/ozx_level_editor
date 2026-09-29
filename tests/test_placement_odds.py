@@ -168,3 +168,22 @@ def test_a_room_placement_is_checked_the_same_way(ds):
         assert "ROOM_PLACEMENT_CHANCE_UNREAD" in found
     finally:
         room["staticPlacements"] = before
+
+
+# ── the one room-level exception (OZX-1057 / OLE-17) ─────────────────────
+
+
+def test_an_oil_tank_is_marked_as_skipping_the_start_room(ds):
+    """`defaultStaticPlacements` applies to a whole floor and never names a
+    room, so the exception cannot be authored — it lives in
+    `StaticPlacementPolicy` and is invisible in the JSON. The start room is
+    the one room the player does not choose to enter (at launch and after
+    every death) and an oil tank is a chain-reaction hazard that damages
+    them, so a view that drew it on every room would draw one that is not
+    there."""
+    view = ds.plan_view("chapter_3")
+    for floor in view["floors"]:
+        by_kind = {p["kind"]: p for p in floor["defaultStaticPlacements"]}
+        assert by_kind["oiltank"]["skipsStartRoom"] is True
+        assert by_kind["cargo"]["skipsStartRoom"] is False
+        assert by_kind["prop"]["skipsStartRoom"] is False

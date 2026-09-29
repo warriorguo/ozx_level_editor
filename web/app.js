@@ -1393,6 +1393,8 @@ function renderPlanFloors() {
             <span><strong>${esc(p.kind || '?')}</strong><small>${
               esc(what || (p.pinned ? 'pinned cells' : 'adapter default'))}</small></span>
             <span class="weight-value" title="how many at most">×${p.count || (p.pinned ? '—' : 0)}</span>
+            ${p.skipsStartRoom ? `<span class="odds-line" title="OZX-1057: the start room is the one room the player does not choose to enter — at launch and after every death — and an oil tank is a chain-reaction hazard that damages them">
+              <span class="drop-tag">except</span>the start room</span>` : ''}
             ${odds}</div>`;
         }).join('')
       : '<div class="inline-empty">No default placements — generated rooms spawn nothing static</div>';

@@ -338,7 +338,7 @@ LevelBasePlanData
 
 ⚠️ 契约注释说 `LevelPlanValidator` 同时强制「变体各自带 elite 块」，实际代码里只有 role 一条；elite 那半没实现（核对于 `f0a78923`）。
 
-#### 5.4.1 spawner 通道（OZX-1032，核对于 `ozx_base@bc3f3f24`）
+#### 5.4.1 spawner 通道（OZX-1032 / OZX-1064，核对于 `ozx_base@f0a78923`）
 
 
 **`category: "spawner"` 的敌人自己什么都不产。** `EnemyEmitController` 只排干「encounter 通过 `EncounterAction.viaSpawner` 塞进去的请求」，`produceIntervalSeconds` 只是排干的节奏。手写 encounter 一直是把 spawner 和它的 minion step 成对写的；程序化楼层过去没法说出后半句，所以丢进 `enemyPool` 的 spawner 出来就是一具血厚如墙的哑火躯体。这两个字段就是那后半句：
@@ -349,6 +349,8 @@ LevelBasePlanData
 | `minionsPerSpawner` | 一台 spawner 喂几只；乘以本房抽到的该 spawner 只数 |
 
 **两者必须同时非空或同时缺省**，旧 plan 不写这两个字段，行为不变。
+
+⚠️ **OZX-1064 起这条线是「请求」不是「承诺」**：它被计入 `enemiesPerRoom`（那个数字现在是这间房的**全部**身体数，两条通道合计），并且受 **minion 自己的 `maxPerRoom`** 限制——minion 是同一种敌人走第二道门进来的。谁先见底谁就截断这条线：房间少产几只，spawner 照样出现；只有连一只都放不下才不放这个 spawner。所以 `minionsPerSpawner` 写得比 minion 的 `maxPerRoom` 大，就是一条**每次都被截断**的线（chapter_3 floor 2 就是 6 vs 4）。实测每房敌人数 f0 13.59 → 11.06、f2 15.49 → 11.30，`jammer` 单房最多 8/10 → 4。合成遭遇的 `maxAlive` 不变，仍只数直接放置的身体。
 
 采样时 `PoolSampler` 为每台抽到的 spawner 合成一条 `viaSpawner` step：
 
@@ -487,6 +489,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **`countMin` 写在不是 `placement: "sidewall"` 的 entry 上**：读了就丢，摆放照旧（OZX-1057，见 §5.6）。
 - **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
 - **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。
+- **`defaultStaticPlacements` 里的 `oiltank` 不会下发给 start room**：规则在 `StaticPlacementPolicy` 里，JSON 上完全看不出来，所以照着 JSON 画预览会在出生房画出一个游戏里不存在的油罐（OZX-1057）。
 - **跨层门没有配 stairLinks**：静默死路。
 - **新的 `openDoors` 组合没有对应模板**：生成器重映射时把门封掉，源数据看起来完全正常。
 - **只填 `bossId` 的静态 boss 房**：不刷任何怪。

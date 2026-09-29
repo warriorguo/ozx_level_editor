@@ -119,8 +119,16 @@ def test_the_fields_survive_a_write_untouched(ds):
 # ── ValidateSpawnerPairs, moved forward to editing time ──────────────────
 
 
-def test_the_shipped_plan_has_no_spawner_findings(ds):
-    assert not [c for c in codes(ds) if c.startswith("LEVEL_SPAWNER_")]
+# The four pair rules. `LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` is deliberately
+# not one of them — it is a warning that the shipped chapter_3 does trip, and
+# folding it in here would make these tests assert the opposite of the file
+# that adds it.
+PAIR_CODES = ("LEVEL_SPAWNER_PAIR_INCOMPLETE", "LEVEL_SPAWNER_SELF_MINION",
+              "LEVEL_SPAWNER_CHAINED", "LEVEL_SPAWNER_MINION_NOT_IN_POOL")
+
+
+def test_the_shipped_plan_has_no_spawner_pair_findings(ds):
+    assert not [c for c in codes(ds) if c in PAIR_CODES]
 
 
 def test_half_a_pair_is_an_error(ds, plan):
@@ -184,4 +192,42 @@ def test_an_entry_with_no_channel_is_not_a_finding(ds, plan):
     for entry in pool_of(plan):
         entry.pop("minionId", None)
         entry.pop("minionsPerSpawner", None)
-    assert not [c for c in codes(ds) if c.startswith("LEVEL_SPAWNER_")]
+    assert not [c for c in codes(ds) if c in PAIR_CODES]
+
+
+# ── OZX-1064: the line is a request, not a promise ───────────────────────
+
+
+def test_a_line_above_the_minions_own_cap_always_truncates(ds):
+    """Since OZX-1064 the production line is charged to the floor's
+    enemiesPerRoom AND capped by the MINION's own maxPerRoom — a minion is
+    the same enemy arriving through a second door. Whichever runs out first
+    truncates it, so a `minionsPerSpawner` above that cap is a number the
+    room can never honour. chapter_3 floor 2 asks for 6 against a cap of 4.
+
+    A warning rather than an error: the spawner still appears and still
+    produces, just fewer. What is wrong is that the plan says one thing and
+    the room does another, every single time.
+    """
+    found = [i for i in validate_plan(ds, "chapter_3")
+             if i["code"] == "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED"]
+    assert len(found) == 1
+    assert found[0]["severity"] == "warning"
+    assert "6 minions" in found[0]["message"]
+    assert "maxPerRoom of 4" in found[0]["message"]
+
+
+def test_a_line_within_the_cap_is_not_flagged(ds, plan):
+    pool = pool_of(plan, floor=2)
+    entry = next(e for e in pool if e.get("minionId"))
+    entry["minionsPerSpawner"] = 4
+    assert "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED" not in codes(ds)
+
+
+def test_an_uncapped_minion_cannot_truncate(ds, plan):
+    """maxPerRoom 0 is "unbounded", so nothing is being exceeded."""
+    pool = pool_of(plan, floor=2)
+    entry = next(e for e in pool if e.get("minionId"))
+    minion = next(e for e in pool if e["enemyId"] == entry["minionId"])
+    minion["maxPerRoom"] = 0
+    assert "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED" not in codes(ds)
