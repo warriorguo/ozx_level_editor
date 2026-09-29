@@ -1060,6 +1060,44 @@ button { color: inherit; }
 /* 0 is not a small number here; it is "this stage drops none of that kind". */
 .weight-value.zero { color: var(--muted); }
 
+/* OZX-1057: a placement's chance / countMin. Second line on the entry, like a
+   wave's drop, because both are decided once for the WHOLE entry — reading
+   them as per-object numbers is the misunderstanding worth designing out. */
+.odds-carrier { row-gap: 4px; }
+.odds-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: #c2c8c2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.odds-line .drop-tag { color: #11140f; background: var(--cyan); border-color: var(--cyan); }
+
+/* OZX-1063: the clutch an egg opens into. Its own line because those bodies
+   are outside enemiesPerRoom AND outside the encounter's maxAlive — folding
+   them into the count would hide exactly the thing worth seeing. */
+.hatch-line {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 8px;
+  color: #c2c8c2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hatch-line .drop-tag { color: #11140f; background: var(--amber); border-color: var(--amber); }
+.hatch-line.bad, .hatch-line.bad .drop-tag {
+  color: var(--danger); background: none; border-color: rgba(255,90,120,.5);
+}
+
 /* ── real artwork in the catalogs ────────────────────────────────────────
    Sprites are cropped out of their sheet with background-position rather than
    sliced server-side, so the page does the work the sheet was designed for.

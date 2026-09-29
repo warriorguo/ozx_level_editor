@@ -119,6 +119,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                              entity=level_id,
                                              pointer=f"{pptr}/{name}"))
 
+                issues.extend(_placement_count_issues(level_id, rid, pi, pptr, p))
+
                 # SkillPlatformSpawnAdapter throws on both of these when the
                 # room spawns, so an unfinished skill platform takes the whole
                 # room down rather than quietly placing nothing.
@@ -236,6 +238,85 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: not reachable from start room '{start}'",
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
+    return issues
+
+
+# OZX-1057: only these adapters read `chance`; anything else throws rather
+# than silently appearing every time. `countMin` is narrower still — see below.
+CHANCE_HONOURING_KINDS = {"prop"}
+# The side-wall fill is the only path that passes `countMin` through to its
+# anchor chooser (`PropSpawnAdapter` → `SideWallPlacementLogic.ChooseAnchors`).
+# The plain random fill next to it does not, so a floor is read there and then
+# dropped — which is the failure this file exists for.
+COUNTMIN_HONOURING_PLACEMENTS = {"sidewall"}
+
+
+def _placement_count_issues(level_id: str, rid: str, pi: int,
+                            pptr: str, p: dict) -> list[dict]:
+    """`chance` and `countMin` on one static placement (OZX-1057).
+
+    `count` has always been a ceiling — random fill places what the room can
+    hold. These are the two ends that grew around it:
+
+    - `countMin` is the floor below which the entry declines ENTIRELY, so a
+      wall-mounted set-piece that would stand alone reads as a room rather
+      than as clutter, and the cells go to whatever runs next.
+    - `chance` is rolled once for the whole entry, not once per object. A room
+      is either a cultivation chamber with up to three pods or an ordinary
+      room with none; rolling per object would thin every room out evenly,
+      which is the distribution that makes a set-piece read as clutter.
+
+    Two of these throw upstream (`AuthoredStaticPlacementsLogic.ValidateChances`)
+    and two do not — but all four end in a placement that is not there and
+    says nothing about why, which is the same failure either way.
+    """
+    kind = p.get("kind")
+    count = p.get("count") or 0
+    count_min = p.get("countMin") or 0
+    chance = p.get("chance") or 0
+    pinned = bool(p.get("cells"))
+    issues: list[dict] = []
+
+    if chance:
+        if chance > 1:
+            issues.append(_issue(
+                "error", "ROOM_PLACEMENT_CHANCE_INVALID",
+                f"{rid}: placement {pi} sets chance={chance}; it is a probability in "
+                f"(0, 1]. Omit it (or write 0) to mean 'always'",
+                entity=level_id, pointer=f"{pptr}/chance"))
+        elif kind not in CHANCE_HONOURING_KINDS:
+            issues.append(_issue(
+                "error", "ROOM_PLACEMENT_CHANCE_UNREAD",
+                f"{rid}: placement {pi} is kind '{kind}', which does not roll chance; "
+                f"only {', '.join(sorted(CHANCE_HONOURING_KINDS))} does. The adapter "
+                f"throws rather than letting it appear every time",
+                entity=level_id, pointer=f"{pptr}/chance"))
+
+    if count_min >= 2:
+        if count and count_min > count:
+            issues.append(_issue(
+                "error", "ROOM_PLACEMENT_COUNT_MIN_ABOVE_MAX",
+                f"{rid}: placement {pi} has countMin {count_min} above count {count}. "
+                f"count is the ceiling random fill takes what it can of, so a floor "
+                f"above it can never be met and the entry is never placed",
+                entity=level_id, pointer=f"{pptr}/countMin"))
+        elif pinned:
+            issues.append(_issue(
+                "warning", "ROOM_PLACEMENT_COUNT_MIN_UNREAD",
+                f"{rid}: placement {pi} pins its cells, so countMin is not read — a "
+                f"pinned entry already names exactly what it wants",
+                entity=level_id, pointer=f"{pptr}/countMin"))
+        elif p.get("placement") not in COUNTMIN_HONOURING_PLACEMENTS:
+            # Narrower than the field's own documentation, which says "random
+            # fill". Verified against PropSpawnAdapter: the plain fill branch
+            # never passes countMin on.
+            issues.append(_issue(
+                "warning", "ROOM_PLACEMENT_COUNT_MIN_UNREAD",
+                f"{rid}: placement {pi} sets countMin {count_min} but is not "
+                f"placement 'sidewall'; only the side-wall fill passes a floor to its "
+                f"anchor chooser, so this one is read and then dropped",
+                entity=level_id, pointer=f"{pptr}/countMin"))
+
     return issues
 
 
@@ -454,6 +535,15 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                                      pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
         issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
         issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
+
+        # The same entries a room carries, applied to every generated room of
+        # this floor whose own `staticPlacements` came out empty — and where
+        # `chance` / `countMin` are actually authored today, since a
+        # procedural floor has no hand-written rooms to put them on.
+        for pi, p in enumerate(floor.get("defaultStaticPlacements") or []):
+            pptr = f"{fptr}/defaultStaticPlacements/{pi}"
+            issues.extend(_placement_count_issues(
+                plan_id, f"floor {fi}", pi, pptr, p))
         boss = floor.get("bossId")
         if boss and ds.get("EnemyData", boss) is None:
             issues.append(_issue("error", "DATA_REFERENCE_MISSING",
@@ -869,6 +959,89 @@ def validate_loot(ds: Dataset, table_id: str) -> list[dict]:
     return issues
 
 
+def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
+    """`EnemyData`'s hatch channel (OZX-1063).
+
+    An egg holds the room's doors shut until it opens, so everything about it
+    fails late and expensively: the engine's own checks
+    (`Game.Character.AI.HatchBrood.Validate`) run from `HatchState.Enter`,
+    which is three seconds of incubation into a fight the player is already
+    in. Every rule here is one of those, moved to the moment the file is
+    edited — plus the cross-reference the engine cannot make, since it holds
+    one enemy's data and not the set of ids that exist.
+
+    There are two channels and they are the same decision said twice:
+    `hatchEnemyId` is a single-entry pool, and `hatchPool` is the general
+    form. Neither may quietly win — the reason is `dropTableIdOverride`
+    (OZX-1041), where one field carrying two meanings took years to untangle.
+    """
+    doc = ds.get("EnemyData", enemy_id)
+    if doc is None:
+        return [_issue("error", "DATA_REFERENCE_MISSING",
+                       f"enemy '{enemy_id}' not found")]
+    v = doc.value
+    single = v.get("hatchEnemyId") or None
+    pool = [x for x in (v.get("hatchPool") or [])] if v.get("hatchPool") else []
+    # An enemy that names neither is not an egg, and saying so about the other
+    # 67 enemies in the corpus would bury the ones that are.
+    if not single and not pool:
+        return []
+
+    issues: list[dict] = []
+    if single and pool:
+        issues.append(_issue(
+            "error", "ENEMY_HATCH_CHANNEL_AMBIGUOUS",
+            f"sets both hatchEnemyId '{single}' and a hatchPool of {len(pool)}; "
+            f"they are the same decision said twice and neither wins — keep the "
+            f"pool (a single-entry pool is what hatchEnemyId means) and clear "
+            f"hatchEnemyId",
+            entity=enemy_id, pointer="/hatchPool"))
+
+    for i, entry in enumerate(v.get("hatchPool") or []):
+        eptr = f"/hatchPool/{i}"
+        if not entry:
+            issues.append(_issue(
+                "error", "ENEMY_HATCH_POOL_EMPTY_SLOT",
+                f"hatchPool[{i}] is empty. The draw is uniform over the whole "
+                f"list, so an empty slot still takes its share and that share of "
+                f"the clutch silently fails to spawn",
+                entity=enemy_id, pointer=eptr))
+        elif ds.get("EnemyData", entry) is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"hatchPool[{i}] names '{entry}', which is not an EnemyData",
+                entity=enemy_id, pointer=eptr))
+
+    if single and ds.get("EnemyData", single) is None:
+        issues.append(_issue(
+            "error", "DATA_REFERENCE_MISSING",
+            f"hatchEnemyId '{single}' is not an EnemyData",
+            entity=enemy_id, pointer="/hatchEnemyId"))
+
+    # `RollCount` clamps rather than throwing, so max below min is tuning
+    # noise, not a contradiction — the max it actually uses is the min.
+    lo = v.get("hatchCountMin") or 0
+    hi = v.get("hatchCountMax") or 0
+    effective_max = max(lo if lo > 1 else 1, hi if hi > 1 else 1)
+    if hi and lo and hi < lo:
+        issues.append(_issue(
+            "warning", "ENEMY_HATCH_COUNT_RANGE_REVERSED",
+            f"hatchCountMax {hi} is below hatchCountMin {lo}; the roll clamps to "
+            f"{lo} rather than throwing, so the max is dead text",
+            entity=enemy_id, pointer="/hatchCountMax"))
+
+    if effective_max > 1 and (v.get("hatchSpreadRadius") or 0) <= 0:
+        issues.append(_issue(
+            "error", "ENEMY_HATCH_NO_SPREAD",
+            f"hatches up to {effective_max} occupants but hatchSpreadRadius is "
+            f"{v.get('hatchSpreadRadius') or 0}. The first occupant takes the egg's "
+            f"own spot and the rest ring it, so with no radius the clutch comes out "
+            f"inside itself — and these are rooted bodies, which never shove apart",
+            entity=enemy_id, pointer="/hatchSpreadRadius"))
+
+    return issues
+
+
 def validate_all(ds: Dataset) -> list[dict]:
     issues = list(ds.problems)
     for doc in ds.of_type("LevelData"):
@@ -877,6 +1050,8 @@ def validate_all(ds: Dataset) -> list[dict]:
         issues += validate_plan(ds, doc.id)
     for doc in ds.of_type("EncounterData"):
         issues += validate_encounter(ds, doc.id)
+    for doc in ds.of_type("EnemyData"):
+        issues += validate_enemy(ds, doc.id)
     for doc in ds.of_type("LootTableData"):
         issues += validate_loot(ds, doc.id)
     return issues

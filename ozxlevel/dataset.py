@@ -292,8 +292,43 @@ class Dataset:
                 "role": v.get("role"),
                 "hasElite": bool(v.get("elite")),
                 "dropTableId": v.get("dropTableId"),
+                # OZX-1063: an egg's clutch. It never passes through the
+                # sampler, so a room that draws N eggs ends up with N ×
+                # [min, max] bodies on top of `enemiesPerRoom` — and a
+                # picker that shows this as an ordinary enemy understates
+                # the room by that much.
+                "hatch": self.hatch_brief(v),
             })
         return out
+
+    def hatch_brief(self, value: dict) -> dict | None:
+        """What one egg opens into, or None when the enemy is not an egg.
+
+        Two channels say the same thing: `hatchEnemyId` is a single-entry pool
+        and `hatchPool` is the general form. `IsEgg` is "either is set", so
+        that is the discriminator here too — and both being set is a
+        contradiction the validator owns, not something to pick a winner for.
+
+        The count range is the pre-clutch behaviour when unset: exactly one.
+        """
+        single = value.get("hatchEnemyId") or None
+        pool = [x for x in (value.get("hatchPool") or []) if x]
+        if not single and not (value.get("hatchPool") or []):
+            return None
+        lo = value.get("hatchCountMin") or 0
+        hi = value.get("hatchCountMax") or 0
+        lo = lo if lo > 1 else 1
+        hi = hi if hi > 1 else 1
+        return {
+            "enemyId": single,
+            "pool": pool,
+            # Both channels set at once; the validator reports it, and the
+            # view must not silently pick one.
+            "ambiguous": bool(single and (value.get("hatchPool") or [])),
+            "countMin": lo,
+            "countMax": max(lo, hi),
+            "spreadRadius": value.get("hatchSpreadRadius") or 0,
+        }
 
     def loot_catalog(self) -> list[dict]:
         out = []
@@ -762,18 +797,29 @@ class Dataset:
                 gates.append(own)
             pending_gates = []
 
+            # OZX-1063: an egg's clutch never passes through the sampler, so
+            # it is charged to no budget at all — not `enemiesPerRoom`, not
+            # the encounter's `maxAlive`. A room that draws three eggs holds
+            # six to nine more bodies than any number on it says.
+            enemy = self.get("EnemyData", enemy_id)
+            hatch = self.hatch_brief(enemy.value) if enemy else None
+            bodies = action.get("max", action.get("min", 0)) or 0
+
             out.append({
                 "id": enemy_id,
-                "count": action.get("max", action.get("min", 0)) or 0,
+                "count": bodies,
                 "min": action.get("min", 0),
                 "max": action.get("max", 0),
+                "hatch": hatch,
+                "hatchedMin": (hatch["countMin"] * bodies) if hatch else 0,
+                "hatchedMax": (hatch["countMax"] * bodies) if hatch else 0,
                 "stepIndex": index,
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),
                 "viaSpawner": action.get("viaSpawner"),
                 "pointer": f"/steps/{index}/action",
                 "encounterId": encounter_id,
-                "missing": self.get("EnemyData", enemy_id) is None,
+                "missing": enemy is None,
                 # When this wave appears, including the waits it sits behind.
                 "appearsWhen": " → ".join(gates),
                 "drop": self.wave_drop(action, tables),
@@ -880,6 +926,24 @@ class Dataset:
                     for ei, e in enumerate(floor.get("enemyPool") or [])
                 ],
                 "stageWeights": self._stage_weights(floor, base),
+                # Applied to every generated room of this floor whose own
+                # staticPlacements came out empty. A procedural floor has no
+                # hand-written rooms, so this is where a chapter's props are
+                # actually authored — and the only place `chance` / `countMin`
+                # appear in shipped data.
+                "defaultStaticPlacements": [
+                    {"index": pi, "kind": p.get("kind"),
+                     "prefabKey": p.get("prefabKey"),
+                     "count": p.get("count") or 0,
+                     "countMin": p.get("countMin") or 0,
+                     "chance": p.get("chance") or 0,
+                     "chancePercent": round((p.get("chance") or 1) * 100, 1),
+                     "placement": p.get("placement"),
+                     "pinned": bool(p.get("cells")),
+                     "pointer": f"{base}/defaultStaticPlacements/{pi}"}
+                    for pi, p in enumerate(
+                        floor.get("defaultStaticPlacements") or [])
+                ],
                 "appearance": {
                     # Absent and [] are the same to the generator (full pool),
                     # but only `declared` can tell the UI whether there is a
@@ -970,7 +1034,20 @@ class Dataset:
                          "skill": (self.skill_brief(p.get("skillId"))
                                    if p.get("kind") == "skill" else None),
                          "count": p.get("count"),
+                         # OZX-1057: `count` has always been the ceiling that
+                         # random fill takes what it can of; these are the two
+                         # ends the entry grew. `countMin` is the floor below
+                         # which the entry declines entirely, and `chance` is
+                         # rolled ONCE for the whole entry — a room either is
+                         # a cultivation chamber with up to three pods or an
+                         # ordinary room with none, never one lonely pod.
+                         "countMin": p.get("countMin") or 0,
+                         "chance": p.get("chance") or 0,
+                         # 0 is "not authored", which appears every time. The
+                         # UI must not draw that as a 0% placement.
+                         "chancePercent": round((p.get("chance") or 1) * 100, 1),
                          "cells": p.get("cells") or [],
+                         "placement": p.get("placement"),
                          "pointer": f"{base}/staticPlacements/{i}"}
                         for i, p in enumerate(room.get("staticPlacements") or [])
                     ],

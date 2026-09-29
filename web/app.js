@@ -439,6 +439,64 @@ function skillOptions(selected) {
  *  room's own lootPlanId and its cargo — can never reveal it. This is the
  *  channel skills reach the player through, and it was invisible.
  */
+/** Bodies in a room: the ones placed on spawn points, plus the ones hatched.
+ *
+ * OZX-1063 made the second number real. Eggs open into 1..N occupants each
+ * and none of them passes through the sampler, so neither `enemiesPerRoom`
+ * nor `maxAlive` counts them — a header that reports only the placed bodies
+ * understates every room with a clutch in it, systematically.
+ */
+function bodyCount(enemies) {
+  const placed = enemies.reduce((sum, e) => sum + (e.count || 0), 0);
+  const lo = enemies.reduce((sum, e) => sum + (e.hatchedMin || 0), 0);
+  const hi = enemies.reduce((sum, e) => sum + (e.hatchedMax || 0), 0);
+  const label = !hi ? `${placed}`
+    : lo === hi ? `${placed} +${hi}`
+    : `${placed} +${lo}\u2013${hi}`;
+  return { placed, hatchedMin: lo, hatchedMax: hi, label };
+}
+
+/** OZX-1063: what a wave of eggs opens into, and how many bodies that adds.
+ *
+ * The clutch never passes through the sampler, so it is charged to no budget
+ * at all — not the floor's `enemiesPerRoom`, not the encounter's `maxAlive`.
+ * A room that draws three eggs holds six to nine more bodies than any number
+ * on it says, which is precisely why this needs its own line rather than
+ * being folded into the count.
+ */
+function hatchLine(e) {
+  const h = e.hatch;
+  if (!h) return '';
+  const what = h.pool.length
+    ? (h.pool.length === 1 ? h.pool[0] : `one of ${h.pool.length}`)
+    : h.enemyId;
+  const span = e.hatchedMin === e.hatchedMax
+    ? `${e.hatchedMax}` : `${e.hatchedMin}–${e.hatchedMax}`;
+  return `<span class="hatch-line${h.ambiguous ? ' bad' : ''}"
+    title="${esc(h.ambiguous
+      ? 'hatchEnemyId and hatchPool are both set — the engine refuses to pick a winner'
+      : 'Hatched bodies are outside enemiesPerRoom and outside the encounter\'s maxAlive')}">
+    <span class="drop-tag">hatches</span>${esc(`+${span} ${what}`)}</span>`;
+}
+
+/** OZX-1057: a static placement's `chance` and `countMin`, when authored.
+ *
+ * Both are decided once for the whole entry, which is the thing a reader has
+ * to know: `count: 3, chance: 0.2` is a room that is either a cultivation
+ * chamber with three pods or an ordinary room with none — never one pod in
+ * every fifth room. Returns '' when neither is authored, so an ordinary
+ * placement gains no second line.
+ */
+function oddsLine(p) {
+  const bits = [];
+  if (p.chance > 0 && p.chance < 1) bits.push(`${p.chancePercent}% to appear at all`);
+  // 0 and 1 both mean "no floor" — the entry takes whatever fits.
+  if (p.countMin >= 2) bits.push(`all-or-nothing below ${p.countMin}`);
+  if (!bits.length) return '';
+  return `<span class="odds-line" title="Rolled once for the whole entry, not once per object">
+    <span class="drop-tag">odds</span>${esc(bits.join(' · '))}</span>`;
+}
+
 /** What a pin says in one line: how many carriers, of what, how often.
  *
  * OZX-1041 split "what this group rolls" from "what is pinned here", so a pin
@@ -509,7 +567,7 @@ function renderRooms() {
     const roomIssues = issuesFor(room.pointer);
     const hasError = roomIssues.some((i) => i.severity === 'error');
 
-    const units = room.enemies.reduce((sum, e) => sum + (e.count || 0), 0);
+    const bodies = bodyCount(room.enemies);
 
     const staticEntries = room.staticPlacements.length
       ? room.staticPlacements.map((p, i) => {
@@ -531,6 +589,11 @@ function renderRooms() {
           const broken = isSkill && (!p.skillId || skill.missing
             || (skill.skillType && skill.skillType !== 'passive') || !skill.iconKey);
           const count = p.count != null ? p.count : p.cells.length;
+          // OZX-1057. Both are rolled/decided once for the whole entry, so
+          // they belong beside `count` rather than on the object: `chance`
+          // says whether the entry appears at all, `countMin` says the room
+          // takes the whole set-piece or none of it.
+          const odds = oddsLine(p);
           const picker = isSkill
             ? `<select class="inline-select skill-picker"
                        data-skill-target="${esc(p.pointer)}/skillId"
@@ -538,14 +601,14 @@ function renderRooms() {
                        ${p.skillIdDeclared ? '' : 'disabled'}
                        >${skillOptions(p.skillId)}</select>`
             : '';
-          return `<div class="content-entry${isSkill ? ' skill-entry' : ''}${broken ? ' missing' : ''}${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
+          return `<div class="content-entry${isSkill ? ' skill-entry' : ''}${broken ? ' missing' : ''}${odds ? ' odds-carrier' : ''}${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
             ${glyph(isSkill ? skill.sprite : source.sprite, source.code, broken ? 'missing' : '')}
             <span><strong>${esc(p.kind)}</strong><small>${esc(detail)}</small></span>
             <span class="quantity" data-static-index="${i}">
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${count}" aria-label="${esc(p.kind)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span>${picker}</div>`;
+            </span>${picker}${odds}</div>`;
         }).join('')
       : (room.staticPlacementsDeclared
           ? '<div class="inline-empty">No static placements</div>'
@@ -572,7 +635,7 @@ function renderRooms() {
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${e.count}" aria-label="${esc(e.id)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span>${dropLine(e.drop)}</div>`;
+            </span>${hatchLine(e)}${dropLine(e.drop)}</div>`;
         }).join('')
       : `<div class="inline-empty">${room.encounterId
             ? 'Encounter has no launch steps'
@@ -722,7 +785,9 @@ function renderRooms() {
         <div class="content-list">${lootEntries}</div>
       </section>
       <section class="${colCls('enemies')} enemy-content" data-kind="enemies">
-        <div class="content-head">Effective enemies <span>${units} units</span></div>
+        <div class="content-head">Effective enemies <span title="${
+          bodies.hatchedMax ? 'placed bodies + the clutch its eggs open into, which no budget counts' : ''
+        }">${bodies.label} units</span></div>
         <div class="content-list">${enemyEntries}
           ${room.encounterId
             ? `<div class="derived-note">derived from encounter ${esc(room.encounterId)} — in step order; edits write to its steps</div>`
@@ -1088,9 +1153,9 @@ function renderMap() {
     // On a generated level, a room the player could never have opened.
     if (room.reachable === false) cls.push('unreachable');
 
-    const units = room.enemies.reduce((sum, e) => sum + (e.count || 0), 0);
+    const bodies = bodyCount(room.enemies);
     const chips = [];
-    if (units) chips.push(`<span class="chip enemies">${units} enemies</span>`);
+    if (bodies.placed) chips.push(`<span class="chip enemies">${bodies.label} enemies</span>`);
     if (room.staticPlacements.length) chips.push(`<span class="chip">${room.staticPlacements.length} static</span>`);
     if (room.lootPlanId) chips.push('<span class="chip loot">loot</span>');
     if (room.bossId) chips.push('<span class="chip boss">boss</span>');
@@ -1274,6 +1339,22 @@ function renderPlanFloors() {
         }).join('')
       : '<div class="inline-empty">No enemy pool</div>';
 
+    // A procedural floor has no hand-written rooms, so this is where a
+    // chapter's props are actually authored — and the only place `chance`
+    // and `countMin` appear in shipped data.
+    const placements = f.defaultStaticPlacements.length
+      ? f.defaultStaticPlacements.map((p) => {
+          const odds = oddsLine(p);
+          const what = [p.prefabKey, p.placement].filter(Boolean).join(' · ');
+          return `<div class="content-entry${odds ? ' odds-carrier' : ''}">
+            <span class="content-glyph">${esc(codeOf(p.kind))}</span>
+            <span><strong>${esc(p.kind || '?')}</strong><small>${
+              esc(what || (p.pinned ? 'pinned cells' : 'adapter default'))}</small></span>
+            <span class="weight-value" title="how many at most">×${p.count || (p.pinned ? '—' : 0)}</span>
+            ${odds}</div>`;
+        }).join('')
+      : '<div class="inline-empty">No default placements — generated rooms spawn nothing static</div>';
+
     // OZX-1044: a stage weight may scope itself to a taxonomy category, so
     // this is a sparse (stage × category) table, not one row per stage. The
     // category-free row is the stage's fallback — what anything the designer
@@ -1309,7 +1390,7 @@ function renderPlanFloors() {
           title="${owned.named.includes(name)
             ? 'Owned by the theme but kept out of the random pool — addressable only by name'
             : 'In the theme\'s random pool'}">${esc(name)}</button>`).join('')
-      : `<div class="inline-empty" style="color:var(--warn)">Cannot resolve theme ${esc(f.themeId || '(none)')}</div>`;
+      : `<div class="inline-empty" style="color:var(--amber)">Cannot resolve theme ${esc(f.themeId || '(none)')}</div>`;
 
     const appearanceNote = !chosen.length
       ? 'none selected — rooms draw from the theme\'s full pool'
@@ -1339,6 +1420,13 @@ function renderPlanFloors() {
       <div class="content-column">
         <div class="content-head">Enemy pool <span>${f.enemyPool.length}</span></div>
         <div class="content-list">${pool}</div>
+      </div>
+      <div class="content-column">
+        <div class="content-head">Default placements <span>${f.defaultStaticPlacements.length || '—'}</span></div>
+        <div class="content-list">${placements}</div>
+        ${f.defaultStaticPlacements.length
+          ? '<div class="derived-note">applied to every generated room whose own staticPlacements came out empty</div>'
+          : ''}
       </div>
       <div class="content-column">
         <div class="content-head">Stage weights <span>${f.stageWeights.length || '—'}</span></div>
