@@ -553,6 +553,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
         issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
         issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
         issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
+        issues.extend(_floor_loot_issues(ds, plan_id, fi, fptr, floor))
 
         # The same entries a room carries, applied to every generated room of
         # this floor whose own `staticPlacements` came out empty — and where
@@ -596,6 +597,218 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
                     entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
 
         issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+    return issues
+
+
+def _slot_target_issues(ds: Dataset, plan_id: str, where: str, ptr: str,
+                        item_id: str | None, table_id: str | None,
+                        *, require_one: bool) -> list[dict]:
+    """A loot slot that names an item OR a `pickOne` table, never both.
+
+    OZX-1047 gave both `probabilistic` and `guaranteed` entries the choice, so
+    one family can share a single small weight instead of each member needing
+    its own and rounding to zero. The refusals are `LootTableDraw.Require`'s,
+    and they are the same everywhere a slot points at a table: an ordinary
+    table rolls each entry independently and so yields anywhere from nothing
+    to everything, which makes the slot's count stop meaning anything.
+
+    `require_one` separates the two callers. The assigner throws on a
+    `guaranteed` entry naming neither (`hasItem == hasTable`); a
+    `probabilistic` entry naming neither becomes a loot row that can never
+    produce anything, which is quieter but not better.
+    """
+    issues: list[dict] = []
+    if item_id and table_id:
+        return [_issue(
+            "error", "LOOT_SLOT_AMBIGUOUS",
+            f"{where} names both itemId '{item_id}' and tableId '{table_id}'; a "
+            f"slot drops one named thing or draws from one table, never both",
+            entity=plan_id, pointer=ptr)]
+    if not item_id and not table_id:
+        if require_one:
+            issues.append(_issue(
+                "error", "LOOT_SLOT_EMPTY",
+                f"{where} names neither itemId nor tableId, so nothing would drop",
+                entity=plan_id, pointer=ptr))
+        return issues
+
+    if item_id:
+        if ds.get("ItemData", item_id) is None:
+            named_table = ds.get("LootTableData", item_id) is not None
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{where}: itemId '{item_id}' is not an ItemData"
+                + (" — it is a loot table; a slot that draws from a table uses "
+                   "`tableId`" if named_table else ""),
+                entity=plan_id, pointer=f"{ptr}/itemId"))
+        return issues
+
+    table = ds.get("LootTableData", table_id)
+    if table is None:
+        issues.append(_issue(
+            "error", "LOOT_TABLE_MISSING",
+            f"{where}: tableId '{table_id}' does not exist",
+            entity=plan_id, pointer=f"{ptr}/tableId"))
+    elif not table.value.get("pickOne"):
+        issues.append(_issue(
+            "error", "LOOT_SLOT_TABLE_NOT_PICKONE",
+            f"{where}: tableId '{table_id}' is not pickOne; an ordinary table rolls "
+            f"every entry independently, so it can yield none or all of them and "
+            f"this slot's count stops meaning anything",
+            entity=plan_id, pointer=f"{ptr}/tableId"))
+    elif not (table.value.get("entries") or []):
+        issues.append(_issue(
+            "error", "LOOT_TABLE_EMPTY",
+            f"{where}: tableId '{table_id}' has no entries; there is nothing for it "
+            f"to draw",
+            entity=plan_id, pointer=f"{ptr}/tableId"))
+    return issues
+
+
+# OZX-650 removed named waves from the encounter system, and the assigner
+# throws on sight rather than trying to resolve one.
+DEAD_BINDING = "boundWaveLastEnemy"
+GUARANTEED_BINDINGS = ("boundEnemyId", DEAD_BINDING, "boundRoomId", "boundStage")
+
+
+def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
+                       fptr: str, floor: dict) -> list[dict]:
+    """`floorLootPlan`'s reference edges — none of which were checked.
+
+    `level_referenced_data.md` §0 lists every one of these as a required
+    reference, and each fails quietly in its own way:
+
+    - a dangling `probabilistic[].itemId` goes straight into the synthesised
+      table as a `LootEntryData` (`RegisterScaledTable` does not look at it),
+      so the table works and is simply missing one of its outcomes forever;
+    - a `categoryCaps[].category` that is not a taxonomy node matches no item,
+      so the cap reads as authored and does nothing — exactly what OZX-1044
+      added a fail-fast for on `stageWeights.category`, which `categoryCaps`
+      still lacks;
+    - the `guaranteed[]` rules DO throw, but at generation time, which is the
+      moment this tool exists to get ahead of.
+
+    `probabilisticPresets` are not expanded here (OLE-10), so entries a preset
+    contributes are not seen. That can only under-report.
+    """
+    plan = floor.get("floorLootPlan") or {}
+    if not plan:
+        return []
+    lptr = f"{fptr}/floorLootPlan"
+    stages = {s.get("stageType") for s in (floor.get("stageTypes") or [])}
+    # Only a hand-authored floor has room ids anyone could bind to; a
+    # procedural floor's are invented at generation and are not authorable.
+    authored_rooms = {r.get("roomId") for r in (floor.get("rooms") or [])}
+    issues: list[dict] = []
+
+    for pi, entry in enumerate(plan.get("probabilistic") or []):
+        issues.extend(_slot_target_issues(
+            ds, plan_id, f"floor {fi}: floorLootPlan.probabilistic[{pi}]",
+            f"{lptr}/probabilistic/{pi}",
+            entry.get("itemId") or None, entry.get("tableId") or None,
+            require_one=False))
+
+    for gi, entry in enumerate(plan.get("guaranteed") or []):
+        gptr = f"{lptr}/guaranteed/{gi}"
+        where = f"floor {fi}: floorLootPlan.guaranteed[{gi}]"
+        issues.extend(_slot_target_issues(
+            ds, plan_id, where, gptr,
+            entry.get("itemId") or None, entry.get("tableId") or None,
+            require_one=True))
+
+        chance = entry.get("chance") or 0
+        if chance < 0 or chance > 1:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_CHANCE_INVALID",
+                f"{where}: chance is {chance}, outside (0, 1]. 0 means 'not "
+                f"authored' (always); a negative or >1 value is a typo, not a "
+                f"probability",
+                entity=plan_id, pointer=f"{gptr}/chance"))
+
+        bound = [b for b in GUARANTEED_BINDINGS if entry.get(b)]
+        if len(bound) != 1:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_BINDING_COUNT",
+                f"{where} must have EXACTLY one binding "
+                f"({' / '.join(GUARANTEED_BINDINGS)}); got {len(bound)}"
+                + (f" ({', '.join(bound)})" if bound else ""),
+                entity=plan_id, pointer=gptr))
+        elif bound[0] == DEAD_BINDING:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_BINDING_DEAD",
+                f"{where} binds with `{DEAD_BINDING}`, which is no longer supported "
+                f"— the encounter system has had no named waves since OZX-650. Use "
+                f"boundEnemyId",
+                entity=plan_id, pointer=f"{gptr}/{DEAD_BINDING}"))
+
+        enemy = entry.get("boundEnemyId")
+        if enemy and ds.get("EnemyData", enemy) is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{where}: boundEnemyId '{enemy}' is not an EnemyData",
+                entity=plan_id, pointer=f"{gptr}/boundEnemyId"))
+
+        stage = entry.get("boundStage")
+        if stage and stages and stage not in stages:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_STAGE_UNKNOWN",
+                f"{where}: boundStage '{stage}' is not a stage this floor declares "
+                f"({', '.join(sorted(s for s in stages if s)) or 'none'}), so no "
+                f"room can carry it",
+                entity=plan_id, pointer=f"{gptr}/boundStage"))
+
+        room = entry.get("boundRoomId")
+        if room and authored_rooms and room not in authored_rooms:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{where}: boundRoomId '{room}' is not a room on this floor",
+                entity=plan_id, pointer=f"{gptr}/boundRoomId"))
+
+    known_categories = ds.taxonomy()
+    for ci, entry in enumerate(plan.get("categoryCaps") or []):
+        category = entry.get("category")
+        cptr = f"{lptr}/categoryCaps/{ci}"
+        if not category:
+            issues.append(_issue(
+                "error", "LOOT_CATEGORY_CAP_UNSCOPED",
+                f"floor {fi}: floorLootPlan.categoryCaps[{ci}] names no category, so "
+                f"the cap applies to nothing",
+                entity=plan_id, pointer=cptr))
+        elif known_categories["found"] and category not in known_categories["parentOf"]:
+            # Read off the NODE list, not the item index: an interior node
+            # holds no items of its own and is still a real node, which is
+            # why `HasCategory` exists upstream as a separate question.
+            issues.append(_issue(
+                "error", "LOOT_CATEGORY_CAP_UNKNOWN",
+                f"floor {fi}: floorLootPlan.categoryCaps[{ci}] names category "
+                f"'{category}', which is not a node in item_taxonomy.json. It would "
+                f"match no item, so the cap reads as authored and does nothing",
+                entity=plan_id, pointer=f"{cptr}/category"))
+
+    for si, entry in enumerate(plan.get("stageMustDrop") or []):
+        sptr = f"{lptr}/stageMustDrop/{si}"
+        stage = entry.get("stageType")
+        if stage and stage not in STAGE_TYPES:
+            issues.append(_issue(
+                "warning", "TYPE_VALUE_UNKNOWN",
+                f"floor {fi}: floorLootPlan.stageMustDrop[{si}] names stage "
+                f"'{stage}', which is not a stage type; no room will match it",
+                entity=plan_id, pointer=f"{sptr}/stageType"))
+        for di, drop in enumerate(entry.get("drops") or []):
+            item_id = drop.get("itemId")
+            dptr = f"{sptr}/drops/{di}"
+            if not item_id:
+                issues.append(_issue(
+                    "error", "LOOT_SLOT_EMPTY",
+                    f"floor {fi}: floorLootPlan.stageMustDrop[{si}].drops[{di}] has "
+                    f"no itemId",
+                    entity=plan_id, pointer=dptr))
+            elif ds.get("ItemData", item_id) is None:
+                issues.append(_issue(
+                    "error", "DATA_REFERENCE_MISSING",
+                    f"floor {fi}: floorLootPlan.stageMustDrop[{si}].drops[{di}]: "
+                    f"itemId '{item_id}' is not an ItemData",
+                    entity=plan_id, pointer=f"{dptr}/itemId"))
     return issues
 
 

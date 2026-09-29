@@ -2,7 +2,7 @@
 
 - 面向读者：OZX Level Studio 的实现者
 - 数据与代码快照：`ozx_base` `main@d867b644`，2026-09-11
-- 增量复核：§5.1 / §5.2 / §5.4 / §5.5 / §5.6 与相关条目核对于 `main@f0a78923`（2026-09-29），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047 / OZX-1057 / OZX-1063 / OZX-1069 / OZX-1089；其余仍是 `d867b644` 快照的实测数字。
+- 增量复核：§5.1 / §5.2 / §5.3 / §5.4 / §5.5 / §5.6 与相关条目核对于 `main@f0a78923`（2026-09-29），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047 / OZX-1057 / OZX-1063 / OZX-1069 / OZX-1089；其余仍是 `d867b644` 快照的实测数字。
 - 配套文档：`ozx_level_data_editor_td.md`（工具的技术设计）、`level_referenced_data.md`（level 指向的 encounter / enemy / loot / item / tilemap 五个数据族）。本文只描述**磁盘上的数据长什么样、运行时怎么读它**，不重复工具架构。
 
 编辑器要「能干活」，最低限度必须吃透三件事：字段语义（§3-§5）、plan 编译成 level 的过程（§6）、以及运行时已经在强制的校验（§7）。§8 是据此得出的实现清单。
@@ -302,13 +302,29 @@ LevelBasePlanData
 
 | 子结构 | 字段 | 语义 |
 |---|---|---|
-| `probabilistic[]` | `itemId`, `weight`(0=1.0), `minCount`/`maxCount`(0=1), `floorCap`(0=无限) | 采样成每房的 `inlineLootPlan`，并合成楼层表 |
-| `guaranteed[]` | `itemId`, `count`, 三选一绑定：`boundEnemyId` / `boundRoomId` / ~~`boundWaveLastEnemy`~~ | **必须且只能设一个绑定**；`boundWaveLastEnemy` 现在无条件抛错（named wave 已移除） |
+| `probabilistic[]` | `itemId` **或** `tableId`, `weight`(0=1.0), `minCount`/`maxCount`(0=1), `floorCap`(0=无限) | 采样成每房的 `inlineLootPlan`，并合成楼层表 |
+| `probabilisticPresets[]` | `loot_presets.json` 的组名 | 加载期前置到 `probabilistic` 前面（OZX-1012，OLE 尚未展开——见 OLE-10） |
+| `guaranteed[]` | `itemId` **或** `tableId`, `count`, `chance`(0=必出), **四**选一绑定：`boundEnemyId` / `boundRoomId` / `boundStage` / ~~`boundWaveLastEnemy`~~ | **必须且只能设一个绑定**；`boundWaveLastEnemy` 现在无条件抛错（named wave 已移除，OZX-650） |
 | `categoryCaps[]` | `category`（taxonomy 节点）, `maxPerFloor` | 每层每类上限 |
 | `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
 | `stageMustDrop[]` | `stageType`, `drops[{itemId,count}]` | 该 stage 的**每个房间**各生成一个装着该 item 的 cargo |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
+
+**`itemId` / `tableId` 二选一**（OZX-1043 / OZX-1047）：`tableId` 指的表必须 `pickOne: true` 且非空（`LootTableDraw.Require`）。`probabilistic` 两个都不写只是一条永远掉不出东西的行；`guaranteed` 两个都不写或都写会抛（`hasItem == hasTable` 即拒）。
+
+**这一块的引用边几乎全是静默失败，编辑器要全查**：
+
+| 边 | 漏了会怎样 |
+|---|---|
+| `probabilistic[].itemId` | `RegisterScaledTable` 把条目**原样**搬进合成表的 `LootEntryData`，从不查 id。表照常工作，只是永远少掉一样东西，零报错 |
+| `guaranteed[].itemId` / `.tableId` / `.boundEnemyId` / `.boundStage` / `.boundRoomId` | 生成期抛（`LevelBasePlanAssigner`）——抛得对，但抛在跑生成器的时候 |
+| `categoryCaps[].category` | 不是 taxonomy 节点 → 匹配不到任何道具，这条 cap 读起来像调过、实际什么都没做。**注意 `categoryCaps` 至今没有 fail-fast**，而同样的问题 OZX-1044 给 `stageWeights.category` 加了一条 |
+| `stageMustDrop[].drops[].itemId` | 同 probabilistic |
+
+`boundRoomId` 只有手写 `rooms` 的楼层才查得了——程序化房间 id 是生成期造的，作者写不出来，所以在生成楼层上没有可比对的集合。
+
+`category` 存不存在要查**节点表**，不能用「它底下有没有道具」判断：中间节点自己不直接挂道具也是合法节点（上游为此专门有 `HasCategory`）。
 
 ### 5.4 EnemyPoolEntryData（OZX-1032 spawner 通道 + OZX-1063 变体组与成簇）
 
@@ -490,6 +506,8 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
 - **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。
 - **`defaultStaticPlacements` 里的 `oiltank` 不会下发给 start room**：规则在 `StaticPlacementPolicy` 里，JSON 上完全看不出来，所以照着 JSON 画预览会在出生房画出一个游戏里不存在的油罐（OZX-1057）。
+- **`floorLootPlan.probabilistic[].itemId` / `stageMustDrop[].drops[].itemId` 悬空**：合成表照常建起来，只是那一条永远掉不出东西（见 §5.3）。
+- **`floorLootPlan.categoryCaps[].category` 不是 taxonomy 节点**：cap 匹配不到任何道具，等于没写；这里至今没有 fail-fast。
 - **跨层门没有配 stairLinks**：静默死路。
 - **新的 `openDoors` 组合没有对应模板**：生成器重映射时把门封掉，源数据看起来完全正常。
 - **只填 `bossId` 的静态 boss 房**：不刷任何怪。
