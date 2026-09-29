@@ -10,7 +10,8 @@ Issue codes come from the TD's Appendix B; they are stable machine ids.
 
 from __future__ import annotations
 
-from .dataset import DIRECTION_TWIN, DIRECTIONS, Dataset
+from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
+                      Dataset)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
@@ -519,8 +520,10 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     if doc is None:
         return [_issue("error", "DATA_REFERENCE_MISSING", f"plan '{plan_id}' not found")]
     issues: list[dict] = []
+    issues.extend(_skill_drop_cap_issues(ds, plan_id, doc.value))
     for fi, floor in enumerate(doc.value.get("floors") or []):
         fptr = f"/floors/{fi}"
+        issues.extend(_enemy_budget_cut_issues(plan_id, fi, fptr, floor))
         gen = floor.get("generatorType")
         # ParseGeneratorType swallows BOTH null and unknown strings into Tree.
         # Null is a legitimate default; a typo is not, and it is invisible.
@@ -687,6 +690,135 @@ def _stage_weight_issues(ds: Dataset, plan_id: str, fi: int,
                   "authoring order",
                 entity=plan_id, pointer=eptr))
         seen.add(key)
+    return issues
+
+
+def _skill_drop_cap_issues(ds: Dataset, plan_id: str, plan: dict) -> list[dict]:
+    """`LevelBasePlanData.skillDropLevelCap` (OZX-1069).
+
+    Once a skill reaches this level the chapter stops DROPPING it, on all four
+    channels at once and per skill. It is not a level clamp: `UpgradeSkill` is
+    unchanged and the ceiling is still `SkillData.maxLevel` — the cap only
+    decides whether the game keeps handing the skill out.
+
+    Two findings, and the second is the one nobody would work out unaided.
+
+    `< 0` the engine throws on: 0 means "unauthored" and resolves to the
+    shipped default, so a negative is a typo that would otherwise seal every
+    skill in the chapter from the first room.
+
+    A cap ABOVE every maxLevel this chapter can drop is silently inert —
+    chapter_3's two skills top out at 2 and 3, so its filter never fires at
+    all. Nothing distinguishes that from a chapter whose cap happens not to
+    be reached yet, which is why it is worth saying out loud: the number is
+    written, looks tuned, and does nothing.
+    """
+    cap = plan.get("skillDropLevelCap") or 0
+    if cap < 0:
+        return [_issue(
+            "error", "LEVEL_SKILL_DROP_CAP_NEGATIVE",
+            f"skillDropLevelCap is {cap}. It is a skill LEVEL, so the lowest "
+            f"meaningful value is 1 (a skill stops dropping the moment it is "
+            f"picked up); omit it, or write 0, for the default of "
+            f"{SKILL_DROP_LEVEL_CAP_DEFAULT}",
+            entity=plan_id, pointer="/skillDropLevelCap")]
+    if not cap:
+        # Unauthored resolves to the default, and calling the default inert
+        # on every plan that never mentions the field would be noise.
+        return []
+
+    reachable = _droppable_skill_levels(ds, plan)
+    if not reachable:
+        return []
+    highest = max(reachable.values())
+    if cap > highest:
+        top = ", ".join(f"{s} (maxLevel {lv})"
+                        for s, lv in sorted(reachable.items(),
+                                            key=lambda kv: -kv[1])[:4])
+        return [_issue(
+            "warning", "LEVEL_SKILL_DROP_CAP_UNREACHABLE",
+            f"skillDropLevelCap is {cap}, above the highest maxLevel this chapter "
+            f"can drop ({highest}), so the filter never fires — every skill keeps "
+            f"dropping for the whole run. Droppable here: {top}",
+            entity=plan_id, pointer="/skillDropLevelCap")]
+    return []
+
+
+def _droppable_skill_levels(ds: Dataset, plan: dict) -> dict:
+    """skill id -> its `SkillData.maxLevel`, for every skill this plan drops.
+
+    Walks each floor's `floorLootPlan.probabilistic` for entries whose
+    `ItemData.type` is "skill", and resolves the SkillData the item installs.
+    `ApplySkill` hands the ITEM's id to `AddPassive`, so `refId` is read here
+    only as the fallback it is for authoring, never as the primary.
+
+    Presets are not expanded — `probabilisticPresets` is OLE-10 and not
+    implemented yet — so this under-counts on a plan that uses them. It is a
+    hint either way: naming fewer skills can only make the cap look more
+    reachable, never less, so it cannot produce a false finding.
+    """
+    out: dict = {}
+    for floor in plan.get("floors") or []:
+        for entry in ((floor.get("floorLootPlan") or {}).get("probabilistic") or []):
+            item_id = entry.get("itemId")
+            if not item_id:
+                continue
+            item = ds.get("ItemData", item_id)
+            if item is None or item.value.get("type") != "skill":
+                continue
+            skill = (ds.get("SkillData", item_id)
+                     or ds.get("SkillData", item.value.get("refId") or ""))
+            if skill is None:
+                continue
+            level = skill.value.get("maxLevel") or 0
+            if level:
+                out[skill.id] = max(out.get(skill.id, 0), level)
+    return out
+
+
+def _enemy_budget_cut_issues(plan_id: str, fi: int, fptr: str,
+                             floor: dict) -> list[dict]:
+    """`stageTypes[].enemyBudgetCut` (OZX-1089).
+
+    The SHARE of the floor's `enemiesPerRoom` this stage gives back — not a
+    multiplier, and the direction is deliberate. JsonUtility reads an omitted
+    float as 0, so a "0 means ×1" factor would read an authored `0` ("no
+    enemies in this stage") as "take the full budget", which is the class of
+    bug the field exists to fix. As a cut, omitted = 0 = nothing changes, and
+    the dangerous value (1 = no enemies at all) has to be typed.
+
+    The second rule is the one worth having. On a floor with an `enemyPool`
+    the generator writes `inlineEncounter` into every room and the runner
+    prefers it, so an authored `encounterId` there has always been dead text.
+    A full cut makes the generator skip that room — which WAKES the dead text
+    up and staffs the breather from a hand-written encounter. Two lines of one
+    plan entry saying opposite things about one room is a mistake, not a
+    precedence question.
+    """
+    has_pool = bool(floor.get("enemyPool"))
+    issues: list[dict] = []
+    for si, stage in enumerate(floor.get("stageTypes") or []):
+        cut = stage.get("enemyBudgetCut") or 0
+        sptr = f"{fptr}/stageTypes/{si}"
+        if cut < 0 or cut > 1:
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_BUDGET_CUT_INVALID",
+                f"floor {fi}: stageTypes[{si}] ('{stage.get('stageType')}') sets "
+                f"enemyBudgetCut {cut}. It is the SHARE of enemiesPerRoom this stage "
+                f"gives back, so it lives in [0, 1]: 0 (or omit it) for the full "
+                f"budget, 1 for a stage with no enemies",
+                entity=plan_id, pointer=f"{sptr}/enemyBudgetCut"))
+            continue
+        if has_pool and cut >= 1 and stage.get("encounterId"):
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_BUDGET_CUT_CONTRADICTS_ENCOUNTER",
+                f"floor {fi}: stageTypes[{si}] ('{stage.get('stageType')}') cuts its "
+                f"whole enemy budget but also names encounterId "
+                f"'{stage['encounterId']}'. On a floor with an enemyPool the "
+                f"generator normally overwrites that with a sampled inlineEncounter; "
+                f"a full cut makes it skip the room, so the encounterId comes back to "
+                f"life and staffs the very stage that asked for no enemies",
+                entity=plan_id, pointer=f"{sptr}/encounterId"))
     return issues
 
 

@@ -11,6 +11,7 @@ Two rules govern everything here, both from the TD:
 
 from __future__ import annotations
 
+import math
 import pathlib
 from typing import Any
 
@@ -30,6 +31,11 @@ DIRECTION_TWIN = {0: 1, 1: 0, 2: 3, 3: 2}
 # show "nothing" for the many enemies that name no table.
 FALLBACK_DROP_ITEM = "item_exp_small"
 ELITE_BONUS_DROP_ITEM = "item_exp_large"
+
+# ISkillService.DefaultDropLevelCap — what `skillDropLevelCap` resolves to
+# when a plan leaves it at 0. There is no "no cap" value; a plan that wants
+# the filter out of the way writes a number above every maxLevel it can drop.
+SKILL_DROP_LEVEL_CAP_DEFAULT = 5
 
 # The five families Level Studio owns; everything else is read-only closure.
 OWNED = ("levels", "level_plans", "encounters", "enemies", "loot_tables")
@@ -893,6 +899,21 @@ class Dataset:
                 {"stageType": s.get("stageType"), "portion": s.get("portion"),
                  "encounterId": s.get("encounterId"),
                  "lootPlanId": s.get("lootPlanId"),
+                 # OZX-1089: the SHARE of the floor's enemiesPerRoom this
+                 # stage gives back, not a multiplier. The direction is
+                 # deliberate — JsonUtility reads an omitted float as 0, so a
+                 # "0 = ×1" factor would read an authored `0` ("no enemies
+                 # here") as "take the full budget", which is the bug the
+                 # field exists to fix. Omitted = 0 = nothing changes.
+                 "enemyBudgetCut": s.get("enemyBudgetCut") or 0,
+                 # None when the floor's own `enemiesPerRoom` is absent —
+                 # chapter_3 keeps it in `floorDefaults`, which is not merged
+                 # here yet (OLE-9). Reporting 0 there would read as "no
+                 # enemies", which is the one thing a cut of 1 means.
+                 "enemyBudget": (
+                     _stage_budget(floor["enemiesPerRoom"],
+                                   s.get("enemyBudgetCut") or 0)
+                     if floor.get("enemiesPerRoom") else None),
                  "pointer": f"{base}/stageTypes/{si}"}
                 for si, s in enumerate(floor.get("stageTypes") or [])
             ]
@@ -969,10 +990,20 @@ class Dataset:
                 },
                 "themeParts": owned,
             })
+        cap = doc.value.get("skillDropLevelCap") or 0
         return {
             "id": doc.id,
             "missing": False,
             "file": doc.path.name,
+            # OZX-1069: once a skill reaches this level the chapter stops
+            # DROPPING it — four channels at once, per skill. Not a level
+            # clamp: `UpgradeSkill` is unchanged and the ceiling is still
+            # `SkillData.maxLevel`. Top-level on purpose, because skill level
+            # is carried across the whole run and a cap that changed on the
+            # stairs would seal a skill on f1 and unseal it on f2.
+            "skillDropLevelCap": cap,
+            "skillDropLevelCapDeclared": bool(cap),
+            "skillDropLevelCapEffective": cap or SKILL_DROP_LEVEL_CAP_DEFAULT,
             "floors": floors,
         }
 
@@ -1290,6 +1321,23 @@ def describe_condition(condition: dict | None) -> str:
     if kind == "custom":
         return f"on {condition.get('key') or '?'}"
     return f"on {kind or 'unknown'}"
+
+
+def _stage_budget(enemies_per_room: int, cut: float) -> int:
+    """`StageEnemyBudget.Resolve` — how many bodies one room of a stage gets.
+
+    A partial cut never rounds down to zero: 0.9 off a budget of 4 is 0.4 of
+    an enemy, and answering "none" there would make an empty room reachable
+    by a number that does not say so. Below one the answer is one; a room
+    with no fight in it has to be asked for with a full cut of 1.
+    """
+    if cut <= 0:
+        return enemies_per_room
+    if cut >= 1:
+        return 0
+    # Round half away from zero, as C# does — Python's round() is half-even.
+    scaled = math.floor(enemies_per_room * (1 - cut) + 0.5)
+    return max(1, scaled)
 
 
 def _cluster_brief(source: dict) -> dict | None:

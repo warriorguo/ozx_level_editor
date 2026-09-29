@@ -2,7 +2,7 @@
 
 - 面向读者：OZX Level Studio 的实现者
 - 数据与代码快照：`ozx_base` `main@d867b644`，2026-09-11
-- 增量复核：§5.4 / §5.5 与相关条目核对于 `main@bc3f3f24`（2026-09-24），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047；其余仍是 `d867b644` 快照的实测数字。
+- 增量复核：§5.1 / §5.2 / §5.4 / §5.5 / §5.6 与相关条目核对于 `main@f0a78923`（2026-09-29），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047 / OZX-1057 / OZX-1063 / OZX-1069 / OZX-1089；其余仍是 `d867b644` 快照的实测数字。
 - 配套文档：`ozx_level_data_editor_td.md`（工具的技术设计）、`level_referenced_data.md`（level 指向的 encounter / enemy / loot / item / tilemap 五个数据族）。本文只描述**磁盘上的数据长什么样、运行时怎么读它**，不重复工具架构。
 
 编辑器要「能干活」，最低限度必须吃透三件事：字段语义（§3-§5）、plan 编译成 level 的过程（§6）、以及运行时已经在强制的校验（§7）。§8 是据此得出的实现清单。
@@ -245,6 +245,17 @@ LevelBasePlanData
       └ bossId / transitionKeyId / overflow* / useExitRoom / endsRunOnClear
 ```
 
+顶层还有一个 `skillDropLevelCap`（OZX-1069，int，与 `id` / `floorDefaults` / `floors` 同级）：**某技能到这个等级，本章就不再掉落该技能**；0 / 省略 = 默认 5。
+
+它**不是等级钳制**。`UpgradeSkill` 没改，等级天花板仍是 `SkillData.maxLevel`；cap 只决定还能不能被**发出来**，封四条通道（普通掉落 / 箱子 / 遭遇 pin / 技能平台），**按技能封**，同一张表里其它技能不受影响。字段说明不要写成「技能等级上限」。
+
+放在顶层是因为技能等级跨整局携带，一个在楼梯上变化的 cap 会让同一个技能在 f1 封住、f2 解封。
+
+两条编辑期该管的：
+
+1. **负数** —— `LevelPlanValidator` 抛。**没有「不设上限」的写法**：想让它让路就写个高过所有 `maxLevel` 的数。0 是「没写」，读成默认 5。
+2. **cap 高于本章能掉的技能的 `maxLevel` 时等于没写** —— 这条最容易困惑，值得提示。判据：本章 `floors[].floorLootPlan.probabilistic` 里 `ItemData.type == "skill"` 的条目，逐个解析成它装的那份 `SkillData`（`ApplySkill` 交给 `AddPassive` 的是 **item 自己的 id**，`refId` 只是创作期的回退），取 `maxLevel`。
+
 ### 5.1 FloorPlanData
 
 18 个 floor plan 中的使用情况：
@@ -253,12 +264,12 @@ LevelBasePlanData
 |---|---|---|
 | `roomCountMin/Max` | 房间数区间，编译时随机取 | 18 |
 | `themeId` | 楼层主题 | 18 |
-| `stageTypes` | stage 比例，见 §5.2 | 18 |
+| `stageTypes` | stage 比例 + 每 stage 敌人预算，见 §5.2 | 18 |
 | `enemyPool` + `enemiesPerRoom` | 敌人名册。**设了 `enemyPool` 就必须给 `enemiesPerRoom > 0`**，否则 fail-fast。条目可另带 spawner 通道，见 §5.4 | 12 |
 | `floorLootPlan` | 楼层掉落方案，见 §5.3 | 12 |
 | `transitionKeyId` | 过渡钥匙 item id；编译期自动绑到 peak/跨层流程并插锁门 | 10 |
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
-| `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间 | 9 |
+| `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |
 | `caves` | `{linkType, encounterId, lootPlanId}` | 1 |
 | `bossId` | 楼层 boss，合成为单敌人 inline encounter | 0（字段写了 null） |
@@ -270,7 +281,22 @@ LevelBasePlanData
 
 ### 5.2 StageTypePlanData
 
-`{ stageType, portion, encounterId, lootPlanId }`。`portion` 是相对比例（不必和为 1，实现按总和归一）。
+`{ stageType, portion, encounterId, lootPlanId, enemyBudgetCut? }`。`portion` 是相对比例（不必和为 1，实现按总和归一）。
+
+**`enemyBudgetCut`（OZX-1089，float [0,1]，省略 = 0）是「还回去多少」，不是「乘几」。** 这个方向是刻意的：`JsonUtility` 把省略的 float 读成 0，所以一个「0 = ×1」的系数会把作者写的 `0`（「这里不要敌人」）读成「拿满预算」——正是这个字段要修的那个 bug 换一层。写成 cut：省略 = 0 = 什么都不改，而危险的那个值（1 = 完全不刷敌人）必须手打。
+
+| 值 | 含义 |
+|---|---|
+| 0 / 省略 | 不还，拿满 |
+| (0, 1) | 还回这个比例；**结果不足 1 向上取到 1**——「很少」不许静默变成「没有」 |
+| 1 | 这一 stage 不刷敌人；生成器**根本不生成 `inlineEncounter`**（不是生成一个空 `steps` 的，那会被 `EncounterValidator` 拒绝，而被拒的 encounter 永不刷怪、永不清场，门就永远锁着） |
+| 区间外 | `StageEnemyBudget.Validate` 抛 |
+
+`budget = round_half_away(enemiesPerRoom × (1 − cut))`，再 `max(1, ...)`；注意是**远离零取整**，Python 的 `round()` 是银行家舍入，0.5 会落到另一个整数上。plan 没列的 stage（尤其 overflow stage）取 cut = 0。
+
+**编辑器 UI 按「省略 = 不改」呈现，不要给它一个可见的 1.0 默认值。**
+
+另有一条校验：cut 满的 stage 同时写了 `encounterId` → 拒绝。有 `enemyPool` 的楼层上，作者写的 `encounterId` 一直是死文本（生成器会用采样出的 `inlineEncounter` 覆盖它）；满 cut 让生成器跳过这间房，于是那段死文本**复活**，用一个手写 encounter 去填「说好不要敌人」的那一 stage。
 
 ### 5.3 FloorLootPlanData
 
@@ -284,9 +310,36 @@ LevelBasePlanData
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
 
-### 5.4 EnemyPoolEntryData 的 spawner 通道（OZX-1032，核对于 `ozx_base@bc3f3f24`）
+### 5.4 EnemyPoolEntryData（OZX-1032 spawner 通道 + OZX-1063 变体组与成簇）
 
-`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner? }`。
+`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner?, variantIds?, clusterSizeMin?, clusterSizeMax?, clusterRadius? }`。
+
+#### 5.4.0 变体组与成簇（OZX-1063，核对于 `ozx_base@f0a78923`）
+
+| 字段 | 语义 |
+|---|---|
+| `variantIds` | `enemyId` 的其它形态。整条条目**按一种类型**采样 / 计数 / 限量，每具身体的具体 id 在放置时**各自等权抽一次**（独立、允许重复） |
+| `clusterSizeMin` / `clusterSizeMax` | 成簇大小。0/1 = 不成簇 |
+| `clusterRadius` | 簇内环半径；`clusterSizeMax > 1` 时必填 |
+
+同样四个字段也在 `EncounterData` 的 `steps[].action` 上——采样器把条目的值抄到它合成的 step 上。
+
+`enemyId` **仍是代表**：刷怪层、footprint、`placementJitter` 全读它，`variantIds` 里不能重复列它（列了会抛）。
+
+**折叠不是重构，它改了整层的采样构成。** `PoolSampler` 数的是**条目**，coverage tier（OZX-1010）先给每个条目发一只——三条折成一条，植株那份保证从 3 只降到 1 只，腾出的名额落到别的类型上。chapter_3 floor 1 条目数 9 → 7，12 个名额里 coverage 吃掉 7 个（原来 9 个）。实测全房敌人 HP +7.4%，`ground_turret` 每房 1.42 → 1.61，植株每房均值 3.58 → 3.38 但 **p95 从 6 株变 8 株**（合并后的 `maxPerRoom` 是三者之和，把原来分散在三个上限里的余量集中到一个条目上）。stage 的 distinct 记账里一个变体组也只占 1 个名额，`ValidatePoolCoverage` 从此承诺的是**这个组**而不是每个变体。
+
+成簇是放置层的事：`EncounterActionExecutor` 把一条 launch 的身体分成若干簇，每簇一个锚点，其余成员落在 `[radius/2, radius]` 的环上，**溢出另起一簇**（5 具 = 3+2，不是一道 5 具的墙）。**簇内刻意豁免最小间距**，簇与簇之间照旧遵守——所以 `clusterRadius` 不是装饰，它是唯一还在把身体撑开的东西。
+
+校验（`LevelPlanValidator` / `EncounterValidator`，编辑器前移）：
+
+- 变体：空字符串 / 重复代表 / 不存在的 enemy id / **role 与代表不同**（整组只占一层刷怪格，取自代表；role 这条只在 pool 上，action 上没有可取代表的池子）。
+- 成簇：`clusterSizeMax > 1` 而 `clusterRadius <= 0`；写了半径没写簇大小；`min > max`；**spawner anchor 同时要成簇**（minion 走 channel，落在 spawner 自己的发射锚点上，从不读这些字段）。
+- `viaSpawner` 的 launch 不许带 `variantIds` 或成簇字段。
+
+⚠️ 契约注释说 `LevelPlanValidator` 同时强制「变体各自带 elite 块」，实际代码里只有 role 一条；elite 那半没实现（核对于 `f0a78923`）。
+
+#### 5.4.1 spawner 通道（OZX-1032，核对于 `ozx_base@bc3f3f24`）
+
 
 **`category: "spawner"` 的敌人自己什么都不产。** `EnemyEmitController` 只排干「encounter 通过 `EncounterAction.viaSpawner` 塞进去的请求」，`produceIntervalSeconds` 只是排干的节奏。手写 encounter 一直是把 spawner 和它的 minion step 成对写的；程序化楼层过去没法说出后半句，所以丢进 `enemyPool` 的 spawner 出来就是一具血厚如墙的哑火躯体。这两个字段就是那后半句：
 
@@ -351,6 +404,26 @@ LevelBasePlanData
 
 **「没写 category 的 plan 永远不查 taxonomy」是刻意的闸门**：这样一份早于本字段的 plan 不会因为 taxonomy 没收录某个道具而突然开始抛错。
 
+### 5.6 StaticPlacementEntryData 的 `chance` 与 `countMin`（OZX-1057，核对于 `ozx_base@f0a78923`）
+
+`count` 一直是**上限**：random fill 摆得下几个摆几个。这两个是长在它两端的字段。
+
+| 字段 | 语义 |
+|---|---|
+| `countMin` | 这条 entry **最少**放几个。0 / 1 / 省略 = 无下限（此字段之前的行为）；`>= 2` 时放不到就**一个都不放**，格子让给后面的 adapter |
+| `chance` | 这条 entry **整条**出不出现，(0, 1]，0 / 省略 = 必出 |
+
+**`chance` 整条掷一次，不是每个物件掷一次。** `count: 3, chance: 0.2` 是「这间房要么是个有三个 pod 的培养舱，要么是间普通房」，不是「每间房都有 0.6 个 pod」——后者会让 set-piece 读起来像杂物，正是这个字段要避免的分布。判定在 `AuthoredStaticPlacementsLogic.EntryAppears`，用**房间的 seeded `IRandom`**，同房同 seed 可复现。
+
+**这两个字段今天只写在 plan 的 `defaultStaticPlacements` 上**，因为程序化楼层没有手写房间可以挂。chapter_3 三层的 pod 都是 `{count: 3, countMin: 2, chance: 0.2, placement: "sidewall"}`。
+
+校验：
+
+- `chance > 1` → 抛（`ValidateChances`）。
+- `chance` 写在不读它的 kind 上 → 抛。`ChanceHonouringKinds` 现在只有 `prop`。
+- `countMin > count` → **引擎不管**，但等于永远不放。
+- ⚠️ **`countMin` 比字段注释说的还要窄**：注释说「只对 random fill 有意义」，实际只有 `placement: "sidewall"` 那条分支把它传给 `SideWallPlacementLogic.ChooseAnchors`；旁边那条普通 random fill 读了就丢。pinned `cells` 同样不读。
+
 ---
 
 ## 6. plan 如何编译成 level
@@ -411,6 +484,9 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **重复 `(dataType, id)`**：后加载者直接覆盖，无任何提示。
 - **未知 `generatorType`**：静默变成 `tree`。
 - **spawner 条目只写了一半**：`minionId` 或 `minionsPerSpawner` 缺一个时 `EnemyPoolEntry.IsSpawner` 判定为假，这条按普通敌人采样——工厂原地站着不产任何东西，没有任何报错（OZX-1032，见 §5.4）。
+- **`countMin` 写在不是 `placement: "sidewall"` 的 entry 上**：读了就丢，摆放照旧（OZX-1057，见 §5.6）。
+- **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
+- **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。
 - **跨层门没有配 stairLinks**：静默死路。
 - **新的 `openDoors` 组合没有对应模板**：生成器重映射时把门封掉，源数据看起来完全正常。
 - **只填 `bossId` 的静态 boss 房**：不刷任何怪。

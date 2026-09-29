@@ -1334,12 +1334,24 @@ function renderPlanFloors() {
     const issues = planIssuesFor(f.pointer);
     const bad = issues.some((i) => i.severity === 'error');
 
+    // OZX-1089: `enemyBudgetCut` is the SHARE of enemiesPerRoom the stage
+    // gives back, so a full cut is a room with no fight in it — the thing a
+    // stage list most needs to say and could not before.
     const stages = f.stageTypes.length
-      ? f.stageTypes.map((st) => `<div class="content-entry plan-stage">
-          <span class="content-glyph">${esc((st.stageType || '?').slice(0, 2).toUpperCase())}</span>
-          <span><strong>${esc(st.stageType || '?')}</strong><small>${
-            st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}</small></span>
-        </div>`).join('')
+      ? f.stageTypes.map((st) => {
+          const cut = st.enemyBudgetCut;
+          const budget = cut <= 0 ? ''
+            : `<span class="weight-value${cut >= 1 ? ' zero' : ''}"
+                 title="${esc(cut >= 1
+                   ? 'a full cut: this stage spawns no enemies at all'
+                   : `gives back ${Math.round(cut * 100)}% of the floor's enemiesPerRoom`)}">${
+                 st.enemyBudget == null ? `-${Math.round(cut * 100)}%` : `${st.enemyBudget}♦`}</span>`;
+          return `<div class="content-entry plan-stage">
+            <span class="content-glyph">${esc((st.stageType || '?').slice(0, 2).toUpperCase())}</span>
+            <span><strong>${esc(st.stageType || '?')}</strong><small>${
+              st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}</small></span>
+            ${budget}</div>`;
+        }).join('')
       : '<div class="inline-empty">No stage slices</div>';
 
     const pool = f.enemyPool.length
@@ -1437,6 +1449,11 @@ function renderPlanFloors() {
           <div><span>rooms</span><strong>${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
           <div><span>enemies/room</span><strong>${f.enemiesPerRoom ?? '—'}</strong></div>
           <div><span>key</span><strong>${esc(f.transitionKeyId || '—')}</strong></div>
+          <div><span>skill cap</span><strong class="${state.plan.skillDropLevelCapDeclared ? '' : 'noboss'}"
+            title="OZX-1069: a skill stops DROPPING at this level. Not a level clamp — maxLevel still rules.">${
+            state.plan.skillDropLevelCapDeclared
+              ? `L${state.plan.skillDropLevelCap}`
+              : `L${state.plan.skillDropLevelCapEffective} (default)`}</strong></div>
           <div><span>boss</span><strong class="${f.hasBoss ? (f.bossMissing ? 'bad' : '') : 'noboss'}">${
             f.hasBoss ? esc(f.bossId) : 'none — no boss room on this floor'}</strong></div>
         </div>

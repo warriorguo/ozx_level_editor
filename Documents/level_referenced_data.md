@@ -2,7 +2,7 @@
 
 - 面向读者：OZX Level Studio 的实现者
 - 数据与代码快照：`ozx_base` `main@d867b644`，2026-09-11
-- 增量复核：§1.6 与相关条目核对于 `main@bc3f3f24`（2026-09-24），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047；其余仍是 `d867b644` 快照的实测数字。
+- 增量复核：§1.6 / §2.4 与相关条目核对于 `main@f0a78923`（2026-09-29），对应 OZX-1032 / OZX-1041 / OZX-1044 / OZX-1047 / OZX-1063；其余仍是 `d867b644` 快照的实测数字。
 - 姊妹篇：`level_data_reference.md`（`GameData/levels/` 本身）。本文覆盖 level 数据**指向外部**的五个数据族，是引用选择器、跳转、校验和 Effective 视图的依据。
 
 本文所有分布数字都是在上述快照上实测的，不是估计。
@@ -58,7 +58,7 @@
 | `LootEntryData.tableId` | LootTableData（必须 `pickOne`） |
 | `EncounterCondition.triggerId`（`touch`） | 房间里 `kind="trigger"` 的 placement |
 | `EnemyData.dropTableId` | LootTableData |
-| `EnemyData.deathSpawnEnemyId` / `hatchEnemyId` / `spawnConfig.enemyIds[]` | EnemyData |
+| `EnemyData.deathSpawnEnemyId` / `hatchEnemyId` / `hatchPool[]` / `spawnConfig.enemyIds[]` | EnemyData |
 | `EnemyData.projectileId` / `beamId` / `skills[]` | ProjectileData / BeamData / SkillData |
 | `LootEntryData.itemId` | ItemData |
 | `ItemTaxonomyData.nodes[].items[]` | ItemData |
@@ -185,6 +185,7 @@ EnemyData 有 90+ 字段，绝大多数是 AI 调参，与关卡编排无关。�
 | `excludeFromRoomClear` | 不计入清场条件 | — |
 | `passive` | 永不索敌 | — |
 | `deathSpawnEnemyId` / `hatchEnemyId` | 死亡/孵化衍生敌人（引用边） | 2 / 1 |
+| `hatchPool` / `hatchCountMin/Max` / `hatchSpreadRadius` | 孵化池与一窝的大小，见 §2.4 | 1 |
 | `spawnConfig.enemyIds[]` | 该敌人能轮转生产的类型 | **0 份数据使用** |
 | `projectileId` / `beamId` | 远程弹道；`beamId` 非空时 `projectileId` 被忽略 | — |
 
@@ -194,6 +195,26 @@ EnemyData 有 90+ 字段，绝大多数是 AI 调参，与关卡编排无关。�
 
 enemy picker 至少显示 `category / role / movementType / attackType / footprint / 有无 elite`，并在选中后显示「哪些 encounter、enemyPool、placement 在用它」。elite 复选框要在敌人没有 elite 配置时禁用并说明原因。
 
+### 2.4 孵化是一个池，而且不占任何预算（OZX-1063，核对于 `ozx_base@f0a78923`）
+
+`hatchEnemyId` 现在是池的一端：`hatchPool` 是通用形式，`hatchEnemyId` 等价于单元素池。**两者同时非空直接抛**（`HatchBrood.Validate`），不设优先级、不做回退——理由在源码里写明了，是 OZX-1041 `dropTableIdOverride` 那次教训（一个字段两个含义轮流覆写）。
+
+| 字段 | 语义 |
+|---|---|
+| `hatchPool` | 破壳放出来的种类池。**每只占用者各自抽一次**（等权、独立、允许重复） |
+| `hatchCountMin` / `hatchCountMax` | 一颗卵开出几只，每颗卵掷一次（含端点）。**0 / 省略 = 恰好 1 只**（旧行为）；max < min 时按 min 取，不抛 |
+| `hatchSpreadRadius` | 第 2 只起相对卵的散布环半径。第 1 只永远落在卵自己的坐标上 |
+
+**孵化物完全不经过 `PoolSampler`**，所以它既不占 `FloorPlanData.enemiesPerRoom`，也不计入 encounter 的 `maxAlive`——两个预算都数不到它。一间抽到 N 颗蛋的房间实际比 `enemiesPerRoom` 多出 `N × [min, max]` 个敌人，而且那些敌人的 HP 也不在任何预算里。实测 chapter_3 floor 1（3000 seed × 38998 间）：每房植株 4.74 → 6.49，全房敌人 HP 8846 → 9456。**任何回答「这间房有多大一场仗」的视图漏掉孵化通道，都会朝同一个方向系统性偏低。**
+
+编辑期该挡住的四条（引擎是运行时抛，而且是从 `HatchState.Enter` 抛——已经孵了三秒、门还锁着的时候）：
+
+1. 两个 channel 同时非空。
+2. 两个都空但这只敌人被当成卵（`IsEgg` 就是「任一非空」，所以这条在编辑器里表现为「不是卵」，无需报）。
+3. `hatchPool` 里有空字符串（空位照样占一次抽取份额，一窝会静默变少）；或条目不是已存在的 enemy id（**这条引擎查不了**，它手里只有一只敌人的数据，没有 id 全集）。
+4. `hatchCountMax > 1` 而 `hatchSpreadRadius <= 0`——孵化物是 rooted 植株，叠在一点上永远弹不开。
+
+池子**等权**是有意的：三株 blight 植物是同一生物的三个 variant，带权重会是三个没人选过的数字。将来需要时再升级成带权条目数组。
 ---
 
 ## 3. LootTableData（25 份，`GameData/loot_tables/`）
