@@ -1329,8 +1329,75 @@ function planIssuesFor(pointer) {
     (i) => i.pointer === pointer || (i.pointer || '').startsWith(pointer + '/'));
 }
 
+// OZX-1011: a floor writes only what differs from `floorDefaults`, and the
+// rest is the chapter's. A designer changing a default needs to see which
+// floors it reaches, and one looking at a floor needs to see which of its
+// values are not its own — editing those edits every floor that inherits.
+const INHERITED_TIP = 'inherited from floorDefaults — not written on this floor';
+
+function inheritedMark(f, key) {
+  return f.inherited && f.inherited.includes(key) ? ' inherited' : '';
+}
+
+function inheritedTag(f, key) {
+  return inheritedMark(f, key)
+    ? `<em class="inherit-tag" title="${INHERITED_TIP}">default</em>` : '';
+}
+
+/** Tile-group chips for a floor (holder = its index) or the defaults block. */
+function tileChips(holder, owned, chosen, themeId) {
+  return owned.found
+    ? owned.all.map((name) => `<button class="tilepart ${chosen.includes(name) ? 'on' : ''}${
+        owned.named.includes(name) ? ' named-only' : ''}"
+        data-floor="${holder}" data-part="${esc(name)}"
+        title="${owned.named.includes(name)
+          ? 'Owned by the theme but kept out of the random pool — addressable only by name'
+          : 'In the theme\'s random pool'}">${esc(name)}</button>`).join('')
+    : `<div class="inline-empty" style="color:var(--amber)">Cannot resolve theme ${esc(themeId || '(none)')}</div>`;
+}
+
+function renderPlanDefaults() {
+  const d = state.plan.floorDefaults;
+  if (!d || !d.declared) return '';
+  const issues = planIssuesFor(d.pointer);
+  const n = state.plan.floors.length;
+  const reach = (key) => {
+    const k = d.fanOut[key];
+    return k == null ? '' : `<small class="fan-out" title="floors that do not write ${esc(key)} and take this value">${k}/${n} floors</small>`;
+  };
+  const rows = d.keys.filter((k) => k !== 'floorLootPlan').map((k) => [k, k])
+    .concat(Object.keys(d.fanOut).filter((k) => k.startsWith('floorLootPlan/'))
+      .map((k) => [k.slice('floorLootPlan/'.length), k]));
+  const chosen = d.appearance.tilePartConfigs;
+  return `<div class="room-list-item plan-floor plan-defaults${
+      issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="defaults">
+    <div class="content-column plan-head">
+      <div class="content-head">Chapter defaults</div>
+      <div class="plan-facts">
+        <div><span>theme</span><strong>${esc(d.themeId || '—')}</strong></div>
+        <div><span>generator</span><strong>${esc(d.generatorType || '—')}</strong></div>
+        <div><span>rooms</span><strong>${d.roomCountMin ?? '?'}–${d.roomCountMax ?? '?'}</strong></div>
+        <div><span>enemies/room</span><strong>${d.enemiesPerRoom ?? '—'}</strong></div>
+      </div>
+      ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+    </div>
+    <div class="content-column">
+      <div class="content-head">Inherited by <span>${rows.length}</span></div>
+      <div class="content-list">${rows.map(([label, key]) => `<div class="content-entry">
+        <span><strong>${esc(label)}</strong>${reach(key) || '<small>never inherited</small>'}</span></div>`).join('')}</div>
+      <div class="derived-note">a floor that writes a field overrides it whole; arrays replace, never append</div>
+    </div>
+    <div class="content-column">
+      <div class="content-head">Tile groups <span>${chosen.length || 'all'}</span></div>
+      <div class="tilepart-list">${tileChips('defaults', d.themeParts, chosen, d.themeId)}</div>
+      <div class="derived-note">${d.fanOut.appearance == null ? 'no chapter default'
+        : `${d.fanOut.appearance} of ${n} floors draw these`}</div>
+    </div>
+  </div>`;
+}
+
 function renderPlanFloors() {
-  $('roomsGrid').innerHTML = state.plan.floors.map((f) => {
+  $('roomsGrid').innerHTML = renderPlanDefaults() + state.plan.floors.map((f) => {
     const issues = planIssuesFor(f.pointer);
     const bad = issues.some((i) => i.severity === 'error');
 
@@ -1427,14 +1494,7 @@ function renderPlanFloors() {
     // typing a name that does not resolve throws at room load.
     const owned = f.themeParts;
     const chosen = f.appearance.tilePartConfigs;
-    const chips = owned.found
-      ? owned.all.map((name) => `<button class="tilepart ${chosen.includes(name) ? 'on' : ''}${
-          owned.named.includes(name) ? ' named-only' : ''}"
-          data-floor="${f.index}" data-part="${esc(name)}"
-          title="${owned.named.includes(name)
-            ? 'Owned by the theme but kept out of the random pool — addressable only by name'
-            : 'In the theme\'s random pool'}">${esc(name)}</button>`).join('')
-      : `<div class="inline-empty" style="color:var(--amber)">Cannot resolve theme ${esc(f.themeId || '(none)')}</div>`;
+    const chips = tileChips(f.index, owned, chosen, f.themeId);
 
     const appearanceNote = !chosen.length
       ? 'none selected — rooms draw from the theme\'s full pool'
@@ -1446,11 +1506,11 @@ function renderPlanFloors() {
       <div class="content-column plan-head">
         <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')}</div>
         <div class="plan-facts">
-          <div><span>theme</span><strong>${esc(f.themeId || '—')}</strong></div>
-          <div><span>generator</span><strong>${esc(f.generatorType || 'tree (default)')}</strong></div>
-          <div><span>rooms</span><strong>${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
-          <div><span>enemies/room</span><strong>${f.enemiesPerRoom ?? '—'}</strong></div>
-          <div><span>key</span><strong>${esc(f.transitionKeyId || '—')}</strong></div>
+          <div><span>theme</span><strong class="${inheritedMark(f, 'themeId')}">${esc(f.themeId || '—')}</strong></div>
+          <div><span>generator</span><strong class="${inheritedMark(f, 'generatorType')}">${esc(f.generatorType || 'tree (default)')}</strong></div>
+          <div><span>rooms</span><strong class="${inheritedMark(f, 'roomCountMin') || inheritedMark(f, 'roomCountMax')}">${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
+          <div><span>enemies/room</span><strong class="${inheritedMark(f, 'enemiesPerRoom')}">${f.enemiesPerRoom ?? '—'}</strong></div>
+          <div><span>key</span><strong class="${inheritedMark(f, 'transitionKeyId')}">${esc(f.transitionKeyId || '—')}</strong></div>
           <div><span>skill cap</span><strong class="${state.plan.skillDropLevelCapDeclared ? '' : 'noboss'}"
             title="OZX-1069: a skill stops DROPPING at this level. Not a level clamp — maxLevel still rules.">${
             state.plan.skillDropLevelCapDeclared
@@ -1462,42 +1522,52 @@ function renderPlanFloors() {
         ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
       </div>
       <div class="content-column">
-        <div class="content-head">Stage mix <span>${f.stageTypes.length}</span></div>
+        <div class="content-head">Stage mix ${inheritedTag(f, 'stageTypes')}<span>${f.stageTypes.length}</span></div>
         <div class="content-list">${stages}</div>
         ${f.stageTypes.length ? `<div class="derived-note">portions total ${f.stagePortionTotal}</div>` : ''}
       </div>
       <div class="content-column">
-        <div class="content-head">Enemy pool <span>${f.enemyPool.length}</span></div>
+        <div class="content-head">Enemy pool ${inheritedTag(f, 'enemyPool')}<span>${f.enemyPool.length}</span></div>
         <div class="content-list">${pool}</div>
       </div>
       <div class="content-column">
-        <div class="content-head">Default placements <span>${f.defaultStaticPlacements.length || '—'}</span></div>
+        <div class="content-head">Default placements ${inheritedTag(f, 'defaultStaticPlacements')}<span>${f.defaultStaticPlacements.length || '—'}</span></div>
         <div class="content-list">${placements}</div>
         ${f.defaultStaticPlacements.length
           ? '<div class="derived-note">applied to every generated room whose own staticPlacements came out empty</div>'
           : ''}
       </div>
       <div class="content-column">
-        <div class="content-head">Stage weights <span>${f.stageWeights.length || '—'}</span></div>
+        <div class="content-head">Stage weights ${inheritedTag(f, 'floorLootPlan/stageWeights')}<span>${f.stageWeights.length || '—'}</span></div>
         <div class="content-list">${weights}</div>
         ${f.stageWeights.length ? `<div class="derived-note">${weightNote}</div>` : ''}
       </div>
       <div class="content-column">
-        <div class="content-head">Tile groups <span>${chosen.length || 'all'}</span></div>
-        <div class="tilepart-list">${chips}</div>
+        <div class="content-head">Tile groups ${inheritedTag(f, 'appearance')}<span>${chosen.length || 'all'}</span></div>
+        <div class="tilepart-list${f.appearance.inherited ? ' inherited' : ''}">${chips}</div>
         <div class="derived-note">${appearanceNote}</div>
       </div>
     </div>`;
   }).join('');
 
   $('roomsGrid').querySelectorAll('.tilepart').forEach((chip) =>
-    chip.addEventListener('click', () =>
-      toggleTilePart(Number(chip.dataset.floor), chip.dataset.part)));
+    chip.addEventListener('click', () => toggleTilePart(
+      chip.dataset.floor === 'defaults' ? 'defaults' : Number(chip.dataset.floor),
+      chip.dataset.part)));
 }
 
-/** Add or remove one tile group from a floor's subset. */
-async function toggleTilePart(floorIndex, name) {
-  const floor = state.plan.floors[floorIndex];
+/** Add or remove one tile group from a floor's subset, or the chapter's. */
+async function toggleTilePart(holder, name) {
+  const isDefaults = holder === 'defaults';
+  const floor = isDefaults ? state.plan.floorDefaults : state.plan.floors[holder];
+  const label = isDefaults ? 'chapter default' : `floor ${holder + 1}`;
+  if (floor.appearance.inherited) {
+    // Clicking here would edit every floor that inherits, from a card that
+    // only names one. The span writer cannot add the key to this floor, so
+    // the honest options are both elsewhere.
+    showToast(`Floor ${holder + 1} inherits its tile groups — edit them on Chapter defaults, or write appearance on this floor in the JSON`);
+    return;
+  }
   if (!floor.appearance.declared) {
     // The span writer replaces nodes; it cannot add a key to an object.
     showToast('This floor has no appearance.tilePartConfigs key yet — add it in the JSON first');
@@ -1514,8 +1584,8 @@ async function toggleTilePart(floorIndex, name) {
     : { op: 'append', path: floor.appearance.pointer, value: name };
   const after = at >= 0 ? current.filter((n) => n !== name) : [...current, name];
   await applyPlanEdits([edit],
-    after.length ? `floor ${floorIndex + 1} tiles → ${after.join(', ')}`
-                 : `floor ${floorIndex + 1} tiles → theme default`);
+    after.length ? `${label} tiles → ${after.join(', ')}`
+                 : `${label} tiles → theme default`);
 }
 
 async function applyPlanEdits(edits, message) {

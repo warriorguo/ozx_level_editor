@@ -359,9 +359,23 @@ if (plan) {
   picker.dispatchEvent(new window.Event('change', { bubbles: true }));
   await settle(20);
 
+  const floorCards = () => qa('.plan-floor:not(.plan-defaults)');
   check('opening a plan renders a card per floor',
-        qa('.plan-floor').length === plan.floors.length,
-        `${qa('.plan-floor').length} floors`);
+        floorCards().length === plan.floors.length,
+        `${floorCards().length} floors`);
+  // OZX-1011: the chapter defaults get a card of their own, which says how
+  // far each default reaches — and only when the plan has any.
+  check('the chapter defaults have a card iff the plan declares them',
+        qa('.plan-defaults').length === (plan.floorDefaults?.declared ? 1 : 0));
+  if (plan.floorDefaults?.declared) {
+    check('it says how many floors inherit each default',
+          qa('.plan-defaults .fan-out').length > 0
+          && qa('.plan-defaults .fan-out').every((n) => /^\d+\/\d+ floors$/.test(n.textContent)),
+          qa('.plan-defaults .fan-out')[0]?.textContent);
+    const inherited = plan.floors.reduce((n, f) => n + (f.inherited || []).length, 0);
+    check('a floor marks the values it inherits',
+          inherited === 0 || qa('.plan-floor .inherited, .plan-floor .inherit-tag').length > 0);
+  }
   check('it draws no room cards', qa('.room-list-item:not(.plan-floor)').length === 0);
   check('and says why there is no map', !!q('.plan-nomap'));
   // #mapPlane lives inside #mapScroll; writing the notice to the scroller
@@ -398,16 +412,17 @@ if (plan) {
           rows.every((r) => /^×/.test(r.querySelector('.weight-value')?.textContent || '')),
           rows[0]?.querySelector('.weight-value')?.textContent);
     check('a zero is muted rather than read as a small number',
-          qa('.plan-floor .weight-value.zero').length ===
+          qa('.plan-floor .weight-entry .weight-value.zero').length ===
             authored.filter((w) => w.weight === 0).length,
-          `${qa('.plan-floor .weight-value.zero').length} zeros`);
+          `${qa('.plan-floor .weight-entry .weight-value.zero').length} zeros`);
     check('a category-free row says it is the fallback',
           rows.some((r) => r.textContent.includes('everything else on this stage')));
   }
 
   check('every tile group the theme owns is offered',
         qa('.plan-floor .tilepart').length ===
-          plan.floors.reduce((n, f) => n + f.themeParts.all.length, 0));
+          plan.floors.reduce((n, f) => n + f.themeParts.all.length,
+            plan.floorDefaults?.declared ? plan.floorDefaults.themeParts.all.length : 0));
   check('the authored subset is the one switched on',
         qa('.plan-floor[data-floor="0"] .tilepart.on').length ===
           plan.floors[0].appearance.tilePartConfigs.length);
@@ -418,7 +433,8 @@ if (plan) {
   // An absent bossId is a real choice (OZX-994), never an unfilled field.
   const noBoss = plan.floors.filter((f) => !f.hasBoss).length;
   check('a floor with no boss says so rather than showing a blank',
-        qa('.plan-facts strong.noboss').length === noBoss, `${noBoss} bossless`);
+        qa('.plan-facts strong.noboss').filter((n) => n.textContent.startsWith('none')).length
+          === noBoss, `${noBoss} bossless`);
 
   // The target line is "→ <roomId> · <column>" in level mode. What must not
   // survive is the arrow naming a room in the document no longer on screen —
@@ -436,9 +452,18 @@ if (plan) {
     check('a library click writes nothing in plan mode', posted.length === before);
   }
 
+  // A floor that inherits its tile groups must not edit the chapter from a
+  // card that names one floor; the defaults card is where that happens.
+  const tileHolder = plan.floors[0].appearance.inherited ? 'defaults' : '0';
+  if (tileHolder === 'defaults') {
+    const before = posted.length;
+    click(qa('.plan-floor[data-floor="0"] .tilepart')[0]);
+    await settle();
+    check('an inherited tile group is not edited from the floor', posted.length === before);
+  }
   {
     const before = posted.length;
-    const off = qa('.plan-floor[data-floor="0"] .tilepart:not(.on)')[0];
+    const off = qa(`.plan-floor[data-floor="${tileHolder}"] .tilepart:not(.on)`)[0];
     click(off);
     await settle();
     const write = posted[before];
@@ -455,7 +480,7 @@ if (plan) {
 
   {
     const before = posted.length;
-    click(qa('.plan-floor[data-floor="0"] .tilepart.on')[0]);
+    click(qa(`.plan-floor[data-floor="${tileHolder}"] .tilepart.on`)[0]);
     await settle();
     check('toggling one off removes that index',
           posted[before]?.body.edits[0].op === 'remove',

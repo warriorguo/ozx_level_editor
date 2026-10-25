@@ -10,6 +10,7 @@ Issue codes come from the TD's Appendix B; they are stable machine ids.
 
 from __future__ import annotations
 
+from . import plandefaults
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
                       Dataset)
 
@@ -519,84 +520,120 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     doc = ds.get("LevelBasePlanData", plan_id)
     if doc is None:
         return [_issue("error", "DATA_REFERENCE_MISSING", f"plan '{plan_id}' not found")]
+    defaults = doc.value.get("floorDefaults") or {}
     issues: list[dict] = []
+    for key, why in plandefaults.refused_defaults(defaults):
+        issues.append(_issue(
+            "error", "LEVEL_FLOOR_DEFAULT_REFUSED",
+            f"floorDefaults sets {key}, which is never inherited: {why}",
+            entity=plan_id, pointer=f"/floorDefaults/{key}"))
     issues.extend(_skill_drop_cap_issues(ds, plan_id, doc.value))
-    for fi, floor in enumerate(doc.value.get("floors") or []):
-        fptr = f"/floors/{fi}"
-        issues.extend(_enemy_budget_cut_issues(plan_id, fi, fptr, floor))
-        gen = floor.get("generatorType")
-        # ParseGeneratorType swallows BOTH null and unknown strings into Tree.
-        # Null is a legitimate default; a typo is not, and it is invisible.
-        if gen is not None and gen not in GENERATOR_TYPES:
-            issues.append(_issue(
-                "error", "TYPE_VALUE_UNKNOWN",
-                f"floor {fi}: generatorType '{gen}' is not recognised and will "
-                f"silently fall back to 'tree'",
-                entity=plan_id, pointer=f"{fptr}/generatorType"))
+    # Every floor is checked as the generator sees it — merged with the
+    # chapter defaults (OZX-1011) — and each finding is then moved to the
+    # node that actually holds the value. A default that is wrong is wrong
+    # once, in `/floorDefaults`, however many floors inherit it.
+    by_pointer: dict = {}
+    for fi, raw in enumerate(doc.value.get("floors") or []):
+        floor, source = plandefaults.merge_floor(defaults, raw)
+        for issue in _floor_plan_issues(ds, plan_id, fi, floor):
+            pointer = plandefaults.reroute(issue["pointer"], fi, source)
+            if pointer == issue["pointer"]:
+                issues.append(issue)
+                continue
+            issue["pointer"] = pointer
+            key = (issue["code"], pointer)
+            if key in by_pointer:
+                by_pointer[key][1].append(fi)
+                continue
+            by_pointer[key] = (issue, [fi])
+            issues.append(issue)
+    for issue, floors in by_pointer.values():
+        issue["message"] += (
+            f" (inherited from floorDefaults by floor"
+            f"{'s' if len(floors) > 1 else ''} {', '.join(map(str, floors))})")
+    return issues
 
-        stages = {s.get("stageType") for s in (floor.get("stageTypes") or [])}
-        # New enemy types are only ever introduced in teaching/building rooms.
-        if stages and not (stages & {"teaching", "building"}):
-            issues.append(_issue(
-                "error", "LEVEL_STAGE_INTRO_MISSING",
-                f"floor {fi}: no teaching or building stage slice, so no room can "
-                f"introduce a new enemy type (OZX-442)",
-                entity=plan_id, pointer=f"{fptr}/stageTypes"))
 
-        for ei, entry in enumerate(floor.get("enemyPool") or []):
-            ref = entry.get("enemyId")
-            if ref and ds.get("EnemyData", ref) is None:
-                issues.append(_issue("error", "DATA_REFERENCE_MISSING",
-                                     f"floor {fi}: enemyPool '{ref}' does not exist",
-                                     entity=plan_id,
-                                     pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
-        issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
-        issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
-        issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
-        issues.extend(_floor_loot_issues(ds, plan_id, fi, fptr, floor))
+def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
+                       floor: dict) -> list[dict]:
+    """One merged floor. Pointers are written as if every field were the
+    floor's own; `validate_plan` reroutes the inherited ones."""
+    issues: list[dict] = []
+    fptr = f"/floors/{fi}"
+    issues.extend(_enemy_budget_cut_issues(plan_id, fi, fptr, floor))
+    gen = floor.get("generatorType")
+    # ParseGeneratorType swallows BOTH null and unknown strings into Tree.
+    # Null is a legitimate default; a typo is not, and it is invisible.
+    if gen is not None and gen not in GENERATOR_TYPES:
+        issues.append(_issue(
+            "error", "TYPE_VALUE_UNKNOWN",
+            f"floor {fi}: generatorType '{gen}' is not recognised and will "
+            f"silently fall back to 'tree'",
+            entity=plan_id, pointer=f"{fptr}/generatorType"))
 
-        # The same entries a room carries, applied to every generated room of
-        # this floor whose own `staticPlacements` came out empty — and where
-        # `chance` / `countMin` are actually authored today, since a
-        # procedural floor has no hand-written rooms to put them on.
-        for pi, p in enumerate(floor.get("defaultStaticPlacements") or []):
-            pptr = f"{fptr}/defaultStaticPlacements/{pi}"
-            issues.extend(_placement_count_issues(
-                plan_id, f"floor {fi}", pi, pptr, p))
-        boss = floor.get("bossId")
-        if boss and ds.get("EnemyData", boss) is None:
+    stages = {s.get("stageType") for s in (floor.get("stageTypes") or [])}
+    # New enemy types are only ever introduced in teaching/building rooms.
+    if stages and not (stages & {"teaching", "building"}):
+        issues.append(_issue(
+            "error", "LEVEL_STAGE_INTRO_MISSING",
+            f"floor {fi}: no teaching or building stage slice, so no room can "
+            f"introduce a new enemy type (OZX-442)",
+            entity=plan_id, pointer=f"{fptr}/stageTypes"))
+
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        ref = entry.get("enemyId")
+        if ref and ds.get("EnemyData", ref) is None:
             issues.append(_issue("error", "DATA_REFERENCE_MISSING",
-                                 f"floor {fi}: bossId '{boss}' does not exist",
-                                 entity=plan_id, pointer=f"{fptr}/bossId"))
-        # bossId being EMPTY is deliberate and means "no boss on this floor"
-        # (OZX-994), so there is no rule for it — the room that would have been
-        # the boss room becomes an ordinary one.
+                                 f"floor {fi}: enemyPool '{ref}' does not exist",
+                                 entity=plan_id,
+                                 pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
+    issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_floor_loot_issues(ds, plan_id, fi, fptr, floor))
 
-        # The floor's cross-floor key. OZX-996 made this the single source for
-        # which key the room channel drops — it is synthesised into
-        # `loot_key_f{n}` at generation — so a name that resolves to nothing
-        # now produces a key-room whose table drops a non-existent item, and
-        # the floor is unopenable. Any key id is legal (it no longer has to be
-        # key_silver); it does have to exist.
-        key_id = floor.get("transitionKeyId")
-        if key_id:
-            key_item = ds.get("ItemData", key_id)
-            if key_item is None:
-                issues.append(_issue(
-                    "error", "DATA_REFERENCE_MISSING",
-                    f"floor {fi}: transitionKeyId '{key_id}' is not an ItemData; "
-                    f"the synthesised key table would drop nothing and the floor "
-                    f"could not be unlocked",
-                    entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
-            elif key_item.value.get("type") != "key":
-                issues.append(_issue(
-                    "warning", "TYPE_VALUE_UNKNOWN",
-                    f"floor {fi}: transitionKeyId '{key_id}' is type "
-                    f"'{key_item.value.get('type')}', not 'key'; only a key item "
-                    f"is consumed by a locked door",
-                    entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
+    # The same entries a room carries, applied to every generated room of
+    # this floor whose own `staticPlacements` came out empty — and where
+    # `chance` / `countMin` are actually authored today, since a
+    # procedural floor has no hand-written rooms to put them on.
+    for pi, p in enumerate(floor.get("defaultStaticPlacements") or []):
+        pptr = f"{fptr}/defaultStaticPlacements/{pi}"
+        issues.extend(_placement_count_issues(
+            plan_id, f"floor {fi}", pi, pptr, p))
+    boss = floor.get("bossId")
+    if boss and ds.get("EnemyData", boss) is None:
+        issues.append(_issue("error", "DATA_REFERENCE_MISSING",
+                             f"floor {fi}: bossId '{boss}' does not exist",
+                             entity=plan_id, pointer=f"{fptr}/bossId"))
+    # bossId being EMPTY is deliberate and means "no boss on this floor"
+    # (OZX-994), so there is no rule for it — the room that would have been
+    # the boss room becomes an ordinary one.
 
-        issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+    # The floor's cross-floor key. OZX-996 made this the single source for
+    # which key the room channel drops — it is synthesised into
+    # `loot_key_f{n}` at generation — so a name that resolves to nothing
+    # now produces a key-room whose table drops a non-existent item, and
+    # the floor is unopenable. Any key id is legal (it no longer has to be
+    # key_silver); it does have to exist.
+    key_id = floor.get("transitionKeyId")
+    if key_id:
+        key_item = ds.get("ItemData", key_id)
+        if key_item is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"floor {fi}: transitionKeyId '{key_id}' is not an ItemData; "
+                f"the synthesised key table would drop nothing and the floor "
+                f"could not be unlocked",
+                entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
+        elif key_item.value.get("type") != "key":
+            issues.append(_issue(
+                "warning", "TYPE_VALUE_UNKNOWN",
+                f"floor {fi}: transitionKeyId '{key_id}' is type "
+                f"'{key_item.value.get('type')}', not 'key'; only a key item "
+                f"is consumed by a locked door",
+                entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
+
+    issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
 
@@ -1017,7 +1054,9 @@ def _droppable_skill_levels(ds: Dataset, plan: dict) -> dict:
     reachable, never less, so it cannot produce a false finding.
     """
     out: dict = {}
-    for floor in plan.get("floors") or []:
+    defaults = plan.get("floorDefaults") or {}
+    for raw in plan.get("floors") or []:
+        floor = plandefaults.merge_floor(defaults, raw)[0]
         for entry in ((floor.get("floorLootPlan") or {}).get("probabilistic") or []):
             item_id = entry.get("itemId")
             if not item_id:

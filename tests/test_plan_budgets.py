@@ -98,7 +98,7 @@ def test_the_droppable_skills_are_read_off_the_plan(ds):
     from ozxlevel.validate import _droppable_skill_levels
     levels = _droppable_skill_levels(
         ds, ds.get("LevelBasePlanData", "chapter_3").value)
-    assert levels == {"flute_companion": 10, "shield_blue": 3}
+    assert levels == {"flute_companion": 10, "shield_blue": 10}
 
 
 def test_a_cap_above_every_droppable_skill_is_inert(ds, plan):
@@ -190,13 +190,28 @@ def test_an_encounter_id_without_a_full_cut_is_fine(ds, plan):
     assert "LEVEL_STAGE_BUDGET_CUT_CONTRADICTS_ENCOUNTER" not in codes(ds)
 
 
-def test_the_resolved_budget_is_absent_rather_than_zero_when_unknown(ds):
-    """chapter_3 keeps `enemiesPerRoom` in floorDefaults, which is not merged
-    yet (OLE-9). Reporting 0 there would read as "no enemies", which is the
-    one thing a full cut means."""
+def test_an_inherited_budget_resolves_through_the_defaults(ds):
+    """chapter_3 keeps `enemiesPerRoom` in floorDefaults (OZX-1011). Before
+    the merge this read as absent; it is the chapter's 12."""
     view = ds.plan_view("chapter_3")
-    assert view["floors"][0]["enemiesPerRoom"] is None
-    assert all(s["enemyBudget"] is None for s in view["floors"][0]["stageTypes"])
+    floor = view["floors"][0]
+    assert floor["enemiesPerRoom"] == 12
+    assert "enemiesPerRoom" in floor["inherited"]
+    assert all(s["enemyBudget"] == 12
+               for s in floor["stageTypes"] if not s["enemyBudgetCut"])
+
+
+def test_the_resolved_budget_is_absent_rather_than_zero_when_unknown(ds):
+    """With no budget written anywhere, reporting 0 would read as "no
+    enemies", which is the one thing a full cut means."""
+    plan = ds.get("LevelBasePlanData", "chapter_3").value
+    defaults = plan.pop("floorDefaults")
+    try:
+        view = ds.plan_view("chapter_3")
+        assert view["floors"][0]["enemiesPerRoom"] is None
+        assert all(s["enemyBudget"] is None for s in view["floors"][0]["stageTypes"])
+    finally:
+        plan["floorDefaults"] = defaults
 
     # A plan that writes it per floor resolves for real.
     ten = ds.plan_view("level_10")

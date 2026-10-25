@@ -15,7 +15,7 @@ import math
 import pathlib
 from typing import Any
 
-from . import jsonspan
+from . import jsonspan, plandefaults
 from .sprites import SpriteIndex
 from .themes import ThemeIndex
 
@@ -893,7 +893,17 @@ class Dataset:
         if doc is None:
             return {"id": plan_id, "missing": True, "floors": []}
         floors = []
-        for fi, floor in enumerate(doc.value.get("floors") or []):
+        defaults = doc.value.get("floorDefaults") or {}
+        for fi, raw in enumerate(doc.value.get("floors") or []):
+            # The floor as the generator sees it (OZX-1011). Every pointer
+            # below goes to the node that HOLDS the value, so an inherited
+            # field points into /floorDefaults and editing it edits the
+            # chapter — which is what `inherited` exists to warn about.
+            floor, source = plandefaults.merge_floor(defaults, raw)
+
+            def at(key, fi=fi, source=source):
+                return plandefaults.field_base(fi, source, key)
+
             base = f"/floors/{fi}"
             appearance = floor.get("appearance") or {}
             theme_id = floor.get("themeId")
@@ -910,20 +920,22 @@ class Dataset:
                  # here") as "take the full budget", which is the bug the
                  # field exists to fix. Omitted = 0 = nothing changes.
                  "enemyBudgetCut": s.get("enemyBudgetCut") or 0,
-                 # None when the floor's own `enemiesPerRoom` is absent —
-                 # chapter_3 keeps it in `floorDefaults`, which is not merged
-                 # here yet (OLE-9). Reporting 0 there would read as "no
-                 # enemies", which is the one thing a cut of 1 means.
+                 # None when no budget is written here or in floorDefaults.
+                 # Reporting 0 there would read as "no enemies", which is
+                 # the one thing a cut of 1 means.
                  "enemyBudget": (
                      _stage_budget(floor["enemiesPerRoom"],
                                    s.get("enemyBudgetCut") or 0)
                      if floor.get("enemiesPerRoom") else None),
-                 "pointer": f"{base}/stageTypes/{si}"}
+                 "pointer": f"{at('stageTypes')}/stageTypes/{si}"}
                 for si, s in enumerate(floor.get("stageTypes") or [])
             ]
             floors.append({
                 "index": fi,
                 "pointer": base,
+                # Fields this floor did not write and takes from floorDefaults.
+                "inherited": sorted(k for k, v in source.items()
+                                    if v == plandefaults.DEFAULTS),
                 "themeId": theme_id,
                 "generatorType": floor.get("generatorType"),
                 "roomCountMin": floor.get("roomCountMin"),
@@ -962,10 +974,11 @@ class Dataset:
                      "variantIds": [v for v in (e.get("variantIds") or [])],
                      "isVariantGroup": bool(e.get("variantIds")),
                      "cluster": _cluster_brief(e),
-                     "pointer": f"{base}/enemyPool/{ei}"}
+                     "pointer": f"{at('enemyPool')}/enemyPool/{ei}"}
                     for ei, e in enumerate(floor.get("enemyPool") or [])
                 ],
-                "stageWeights": self._stage_weights(floor, base),
+                "stageWeights": self._stage_weights(
+                    floor, at("floorLootPlan/stageWeights")),
                 # Applied to every generated room of this floor whose own
                 # staticPlacements came out empty. A procedural floor has no
                 # hand-written rooms, so this is where a chapter's props are
@@ -988,7 +1001,8 @@ class Dataset:
                      # authoring handle cannot express it: this list applies
                      # to a whole floor and never names a room.
                      "skipsStartRoom": p.get("kind") == OIL_TANK_KIND,
-                     "pointer": f"{base}/defaultStaticPlacements/{pi}"}
+                     "pointer": f"{at('defaultStaticPlacements')}"
+                                f"/defaultStaticPlacements/{pi}"}
                     for pi, p in enumerate(
                         floor.get("defaultStaticPlacements") or [])
                 ],
@@ -998,7 +1012,8 @@ class Dataset:
                     # node to patch — the span writer replaces, never inserts.
                     "declared": "tilePartConfigs" in appearance,
                     "tilePartConfigs": appearance.get("tilePartConfigs") or [],
-                    "pointer": f"{base}/appearance/tilePartConfigs",
+                    "pointer": f"{at('appearance')}/appearance/tilePartConfigs",
+                    "inherited": source.get("appearance") == plandefaults.DEFAULTS,
                 },
                 "themeParts": owned,
             })
@@ -1017,6 +1032,26 @@ class Dataset:
             "skillDropLevelCapDeclared": bool(cap),
             "skillDropLevelCapEffective": cap or SKILL_DROP_LEVEL_CAP_DEFAULT,
             "floors": floors,
+            "floorDefaults": {
+                "declared": bool(defaults),
+                "pointer": "/floorDefaults",
+                "keys": sorted(defaults),
+                # Default -> floors that inherit it: what changing it touches.
+                "fanOut": plandefaults.fan_out(doc.value),
+                "themeId": defaults.get("themeId"),
+                "generatorType": defaults.get("generatorType"),
+                "roomCountMin": defaults.get("roomCountMin"),
+                "roomCountMax": defaults.get("roomCountMax"),
+                "enemiesPerRoom": defaults.get("enemiesPerRoom"),
+                "appearance": {
+                    "declared": "tilePartConfigs" in (defaults.get("appearance") or {}),
+                    "tilePartConfigs":
+                        (defaults.get("appearance") or {}).get("tilePartConfigs") or [],
+                    "pointer": "/floorDefaults/appearance/tilePartConfigs",
+                    "inherited": False,
+                },
+                "themeParts": self.themes.tile_parts(defaults.get("themeId")),
+            },
         }
 
     def level_view(self, level_id: str, *, document: dict | None = None,

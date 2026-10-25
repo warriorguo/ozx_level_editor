@@ -76,8 +76,18 @@ def fixtures(tmp_path_factory):
     # room, most of all), and a single-floor fixture skips them silently.
     # It has to lead the list, because the page boots levels[0] and the
     # harness serves exactly one level view.
+    # And the selection checks click into the sixth loot slot of floor 0, so
+    # take the multi-floor level with the most of them rather than whichever
+    # sorts first — the corpus changes underneath this test.
     levels = boot["levels"]
-    chosen = next((l for l in levels if l["floors"] > 1), levels[0])
+
+    def loot_slots(entry):
+        rooms = api.level(entry["id"])["floors"][0]["rooms"]
+        return sum(len(r["enemies"]) + len(r["cargoLoot"] or [])
+                   + (1 if r["roomClearLoot"] else 0) for r in rooms)
+
+    chosen = max((l for l in levels if l["floors"] > 1),
+                 key=loot_slots, default=levels[0])
     boot["levels"] = [chosen] + [l for l in levels if l is not chosen]
     (out / "boot.json").write_text(json.dumps(boot))
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
@@ -101,17 +111,6 @@ def fixtures(tmp_path_factory):
             (v for v in views
              if any(e["isSpawner"] for f in v["floors"] for e in f["enemyPool"])),
             views[0])
-        # The stage-weight column is only exercised by a plan that writes the
-        # weights on its floors. chapter_3 keeps them in floorDefaults, which
-        # this side does not merge yet (OLE-9), so they are borrowed from
-        # whichever plan does rather than leaving the column untested.
-        if not any(f["stageWeights"] for f in chosen_plan["floors"]):
-            donor = next((v for v in views
-                          if any(f["stageWeights"] for f in v["floors"])), None)
-            if donor:
-                rows = next(f["stageWeights"] for f in donor["floors"]
-                            if f["stageWeights"])
-                chosen_plan["floors"][0]["stageWeights"] = rows
         (out / "plan.json").write_text(json.dumps(chosen_plan))
     return out
 

@@ -12,6 +12,7 @@ Globbing the theme folder for `*TilePart*.asset` would be easier and wrong,
 which is what most of this file pins.
 """
 
+import copy
 import pathlib
 import sys
 
@@ -41,10 +42,10 @@ def floor(ds):
     that edits one must put it back.
     """
     f = ds.get("LevelBasePlanData", "chapter_3").value["floors"][0]
-    before = dict(f["appearance"]), f["themeId"], f.get("transitionKeyId")
+    before = copy.deepcopy(f)
     yield f
-    f["appearance"], f["themeId"] = dict(before[0]), before[1]
-    f["transitionKeyId"] = before[2]
+    f.clear()
+    f.update(before)
 
 
 # ── resolving the theme ──────────────────────────────────────────────────
@@ -160,12 +161,12 @@ def test_every_shipped_plan_passes(ds):
 def test_an_empty_boss_id_is_a_legitimate_choice(ds):
     """OZX-994: blank means "no boss on this floor", not "unfilled".
 
-    chapter_3 ships two floors with no boss, on purpose.
+    chapter_4 ships two floors with no boss, on purpose.
     """
     bosses = [f.get("bossId")
-              for f in ds.get("LevelBasePlanData", "chapter_3").value["floors"]]
-    assert bosses == [None, None, "blight_sac_sovereign"]
-    assert not [i for i in validate_plan(ds, "chapter_3")
+              for f in ds.get("LevelBasePlanData", "chapter_4").value["floors"]]
+    assert bosses == [None, "blight_sac_sovereign", None]
+    assert not [i for i in validate_plan(ds, "chapter_4")
                 if "bossId" in (i.get("pointer") or "")]
 
 
@@ -196,11 +197,31 @@ def test_the_view_carries_what_the_theme_owns(ds):
 
 def test_declared_distinguishes_absent_from_empty(ds, floor):
     """The span writer replaces nodes and cannot add a key to an object, so
-    the UI has to know whether there is anything to patch."""
-    floor["appearance"] = {"tilePartConfigs": []}
-    assert ds.plan_view("chapter_3")["floors"][0]["appearance"]["declared"] is True
-    floor["appearance"] = {}
-    assert ds.plan_view("chapter_3")["floors"][0]["appearance"]["declared"] is False
+    the UI has to know whether there is anything to patch.
+
+    Read with the chapter default out of the way: with one, an empty list on
+    the floor is "not written" and the default shows through instead.
+    """
+    plan = ds.get("LevelBasePlanData", "chapter_3").value
+    defaults = plan.pop("floorDefaults")
+    try:
+        floor["appearance"] = {"tilePartConfigs": []}
+        assert ds.plan_view("chapter_3")["floors"][0]["appearance"]["declared"] is True
+        floor["appearance"] = {}
+        assert ds.plan_view("chapter_3")["floors"][0]["appearance"]["declared"] is False
+    finally:
+        plan["floorDefaults"] = defaults
+
+
+def test_an_inherited_appearance_points_at_the_default(ds, floor):
+    """OZX-1011: a floor that writes no tile groups draws the chapter's, and
+    editing them there edits every floor that inherits — so the view says so
+    and aims the pointer at the node that holds them."""
+    floor.pop("appearance", None)
+    view = ds.plan_view("chapter_3")["floors"][0]["appearance"]
+    assert view["inherited"] is True
+    assert view["pointer"] == "/floorDefaults/appearance/tilePartConfigs"
+    assert view["tilePartConfigs"] == ["FactoryTilePart1", "FactoryTilePart2"]
 
 
 def test_a_missing_plan_is_reported_not_raised(ds):
@@ -209,9 +230,9 @@ def test_a_missing_plan_is_reported_not_raised(ds):
 
 def test_boss_presence_is_explicit_in_the_view(ds):
     """`hasBoss` exists so the UI never has to read a blank as "unfilled"."""
-    floors = ds.plan_view("chapter_3")["floors"]
-    assert [f["hasBoss"] for f in floors] == [False, False, True]
-    assert floors[2]["bossMissing"] is False
+    floors = ds.plan_view("chapter_4")["floors"]
+    assert [f["hasBoss"] for f in floors] == [False, True, False]
+    assert floors[1]["bossMissing"] is False
 
 
 def test_editing_tile_groups_leaves_the_file_byte_identical(ds, tmp_path):
@@ -226,7 +247,7 @@ def test_editing_tile_groups_leaves_the_file_byte_identical(ds, tmp_path):
 
     path = ds.get("LevelBasePlanData", "chapter_3").path
     before = path.read_bytes()
-    ptr = "/floors/0/appearance/tilePartConfigs"
+    ptr = "/floorDefaults/appearance/tilePartConfigs"
 
     doc = jsonspan.parse(before.decode("utf-8"))
     added = jsonspan.patch(doc, [{"op": "append", "path": ptr,
@@ -236,7 +257,7 @@ def test_editing_tile_groups_leaves_the_file_byte_identical(ds, tmp_path):
     assert '[ "FactoryTilePart1"' in added
 
     doc2 = jsonspan.parse(added)
-    index = len(jsonspan.parse(added).value["floors"][0]["appearance"]["tilePartConfigs"]) - 1
+    index = len(jsonspan.parse(added).value["floorDefaults"]["appearance"]["tilePartConfigs"]) - 1
     back = jsonspan.patch(doc2, [{"op": "remove", "path": f"{ptr}/{index}"}])
     assert back.encode("utf-8") == before
 

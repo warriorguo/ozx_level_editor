@@ -234,6 +234,7 @@ LevelData
 
 ```
 LevelBasePlanData
+ ├ floorDefaults : FloorPlanData（同形，见 §5.0）
  └ floors[] : FloorPlanData
       ├ roomCountMin/Max, floorWidth/Height Min/Max, generatorType, themeId
       ├ stageTypes[]            : StageTypePlanData
@@ -255,6 +256,30 @@ LevelBasePlanData
 
 1. **负数** —— `LevelPlanValidator` 抛。**没有「不设上限」的写法**：想让它让路就写个高过所有 `maxLevel` 的数。0 是「没写」，读成默认 5。
 2. **cap 高于本章能掉的技能的 `maxLevel` 时等于没写** —— 这条最容易困惑，值得提示。判据：本章 `floors[].floorLootPlan.probabilistic` 里 `ItemData.type == "skill"` 的条目，逐个解析成它装的那份 `SkillData`（`ApplySkill` 交给 `AddPassive` 的是 **item 自己的 id**，`refId` 只是创作期的回退），取 `maxLevel`。
+
+### 5.0 floorDefaults（OZX-1011，核对于 `ozx_base@5cd9b22e`）
+
+`LevelBasePlanData.floorDefaults` 是**与 `floors[]` 元素同形**的章节级默认楼层：楼层没写的字段从这里取，写了就覆盖。chapter_3–7 都用了它（chapter_3 的 `themeId` / `enemiesPerRoom` / `appearance` / `stageWeights` / `categoryCaps` 等只写在这里），**所以直接读 `floors[f]` 看到的是「只剩差异」的楼层**——这是 OLE-9 之前 chapter_3 在编辑器里「打不开」的原因。
+
+合并规则只有一份实现：`Game.Level/FloorPlanDefaults.cs`（`Merge` / `Validate`），编辑器这边是 `ozxlevel/plandefaults.py`，逐条对齐：
+
+| 层级 | 规则 |
+|---|---|
+| 楼层的每个字段 | 各自独立继承 |
+| `floorLootPlan` | **进去一层**，各列表独立继承；`probabilisticPresets` 跟着 `probabilistic` 走（上游先展开 preset 再合并，所以楼层写了任一个就两个都用楼层的） |
+| `treeShape` / `appearance` / `elitePlan` | **整块**，按各自判别字段：`trunkLengthMax > 0` / `tilePartConfigs` 非空 / `perStage` 非空 |
+| 任何数组 | 覆盖，**永不追加** |
+| `railCart` / `requireFullGround` | bool 没有「没写」：楼层只能打开，不能关掉章里打开的 |
+| `endsRunOnClear` / `elevation` / `rooms` | **永不继承**；写在默认里 `Validate` 抛 → `LEVEL_FLOOR_DEFAULT_REFUSED` |
+
+「写没写」**从值读，不从键读**：0 / 空串 / 空数组 / null 都是「没写」（JsonUtility 把省略读成这些）。代价：楼层不能把继承来的值改回 0 或空。
+
+编辑器的约定：
+
+- 校验跑在**合并后**的楼层上；一条 finding 如果落在继承来的字段上，指针改指 `/floorDefaults/...`，三层同一个错只报一次，消息里列出继承它的楼层。
+- plan 视图的每层带 `inherited`（继承来的字段名），指针一律指向**真正存值的节点**；`floorDefaults.fanOut` 给出每个默认值被几层继承——改它会影响几层。
+- 楼层卡片上继承来的值置灰并标 `default`；章节默认值单独一张卡。继承来的 tile groups **不能**在楼层卡上点改（那会改到所有继承的楼层），要在默认值卡上改。
+- 「回到继承」= 删掉楼层上的键，不是写 0；保存时不要写出等于缺省值的键。
 
 ### 5.1 FloorPlanData
 

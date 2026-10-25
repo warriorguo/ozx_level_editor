@@ -919,6 +919,13 @@ button { color: inherit; }
    field, so it is muted rather than flagged. */
 .plan-facts strong.noboss { color: var(--dim); font-weight: 400; }
 .plan-facts strong.bad { color: var(--danger); }
+/* OZX-1011: a value the floor did not write — the chapter default shows
+   through, dimmed, so it never reads as this floor's own choice. */
+.plan-facts strong.inherited { color: var(--dim); font-style: italic; }
+.inherit-tag { font-style: normal; font-size: 7px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+.tilepart-list.inherited { opacity: .55; }
+.plan-defaults { border-style: dashed; }
+.fan-out { color: var(--amber); }
 .plan-stage .content-glyph { background: var(--cyan); color: #10201e; font-size: 9px; }
 
 .tilepart-list { display: flex; flex-wrap: wrap; gap: 5px; align-content: start; }
