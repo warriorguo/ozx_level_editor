@@ -295,6 +295,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: door {di} is locked but names no keyId",
                                          entity=level_id, pointer=dptr))
 
+        issues.extend(_stair_link_issues(level_id, floors, fi))
+
         # ── reachability from the start room, over doors only ────────────
         if start:
             by_id = {r.get("roomId"): r for r in rooms}
@@ -316,6 +318,83 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: not reachable from start room '{start}'",
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
+    return issues
+
+
+def _stair_link_issues(level_id: str, floors: list, fi: int) -> list[dict]:
+    """`LevelValidator.ValidateStairLinks`, which throws at level load.
+
+    Since OZX-1116 stairs are for going down into a basement or a cave and
+    back; areas side by side join with doors. Each link is one direction,
+    `{caveId, roomIdA, roomIdB, targetFloor}`, and the rules are:
+
+    - `roomIdA` is a room on the link's own floor;
+    - `targetFloor` is another floor of the level;
+    - the target floor holds the twin (`roomIdA`/`roomIdB` swapped,
+      `targetFloor` back here) — without it the trip is one way;
+    - the two floors stand at different `elevation`s (OZX-1338), since the
+      stair shows Up or Down from them and nothing else;
+    - a room holds ONE stair end (OZX-1188): `PlaceStairs` skips a second
+      stair in a room that has one, so the extra link loads as a one-way
+      trip. Cave-themed floors place their own and are exempt.
+    """
+    floor = floors[fi]
+    links = floor.get("stairLinks") or []
+    if not links:
+        return []
+    issues: list[dict] = []
+    here = {r.get("roomId") for r in floor.get("rooms") or []}
+    seen: dict = {}
+    cave = "cave" in (floor.get("themeId") or "")
+    for li, link in enumerate(links):
+        if not link:
+            continue
+        lptr = f"/floors/{fi}/stairLinks/{li}"
+        name = link.get("caveId") or f"stairLinks[{li}]"
+        a, b, target = link.get("roomIdA"), link.get("roomIdB"), link.get("targetFloor", 0)
+        if a not in here:
+            issues.append(_issue(
+                "error", "LEVEL_STAIR_ROOM_NOT_ON_FLOOR",
+                f"stair '{name}' on floor {fi} has roomIdA '{a}', which is not a room of "
+                f"floor {fi}; a stair's roomIdA is on its own floor",
+                entity=level_id, pointer=f"{lptr}/roomIdA"))
+        if not (0 <= target < len(floors)) or target == fi:
+            issues.append(_issue(
+                "error", "LEVEL_STAIR_TARGET_INVALID",
+                f"stair '{name}' on floor {fi} targets floor {target}; a stair crosses to "
+                f"another floor of the level (0..{len(floors) - 1})",
+                entity=level_id, pointer=f"{lptr}/targetFloor"))
+            continue
+        twin = any(t and t.get("targetFloor", 0) == fi and t.get("roomIdA") == b
+                   and t.get("roomIdB") == a
+                   for t in floors[target].get("stairLinks") or [])
+        if not twin:
+            issues.append(_issue(
+                "error", "LEVEL_STAIR_TWIN_MISSING",
+                f"stair '{name}' ({a} → {b}, floor {fi} → {target}) has no twin on floor "
+                f"{target}; the way back needs roomIdA '{b}', roomIdB '{a}', targetFloor "
+                f"{fi}",
+                entity=level_id, pointer=lptr,
+                fix={"op": "append", "path": f"/floors/{target}/stairLinks",
+                     "value": {"caveId": f"{link.get('caveId') or 'stair'}_back",
+                               "roomIdA": b, "roomIdB": a, "targetFloor": fi},
+                     "label": "Create the return stair"}
+                if "stairLinks" in floors[target] else None))
+        if (floor.get("elevation") or 0) == (floors[target].get("elevation") or 0):
+            issues.append(_issue(
+                "error", "LEVEL_STAIR_NO_DIRECTION",
+                f"stair '{name}' joins floors {fi} and {target}, which both stand at "
+                f"elevation {floor.get('elevation') or 0}; give a basement a negative "
+                f"elevation and an upper floor a positive one",
+                entity=level_id, pointer=lptr))
+        if not cave and a in seen:
+            issues.append(_issue(
+                "error", "LEVEL_STAIR_ROOM_TWO_ENDS",
+                f"room '{a}' on floor {fi} holds two stair ends ('{seen[a]}' and '{name}'); "
+                f"a room places one stair and skips the rest, so the second is a one-way "
+                f"trip",
+                entity=level_id, pointer=lptr))
+        seen.setdefault(a, name)
     return issues
 
 
@@ -782,9 +861,11 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     # chapter defaults (OZX-1011) — and each finding is then moved to the
     # node that actually holds the value. A default that is wrong is wrong
     # once, in `/floorDefaults`, however many floors inherit it.
+    merged = [plandefaults.merge_floor(defaults, raw)
+              for raw in doc.value.get("floors") or []]
+    issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
     by_pointer: dict = {}
-    for fi, raw in enumerate(doc.value.get("floors") or []):
-        floor, source = plandefaults.merge_floor(defaults, raw)
+    for fi, (floor, source) in enumerate(merged):
         for issue in _floor_plan_issues(ds, plan_id, fi, floor):
             pointer = plandefaults.reroute(issue["pointer"], fi, source)
             if pointer == issue["pointer"]:
@@ -802,6 +883,175 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
             f" (inherited from floorDefaults by floor"
             f"{'s' if len(floors) > 1 else ''} {', '.join(map(str, floors))})")
     return issues
+
+
+def _area_link_issues(ds: Dataset, plan_id: str, plan: dict,
+                      floors: list[dict]) -> list[dict]:
+    """`LevelBasePlanData.areaLinks` (OZX-1185) — how a plan's areas join.
+
+    Without it a plan is the implicit chain i → i+1 of seam doors keyed by
+    each floor's `transitionKeyId`. With it, each link names its two areas,
+    whether it is a co-planar `door` (optionally keyed) or a `stair` into or
+    out of a basement, and for a stair how many rooms of `fromArea` carry
+    one. `AreaLinkPlan.Build` throws on every rule below; this is that
+    function rule for rule, read on the MERGED floors as it is, because the
+    basement test reads each area's effective `themeId`.
+    """
+    links = plan.get("areaLinks") or []
+    if not links:
+        return []
+    n = len(floors)
+    issues: list[dict] = []
+
+    def err(code, message, pointer):
+        issues.append(_issue("error", code, message, entity=plan_id, pointer=pointer))
+
+    good = []
+    joined: set = set()
+    for i, link in enumerate(links):
+        lptr = f"/areaLinks/{i}"
+        a, b = link.get("fromArea", 0), link.get("toArea", 0)
+        if not (0 <= a < n and 0 <= b < n):
+            err("LEVEL_AREA_LINK_OUT_OF_RANGE",
+                f"areaLinks[{i}] joins area {a} to area {b}, but the plan has {n} "
+                f"area(s) (floors[0..{n - 1}])", lptr)
+            continue
+        if a == b:
+            err("LEVEL_AREA_LINK_SELF", f"areaLinks[{i}] joins area {a} to itself", lptr)
+            continue
+        if b == 0:
+            err("LEVEL_AREA_LINK_INTO_START",
+                f"areaLinks[{i}] leads INTO area 0, where the run starts; links run "
+                f"outward from it (the way back is built for every link), so write it "
+                f"as fromArea 0", f"{lptr}/toArea")
+            continue
+        pair = (min(a, b), max(a, b))
+        if pair in joined:
+            err("LEVEL_AREA_LINK_DUPLICATE",
+                f"areaLinks[{i}] joins areas {a} and {b}, which an earlier link already "
+                f"joins; two areas are joined once", lptr)
+            continue
+        joined.add(pair)
+        kind = link.get("kind")
+        if kind not in ("door", "stair"):
+            err("LEVEL_AREA_LINK_KIND_UNKNOWN",
+                f"areaLinks[{i}] has kind '{kind}'; it is \"door\" (a co-planar seam) "
+                f"or \"stair\" (into or out of a basement)", f"{lptr}/kind")
+            continue
+        lo, hi = link.get("stairRoomsMin") or 0, link.get("stairRoomsMax") or 0
+        rooms = (1, 1)
+        if kind == "door":
+            if lo or hi:
+                err("LEVEL_AREA_LINK_FIELD_MISPLACED",
+                    f"areaLinks[{i}] is a door but sets stairRoomsMin/Max; a door is one "
+                    f"seam, only a stair can hang off several rooms", lptr)
+            key = link.get("keyId")
+            if key and ds.get("ItemData", key) is None:
+                err("DATA_REFERENCE_MISSING",
+                    f"areaLinks[{i}]: keyId '{key}' is not an ItemData; the gate would "
+                    f"drop nothing that opens it", f"{lptr}/keyId")
+        else:
+            if link.get("keyId"):
+                err("LEVEL_AREA_LINK_FIELD_MISPLACED",
+                    f"areaLinks[{i}] is a stair with keyId '{link['keyId']}'. Stairs have "
+                    f"no lock at runtime (they open on room clear), so the key would gate "
+                    f"nothing; put it on a door link", f"{lptr}/keyId")
+            if lo or hi:
+                if lo < 1 or hi < lo:
+                    err("LEVEL_AREA_LINK_STAIR_ROOMS_INVALID",
+                        f"areaLinks[{i}] has stairRoomsMin {lo} / stairRoomsMax {hi}; both "
+                        f">= 1 and max >= min, or omit both for one room", lptr)
+                else:
+                    rooms = (lo, hi)
+            # OZX-1338: a stair shows Up or Down from the two elevations.
+            ea, eb = floors[a].get("elevation") or 0, floors[b].get("elevation") or 0
+            if ea == eb:
+                err("LEVEL_AREA_LINK_STAIR_LEVEL",
+                    f"areaLinks[{i}] is a stair between areas {a} and {b}, which both "
+                    f"stand at elevation {ea}. A stair climbs or descends: give a basement "
+                    f"a negative elevation, an upper area a positive one — or join them "
+                    f"with a door", lptr)
+            else:
+                base_a = _area_category(floors[a].get("themeId")) == "basement"
+                base_b = _area_category(floors[b].get("themeId")) == "basement"
+                if base_a != base_b:
+                    basement, other = (a, b) if base_a else (b, a)
+                    if (floors[basement].get("elevation") or 0) >= \
+                            (floors[other].get("elevation") or 0):
+                        err("LEVEL_AREA_LINK_STAIR_LEVEL",
+                            f"areaLinks[{i}] is a stair between basement area {basement} "
+                            f"and area {other}, but the basement does not stand lower; the "
+                            f"stairs would read upside down at both ends", lptr)
+        good.append({"index": i, "from": a, "to": b, "kind": kind, "rooms": rooms})
+
+    for f, floor in enumerate(floors):
+        fptr = f"/floors/{f}"
+        if floor.get("generatorType") == "static":
+            err("LEVEL_AREA_LINK_STATIC_FLOOR",
+                f"floor {f} is generatorType \"static\", which areaLinks does not join — "
+                f"links hang off the generator's trunk top and entrance room", 
+                f"{fptr}/generatorType")
+        if floor.get("transitionKeyId"):
+            err("LEVEL_AREA_LINK_FLOOR_KEY",
+                f"floor {f} sets transitionKeyId '{floor['transitionKeyId']}', but the plan "
+                f"declares areaLinks; a key belongs on the door link it gates "
+                f"(areaLinks[].keyId)", f"{fptr}/transitionKeyId")
+        out_doors = [l for l in good if l["from"] == f and l["kind"] == "door"]
+        in_doors = [l for l in good if l["to"] == f and l["kind"] == "door"]
+        out_stairs = [l for l in good if l["from"] == f and l["kind"] == "stair"]
+        for many, what, why in (
+                (out_doors, "left by", "the seam door hangs on the top of the area's "
+                                       "trunk top, which holds one"),
+                (in_doors, "entered by", "the seam door lands on the bottom of the "
+                                         "area's entrance room, which holds one")):
+            if len(many) > 1:
+                err("LEVEL_AREA_LINK_FAN_OUT",
+                    f"floor {f} is {what} {len(many)} door links; {why}",
+                    f"/areaLinks/{many[1]['index']}")
+        if len(out_stairs) > 1:
+            err("LEVEL_AREA_LINK_FAN_OUT",
+                f"floor {f} is left by {len(out_stairs)} stair links; one per area, with "
+                f"stairRoomsMin/Max saying how many rooms carry it",
+                f"/areaLinks/{out_stairs[1]['index']}")
+        if not out_doors and len(out_stairs) == 1 and out_stairs[0]["rooms"][1] > 1:
+            err("LEVEL_AREA_LINK_FAN_OUT",
+                f"floor {f} is left only by a stair, so that stair is its way on — the "
+                f"room the key gate and the breather hang off — and must be one room; "
+                f"it asks for {out_stairs[0]['rooms'][0]}–{out_stairs[0]['rooms'][1]}",
+                f"/areaLinks/{out_stairs[0]['index']}")
+
+    for l in good:
+        if l["kind"] != "stair" or l["rooms"][1] <= 1:
+            continue
+        if not any(o["from"] == l["to"] and o["kind"] == "door" for o in good):
+            err("LEVEL_AREA_LINK_LANDING_NEEDS_DOOR",
+                f"areaLinks[{l['index']}] lands stairs in up to {l['rooms'][1]} rooms of "
+                f"area {l['to']}, which no door link leaves; an area entered in several "
+                f"rooms has to be left by a door, or its way on cannot be told from the "
+                f"stairs back", f"/areaLinks/{l['index']}")
+
+    reached = {0}
+    grew = True
+    while grew:
+        grew = False
+        for l in good:
+            for x, y in ((l["from"], l["to"]), (l["to"], l["from"])):
+                if x in reached and y not in reached:
+                    reached.add(y)
+                    grew = True
+    for f in range(n):
+        if f not in reached:
+            err("LEVEL_AREA_UNREACHABLE",
+                f"floor {f} is joined to nothing reachable from area 0 by areaLinks, so "
+                f"no run can ever enter it", f"/floors/{f}")
+    return issues
+
+
+def _area_category(theme_id: str | None) -> str:
+    """`AreaCategory.OfTheme`: `themes/X` → `X`, no theme → normal."""
+    if not theme_id:
+        return "normal"
+    return theme_id.rsplit("/", 1)[-1]
 
 
 def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,

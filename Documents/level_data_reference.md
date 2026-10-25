@@ -296,6 +296,30 @@ LevelBasePlanData
 1. **负数** —— `LevelPlanValidator` 抛。**没有「不设上限」的写法**：想让它让路就写个高过所有 `maxLevel` 的数。0 是「没写」，读成默认 5。
 2. **cap 高于本章能掉的技能的 `maxLevel` 时等于没写** —— 这条最容易困惑，值得提示。判据：本章 `floors[].floorLootPlan.probabilistic` 里 `ItemData.type == "skill"` 的条目，逐个解析成它装的那份 `SkillData`（`ApplySkill` 交给 `AddPassive` 的是 **item 自己的 id**，`refId` 只是创作期的回退），取 `maxLevel`。
 
+### 5.00 areaLinks（OZX-1185 / OZX-1186，核对于 `ozx_base@5cd9b22e` 的 `AreaLinkPlan.Build`）
+
+plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind, keyId?, stairRoomsMin?, stairRoomsMax? }]`，声明 area 怎么连。**不写 = 老行为**：i → i+1 的接缝门链，钥匙来自各楼层的 `transitionKeyId`。
+
+- `kind: "door"`：共面接缝（OZX-1117 的那对孪生门），可带 `keyId`（钥匙掉在 fromArea 里）；`kind: "stair"`：孪生 stair link，进出 basement，可在 fromArea 的 `stairRoomsMin..Max` 间不同房各开一道（都省略 = 1）。
+- basement **没有新字段**：effective `themeId` 为 `themes/basement` 即是（生成房 `roomCategory: basement`，只抽 `TilemapData/basement/`）。
+- 终点 area = 没有连接离开的那个，不再是最后一个下标（ch5 的 boss 在下标 1）。
+
+`Build` 抛的每一条编辑器都报（读**合并后**的楼层，因为 basement 判定要看 effective `themeId`）：
+
+| 码 | 规则 |
+|---|---|
+| `LEVEL_AREA_LINK_OUT_OF_RANGE` / `_SELF` / `_INTO_START` / `_DUPLICATE` / `_KIND_UNKNOWN` | 下标越界、自连、连**进** area 0（回程总会自动造，从 0 往外写）、同一对 area 连两次、kind 不是 door/stair |
+| `LEVEL_AREA_LINK_FIELD_MISPLACED` | door 写了 stairRooms；stair 写了 keyId（楼梯运行时没有锁，只按清房开） |
+| `LEVEL_AREA_LINK_STAIR_ROOMS_INVALID` | `stairRoomsMin ≥ 1` 且 `max ≥ min`，或都省略 |
+| `LEVEL_AREA_LINK_STAIR_LEVEL` | 楼梯两端 `elevation` 相同（没有方向）；或 basement 一端不比地面一端低（两头都会显示反了）。OZX-1338 起这条看 elevation，不再看下标 |
+| `LEVEL_AREA_LINK_STATIC_FLOOR` / `_FLOOR_KEY` | 有 areaLinks 时不许有 `static` 楼层，也不许楼层写 `transitionKeyId`（钥匙只写在门连接上） |
+| `LEVEL_AREA_LINK_FAN_OUT` | 每个 area 最多 1 条出门、1 条进门、1 条出楼梯；只靠楼梯离开的 area，那道楼梯只能 1 间房 |
+| `LEVEL_AREA_LINK_LANDING_NEEDS_DOOR` | 多间落点的楼梯，目标 area 必须有门连接离开 |
+| `LEVEL_AREA_UNREACHABLE` | 每个 area 都要能从 area 0 沿连接（双向）走到 |
+| `DATA_REFERENCE_MISSING` | door 的 `keyId` 不是 ItemData |
+
+**关卡侧的 stairLinks**（`LevelValidator.ValidateStairLinks`，加载即抛，编辑器之前完全没查）：`roomIdA` 在本层（`LEVEL_STAIR_ROOM_NOT_ON_FLOOR`）、`targetFloor` 是另一层（`LEVEL_STAIR_TARGET_INVALID`）、对面层有孪生（`LEVEL_STAIR_TWIN_MISSING`）、两层 elevation 不同（`LEVEL_STAIR_NO_DIRECTION`）、**一间房只有一个楼梯端**（OZX-1188，`PlaceStairs` 会跳过第二道，那条就成了单程；`themeId` 含 `cave` 的楼层豁免 → `LEVEL_STAIR_ROOM_TWO_ENDS`）。
+
 ### 5.0 floorDefaults（OZX-1011，核对于 `ozx_base@5cd9b22e`）
 
 `LevelBasePlanData.floorDefaults` 是**与 `floors[]` 元素同形**的章节级默认楼层：楼层没写的字段从这里取，写了就覆盖。chapter_3–7 都用了它（chapter_3 的 `themeId` / `enemiesPerRoom` / `appearance` / `stageWeights` / `categoryCaps` 等只写在这里），**所以直接读 `floors[f]` 看到的是「只剩差异」的楼层**——这是 OLE-9 之前 chapter_3 在编辑器里「打不开」的原因。
@@ -541,13 +565,13 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 
 ### 7.1 楼梯孪生（`LevelValidator.ValidateStairLinks`，启动即校验）
 
-三条硬规则，违反即抛异常：
+硬规则，违反即抛异常（OZX-1188 / OZX-1338 后又加了两条，全表见 §5.00 末尾）：
 
 1. `roomIdA` 必须是**本层**房间。
 2. `targetFloor` 必须在 `[0, floors.Length)` 且**不等于本层**。
 3. 目标楼层必须存在反向孪生：`roomIdA'=roomIdB`、`roomIdB'=roomIdA`、`targetFloor'=` 本层。
 
-缺孪生 = 玩家能过去回不来。注意这是当前 `LevelValidator` 的**全部**内容——门、可达性、模板兼容都还没有人管。
+缺孪生 = 玩家能过去回不来。
 
 ### 7.2 其他 fail-fast 点（分散在各处）
 

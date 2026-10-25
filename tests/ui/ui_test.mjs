@@ -396,7 +396,7 @@ if (plan) {
   picker.dispatchEvent(new window.Event('change', { bubbles: true }));
   await settle(20);
 
-  const floorCards = () => qa('.plan-floor:not(.plan-defaults)');
+  const floorCards = () => qa('.plan-floor:not(.plan-defaults):not(.plan-links)');
   check('opening a plan renders a card per floor',
         floorCards().length === plan.floors.length,
         `${floorCards().length} floors`);

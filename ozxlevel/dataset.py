@@ -977,6 +977,13 @@ class Dataset:
                 # start room gets a cart. A bool, so a floor can switch it on
                 # over the chapter but never off.
                 "railCart": bool(floor.get("railCart")),
+                # OZX-1185: an area of `themes/basement` IS a basement — its
+                # rooms are roomCategory basement and draw only that library.
+                "category": (floor.get("themeId") or "normal").rsplit("/", 1)[-1]
+                            if floor.get("themeId") else "normal",
+                # OZX-1338: height decides which way a stair points. Never
+                # inherited, so it is read off the floor as written.
+                "elevation": raw.get("elevation") or 0,
                 "transitionKeyId": floor.get("transitionKeyId"),
                 # Empty is a real choice (OZX-994): this floor has no boss and
                 # the room that would have been one becomes ordinary. The UI
@@ -1068,6 +1075,16 @@ class Dataset:
             "skillDropLevelCapDeclared": bool(cap),
             "skillDropLevelCapEffective": cap or SKILL_DROP_LEVEL_CAP_DEFAULT,
             "floors": floors,
+            # OZX-1185: how the areas join. Empty = the implicit i → i+1 chain
+            # of seam doors, keyed by each floor's transitionKeyId.
+            "areaLinks": [
+                {"index": i, "fromArea": l.get("fromArea", 0), "toArea": l.get("toArea", 0),
+                 "kind": l.get("kind"), "keyId": l.get("keyId") or None,
+                 "stairRooms": ([l.get("stairRoomsMin") or 1, l.get("stairRoomsMax") or 1]
+                                if l.get("kind") == "stair" else None),
+                 "pointer": f"/areaLinks/{i}"}
+                for i, l in enumerate(doc.value.get("areaLinks") or [])
+            ],
             "floorDefaults": {
                 "declared": bool(defaults),
                 "pointer": "/floorDefaults",

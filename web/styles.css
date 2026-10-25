@@ -924,7 +924,7 @@ button { color: inherit; }
 .plan-facts strong.inherited { color: var(--dim); font-style: italic; }
 .inherit-tag { font-style: normal; font-size: 7px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 4px; }
 .tilepart-list.inherited { opacity: .55; }
-.plan-defaults { border-style: dashed; }
+.plan-defaults, .plan-links { border-style: dashed; }
 .fan-out { color: var(--amber); }
 .plan-stage .content-glyph { background: var(--cyan); color: #10201e; font-size: 9px; }
 

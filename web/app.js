@@ -1431,8 +1431,39 @@ function renderPlanDefaults() {
   </div>`;
 }
 
+// OZX-1185: a plan may say how its areas join — door or stair, keyed or
+// not — instead of the implicit chain. Without links the chain is the
+// answer, and saying so beats an empty card.
+function renderAreaLinks() {
+  const links = state.plan.areaLinks || [];
+  if (!links.length) return '';
+  const issues = planIssuesFor('/areaLinks');
+  const name = (i) => {
+    const f = state.plan.floors[i];
+    return f ? `area ${i + 1}${f.category === 'basement' ? ' (basement)' : ''}` : `area ${i + 1}?`;
+  };
+  return `<div class="room-list-item plan-floor plan-links${
+      issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="links">
+    <div class="content-column plan-head">
+      <div class="content-head">Area links</div>
+      <div class="derived-note">each link also builds its way back</div>
+      ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+    </div>
+    <div class="content-column">
+      <div class="content-head">Joins <span>${links.length}</span></div>
+      <div class="content-list">${links.map((l) => `<div class="content-entry">
+        <span class="content-glyph">${l.kind === 'stair' ? '⇅' : '⇢'}</span>
+        <span><strong>${esc(name(l.fromArea))} → ${esc(name(l.toArea))}</strong><small>${
+          l.kind === 'stair'
+            ? `stair${l.stairRooms && l.stairRooms[1] > 1 ? ` · ${l.stairRooms[0]}–${l.stairRooms[1]} rooms` : ''}`
+            : `door${l.keyId ? ` · locked by ${esc(l.keyId)}` : ''}`}</small></span>
+      </div>`).join('')}</div>
+    </div>
+  </div>`;
+}
+
 function renderPlanFloors() {
-  $('roomsGrid').innerHTML = renderPlanDefaults() + state.plan.floors.map((f) => {
+  $('roomsGrid').innerHTML = renderPlanDefaults() + renderAreaLinks() + state.plan.floors.map((f) => {
     const issues = planIssuesFor(f.pointer);
     const bad = issues.some((i) => i.severity === 'error');
 
@@ -1539,7 +1570,9 @@ function renderPlanFloors() {
 
     return `<div class="room-list-item plan-floor${bad ? ' has-error' : ''}" data-floor="${f.index}">
       <div class="content-column plan-head">
-        <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')}</div>
+        <div class="content-head">Floor ${String(f.index + 1).padStart(2, '0')}${
+          f.category === 'basement' ? ' <em class="inherit-tag" title="OZX-1185: a themes/basement area draws only the basement library">basement</em>' : ''}${
+          f.elevation ? ` <em class="inherit-tag" title="OZX-1338: stairs point by height">elev ${f.elevation > 0 ? '+' : ''}${f.elevation}</em>` : ''}</div>
         <div class="plan-facts">
           <div><span>theme</span><strong class="${inheritedMark(f, 'themeId')}">${esc(f.themeId || '—')}</strong></div>
           <div><span>generator</span><strong class="${inheritedMark(f, 'generatorType')}">${esc(f.generatorType || 'tree (default)')}</strong></div>
