@@ -67,16 +67,53 @@ def find_generator(root: pathlib.Path) -> pathlib.Path | None:
     return max(built, key=lambda p: p.stat().st_mtime) if built else None
 
 
+def compiled_source_dirs(root: pathlib.Path) -> list[pathlib.Path] | None:
+    """The `Assets/Scripts` trees genlevel is actually built from.
+
+    Read off the build graph rather than guessed: `Game.Balance.csproj` and
+    every project it references, transitively, each naming its sources as
+    `<Compile Include="../../Assets/Scripts/Game.X/**/*.cs" />`. Guessing
+    ("everything but Unity and the tests") called a build stale over
+    `Game.Skill`, which genlevel never compiles. None when the project file
+    cannot be read, so the caller can fall back.
+    """
+    import re
+    start = root / "DotnetTests/Game.Balance/Game.Balance.csproj"
+    if not start.is_file():
+        return None
+    seen: set = set()
+    dirs: list[pathlib.Path] = []
+    stack = [start.resolve()]
+    while stack:
+        proj = stack.pop()
+        if proj in seen or not proj.is_file():
+            continue
+        seen.add(proj)
+        text = proj.read_text(encoding="utf-8", errors="ignore")
+        for ref in re.findall(r'<ProjectReference\s+Include="([^"]+)"', text):
+            stack.append((proj.parent / ref.replace("\\", "/")).resolve())
+        for glob in re.findall(r'<Compile\s+Include="([^"]+)"', text):
+            glob = glob.replace("\\", "/")
+            base = glob.split("*", 1)[0].rstrip("/")
+            folder = (proj.parent / base).resolve()
+            if "Assets/Scripts" in str(folder) and folder.is_dir():
+                dirs.append(folder)
+    return sorted(set(dirs))
+
+
 def newest_source(root: pathlib.Path) -> tuple[float, str | None]:
     """mtime and path of the newest C# file genlevel is built from."""
+    dirs = compiled_source_dirs(root)
+    if dirs is None:
+        scripts = root / "Assets/Scripts"
+        dirs = [d for d in scripts.iterdir()
+                if d.is_dir() and not d.name.startswith(_NOT_COMPILED)] if scripts.is_dir() else []
     newest, which = 0.0, None
-    scripts = root / "Assets/Scripts"
-    for path in scripts.rglob("*.cs"):
-        if any(part.startswith(_NOT_COMPILED) for part in path.relative_to(scripts).parts):
-            continue
-        mtime = path.stat().st_mtime
-        if mtime > newest:
-            newest, which = mtime, str(path.relative_to(root))
+    for folder in dirs:
+        for path in folder.rglob("*.cs"):
+            mtime = path.stat().st_mtime
+            if mtime > newest:
+                newest, which = mtime, str(path.resolve().relative_to(root.resolve()))
     return newest, which
 
 
@@ -96,7 +133,7 @@ def status(root: pathlib.Path | None) -> dict:
     return {"available": True, "dotnet": dotnet, "generator": str(dll),
             "builtAt": built, "stale": source_time > built,
             "newerSource": source if source_time > built else None,
-            "buildHint": BUILD_HINT}
+            "buildHint": BUILD_HINT.replace("<ozx_base>", str(root))}
 
 
 def generate(root: pathlib.Path, plan_id: str, seed: int, timeout: float = 120) -> dict:

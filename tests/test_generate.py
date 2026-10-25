@@ -110,3 +110,28 @@ def test_several_seeds_compare_side_by_side():
     out = Api(OZX_BASE).plan_samples("chapter_3", [1, 2])
     assert [s["seed"] for s in out["samples"]] == [1, 2]
     assert all(s["rooms"] > 0 for s in out["samples"])
+
+
+def test_only_sources_the_build_graph_compiles_can_make_it_stale(tmp_path, monkeypatch):
+    """Read off Game.Balance.csproj and its ProjectReferences: a newer file in
+    a tree genlevel never compiles (here Game.Skill) is not a stale build."""
+    monkeypatch.setattr(generate, "find_dotnet", lambda: "/usr/bin/true")
+    root = fake_project(tmp_path, dll_age=50, source_age=100)
+    tests = root / "DotnetTests"
+    (tests / "Game.Balance/Game.Balance.csproj").write_text(
+        '<Project><ItemGroup><Compile Include="**/*.cs" />'
+        '<ProjectReference Include="../Game.Level/Game.Level.csproj" /></ItemGroup></Project>')
+    (tests / "Game.Level").mkdir()
+    (tests / "Game.Level/Game.Level.csproj").write_text(
+        '<Project><ItemGroup><Compile Include="../../Assets/Scripts/Game.Level/**/*.cs" />'
+        '</ItemGroup></Project>')
+    skill = root / "Assets/Scripts/Game.Skill/PassiveSkillListener.cs"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("class Z {}")   # newest file of all, and not compiled
+    assert [d.name for d in generate.compiled_source_dirs(root)] == ["Game.Level"]
+    assert generate.status(root)["stale"] is False
+    level = root / "Assets/Scripts/Game.Level/LevelBuilder.cs"
+    os.utime(level, None)            # now a compiled file is newer than the build
+    info = generate.status(root)
+    assert info["stale"] and info["newerSource"].endswith("LevelBuilder.cs")
+    assert str(root) in info["buildHint"]
