@@ -553,10 +553,12 @@ class Dataset:
         }
 
     def skill_catalog(self) -> list[dict]:
-        """Skills a SkillPlatform may grant — passive, with a loadable icon.
+        """Skills a SkillPlatform may grant — active, with a loadable icon.
 
-        SkillPlatformSpawnAdapter throws on an active skill, on one with no
-        `iconKeys`, and again when the key it does name will not load, so
+        SkillPlatformSpawnAdapter throws on a non-active skill (OZX-1400 made
+        the platform a rechargeable station for a positive skill; it used to
+        grant passives), on one with no `iconKeys`, and again when the key it
+        does name will not load, so
         offering any of the three would only let a designer author a crash.
         Whatever is already in the data is still shown and validated; this
         list governs what can be chosen, not what can be displayed.
@@ -564,7 +566,7 @@ class Dataset:
         out = []
         for doc in self.of_type("SkillData"):
             v = doc.value
-            if v.get("type") != "passive":
+            if v.get("type") != "active":
                 continue
             # ResourcesDB, looked up verbatim: ResourcesAssetService does no
             # `@`-suffix fallback, so a key that only resolves through this
@@ -1251,6 +1253,8 @@ class Dataset:
                          # platform renders as an anonymous "skill".
                          "skillId": p.get("skillId"),
                          "skillIdDeclared": "skillId" in p,
+                         # OZX-1400: uses granted or refilled per touch.
+                         "charges": p.get("charges") or 0,
                          "skill": (self.skill_brief(p.get("skillId"))
                                    if p.get("kind") == "skill" else None),
                          "count": p.get("count"),

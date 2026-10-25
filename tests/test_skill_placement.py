@@ -7,8 +7,10 @@ thing.
 
 Unlike most of what this tool guards, none of these fail silently:
 `SkillPlatformSpawnAdapter` throws on a missing skillId, an unknown one, a
-non-passive one, and one with no `iconKeys`. A throw at room-spawn time takes
-the room down, so all four are errors here rather than warnings.
+non-active one (OZX-1400 turned the platform into a rechargeable station for
+a positive skill; it used to grant passives), one with no `iconKeys`, and one
+with no `charges`. A throw at room-spawn time takes the room down, so all of
+them are errors here rather than warnings.
 """
 
 import pathlib
@@ -69,7 +71,7 @@ def test_the_brief_resolves_the_skill_not_the_item(ds):
     """
     brief = ds.skill_brief("shield_blue")
     assert brief["missing"] is False
-    assert brief["displayName"] == "Blue Shield"
+    assert brief["displayName"] == ds.get("SkillData", "shield_blue").value["displayName"]
     assert brief["skillType"] == "passive"
     assert brief["iconKey"] == "skill/shield_blue@icon"
     assert brief["sprite"] is not None, "the platform's icon should resolve"
@@ -109,7 +111,7 @@ def test_the_catalog_offers_only_what_can_be_placed(ds):
     for row in catalog:
         doc = ds.get("SkillData", row["id"])
         assert doc is not None
-        assert doc.value.get("type") == "passive", row["id"]
+        assert doc.value.get("type") == "active", row["id"]
         icon = (doc.value.get("iconKeys") or [None])[0]
         assert icon, row["id"]
         assert ds.sprites.guid_for_key(icon) is not None, row["id"]
@@ -166,13 +168,13 @@ def test_an_unloadable_icon_is_an_error(ds, monkeypatch):
     # property of the skill, not of any level, so it is stable to assert.
     unloadable = next(
         d.id for d in ds.of_type("SkillData")
-        if d.value.get("type") == "passive"
+        if d.value.get("type") == "active"
         and (d.value.get("iconKeys") or [None])[0]
         and ds.sprites.guid_for_key(d.value["iconKeys"][0]) is None)
 
-    placement = a_skill_placement(ds, "chapter_1")
+    placement = a_skill_placement(ds, "level_test")
     monkeypatch.setitem(placement, "skillId", unloadable)
-    messages = [i["message"] for i in validate_level(ds, "chapter_1")
+    messages = [i["message"] for i in validate_level(ds, "level_test")
                 if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
     assert any(unloadable in m and "ResourcesDB" in m for m in messages), messages
 
@@ -180,11 +182,11 @@ def test_an_unloadable_icon_is_an_error(ds, monkeypatch):
 def test_a_skill_with_no_icon_is_an_error(ds, monkeypatch):
     """ResolveIcon's first throw: no iconKeys at all."""
     iconless = next(d.id for d in ds.of_type("SkillData")
-                    if d.value.get("type") == "passive"
+                    if d.value.get("type") == "active"
                     and not (d.value.get("iconKeys") or []))
-    placement = a_skill_placement(ds, "chapter_1")
+    placement = a_skill_placement(ds, "level_test")
     monkeypatch.setitem(placement, "skillId", iconless)
-    messages = [i["message"] for i in validate_level(ds, "chapter_1")
+    messages = [i["message"] for i in validate_level(ds, "level_test")
                 if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
     assert any(iconless in m and "iconKeys" in m for m in messages), messages
 
@@ -207,7 +209,7 @@ def test_whatever_is_authored_today_is_reported_consistently(ds):
                     icon = (doc.value.get("iconKeys") or [None])[0] if doc else None
                     would_throw = (
                         not p["skillId"] or doc is None
-                        or doc.value.get("type") != "passive"
+                        or doc.value.get("type") != "active"
                         or not icon or ds.sprites.guid_for_key(icon) is None)
                     ptr = f"{p['pointer']}/skillId"
                     # DATA_REFERENCE_MISSING covers the unknown-id case under
@@ -219,7 +221,7 @@ def test_whatever_is_authored_today_is_reported_consistently(ds):
 
 def test_healthy_skill_placements_raise_nothing(ds):
     """chapter_1's platform grants a passive skill that has an icon."""
-    assert not [c for c in codes_for(ds, "chapter_1") if c.startswith("ROOM_PLACEMENT_SKILL")]
+    assert not [c for c in codes_for(ds, "level_test") if c.startswith("ROOM_PLACEMENT_SKILL")]
 
 
 def test_every_reported_skill_issue_is_an_error(ds):
@@ -232,9 +234,9 @@ def test_every_reported_skill_issue_is_an_error(ds):
 
 def test_an_unknown_skill_id_is_a_reference_error(ds, monkeypatch):
     """skillId joins the other cross-references the validator resolves."""
-    placement = a_skill_placement(ds, "chapter_1")
+    placement = a_skill_placement(ds, "level_test")
     monkeypatch.setitem(placement, "skillId", "no_such_skill")
-    issues = [i for i in validate_level(ds, "chapter_1")
+    issues = [i for i in validate_level(ds, "level_test")
               if i["code"] == "DATA_REFERENCE_MISSING" and "skillId" in i["pointer"]]
     assert len(issues) == 1
     assert "no_such_skill" in issues[0]["message"]
@@ -242,18 +244,35 @@ def test_an_unknown_skill_id_is_a_reference_error(ds, monkeypatch):
 
 def test_a_missing_skill_id_is_an_error(ds, monkeypatch):
     """The state the editor creates when you add a skill from the library."""
-    placement = a_skill_placement(ds, "chapter_1")
+    placement = a_skill_placement(ds, "level_test")
     monkeypatch.setitem(placement, "skillId", "")
-    assert "ROOM_PLACEMENT_SKILL_MISSING" in codes_for(ds, "chapter_1")
+    assert "ROOM_PLACEMENT_SKILL_MISSING" in codes_for(ds, "level_test")
 
 
-def test_an_active_skill_on_a_platform_is_an_error(ds, monkeypatch):
-    """A SkillPlatform only grants passives; an active one throws."""
-    active = next(d.id for d in ds.of_type("SkillData")
-                  if d.value.get("type") == "active")
-    placement = a_skill_placement(ds, "chapter_1")
-    monkeypatch.setitem(placement, "skillId", active)
-    assert "ROOM_PLACEMENT_SKILL_NOT_PASSIVE" in codes_for(ds, "chapter_1")
+def test_a_passive_skill_on_a_platform_is_an_error(ds, monkeypatch):
+    """OZX-1400: a SkillPlatform offers active skills only; a passive throws."""
+    passive = next(d.id for d in ds.of_type("SkillData")
+                   if d.value.get("type") == "passive")
+    placement = a_skill_placement(ds, "level_test")
+    monkeypatch.setitem(placement, "skillId", passive)
+    assert "ROOM_PLACEMENT_SKILL_NOT_ACTIVE" in codes_for(ds, "level_test")
+
+
+@pytest.mark.parametrize("charges", [None, 0, -1])
+def test_a_platform_without_charges_throws(ds, monkeypatch, charges):
+    """OZX-1400: touching the platform grants or refills `charges` uses."""
+    placement = a_skill_placement(ds, "level_test")
+    if charges is None:
+        monkeypatch.delitem(placement, "charges")
+    else:
+        monkeypatch.setitem(placement, "charges", charges)
+    assert "ROOM_PLACEMENT_SKILL_NO_CHARGES" in codes_for(ds, "level_test")
+
+
+def test_the_old_buff_duration_is_unread(ds, monkeypatch):
+    placement = a_skill_placement(ds, "level_test")
+    monkeypatch.setitem(placement, "buffDurationSeconds", 10)
+    assert "ROOM_PLACEMENT_FIELD_UNREAD" in codes_for(ds, "level_test")
 
 
 # ── the other channel: skills as loot ────────────────────────────────────
@@ -307,8 +326,9 @@ def test_a_skill_drop_is_flagged_on_the_wave_that_carries_it(ds):
     carriers = [w for w in waves if w["drop"]["hasSkill"]]
     assert len(carriers) == 1, [w["id"] for w in carriers]
     assert carriers[0]["drop"]["tableId"] == "loot_ch1_build3_skill"
-    assert {i["displayName"] for i in carriers[0]["drop"]["items"]} == \
-        {"Crimson Barrage", "Blue Shield"}
+    names = {ds.get("ItemData", e["itemId"]).value.get("displayName") or e["itemId"]
+             for e in ds.get("LootTableData", "loot_ch1_build3_skill").value["entries"]}
+    assert {i["displayName"] for i in carriers[0]["drop"]["items"]} == names
 
 
 def test_every_wave_reports_a_drop(ds):
@@ -325,11 +345,20 @@ def test_every_wave_reports_a_drop(ds):
                     assert drop["tableId"] or drop["fallbackItemId"], wave
 
 
-def test_a_skill_item_resolves_by_its_own_id_not_refid(ds):
+@pytest.fixture
+def loot_skills(ds):
+    doc = ds.get("LootTableData", "loot_skills")
+    before = list(doc.value.get("entries") or [])
+    yield doc.value
+    doc.value["entries"] = before
+
+
+def test_a_skill_item_resolves_by_its_own_id_not_refid(ds, loot_skills):
     """`sprint_engine` names skill `sprint` via refId and still throws.
 
     ApplySkill passes `item.id`; refId is declared on ItemData and read
-    nowhere in the runtime. Live in `loot_skills` today.
+    nowhere in the runtime. Built here rather than read off shipped data:
+    the shipped table this used to pin has since been fixed.
     """
     item = ds.get("ItemData", "sprint_engine")
     assert item.value["type"] == "skill"
@@ -337,18 +366,20 @@ def test_a_skill_item_resolves_by_its_own_id_not_refid(ds):
     assert ds.get("SkillData", "sprint") is not None
     assert ds.get("SkillData", "sprint_engine") is None
 
+    loot_skills["entries"].append({"itemId": "sprint_engine", "weight": 1})
     codes = [i["code"] for i in validate_loot(ds, "loot_skills")]
     assert "LOOT_SKILL_ITEM_UNRESOLVED" in codes
 
 
-def test_an_active_skill_dropped_as_loot_is_a_warning(ds):
+def test_an_active_skill_dropped_as_loot_is_a_warning(ds, loot_skills):
     """AddPassive does not check `type`, so this installs but misbehaves."""
+    active = next(d for d in ds.of_type("SkillData") if d.value.get("type") == "active"
+                  and ds.get("ItemData", d.id) is not None)
+    loot_skills["entries"].append({"itemId": active.id, "weight": 1})
     issues = [i for i in validate_loot(ds, "loot_skills")
               if i["code"] == "LOOT_SKILL_ITEM_NOT_PASSIVE"]
-    assert {i["pointer"] for i in issues}
-    assert all(i["severity"] == "warning" for i in issues)
-    named = " ".join(i["message"] for i in issues)
-    assert "fireball" in named and "sprint" in named
+    assert issues and all(i["severity"] == "warning" for i in issues)
+    assert active.id in " ".join(i["message"] for i in issues)
 
 
 def test_a_sound_skill_drop_raises_nothing(ds):

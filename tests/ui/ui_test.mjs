@@ -276,7 +276,7 @@ check('every skill card shows its artwork',
       skillCards.every((c) => c.querySelector('.portrait.art')),
       `${skillCards.filter((c) => c.querySelector('.portrait.art')).length} with art`);
 check('and names the skill, not just the id',
-      skillCards.every((c) => (c.querySelector('small')?.textContent || '').includes('passive')));
+      skillCards.every((c) => (c.querySelector('small')?.textContent || '').includes('active')));
 check('it counts what it shows',
       q('#skillLibraryCount').textContent === `${skillCards.length} FOUND`,
       q('#skillLibraryCount').textContent);
@@ -302,13 +302,14 @@ check('and says where a click will land',
 
 {
   const search = q('#skillSearch');
-  search.value = 'hammer';
+  // OZX-1400: platforms offer active skills now; 'laser' matches two of them.
+  search.value = 'laser';
   search.dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle();
   const shown = qa('#skillLibrary .asset-card');
   check('searching narrows the list', shown.length > 0 && shown.length < skillCards.length,
         `${shown.length} of ${skillCards.length}`);
-  check('and keeps only matches', shown.every((c) => c.dataset.id.includes('hammer')));
+  check('and keeps only matches', shown.every((c) => c.dataset.id.includes('laser')));
   search.value = '';
   search.dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle();

@@ -188,17 +188,35 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                 # room spawns, so an unfinished skill platform takes the whole
                 # room down rather than quietly placing nothing.
                 if p.get("kind") == "skill":
+                    # OZX-1400: touching the platform grants or refills this
+                    # many uses, and the adapter throws without one.
+                    if (p.get("charges") or 0) <= 0:
+                        issues.append(_issue(
+                            "error", "ROOM_PLACEMENT_SKILL_NO_CHARGES",
+                            f"{rid}: placement {pi} is a skill platform with charges "
+                            f"{p.get('charges') or 0}; it must author charges > 0",
+                            entity=level_id, pointer=f"{pptr}/charges" if "charges" in p else pptr))
+                    if "buffDurationSeconds" in p:
+                        issues.append(_issue(
+                            "warning", "ROOM_PLACEMENT_FIELD_UNREAD",
+                            f"{rid}: placement {pi} sets buffDurationSeconds, which a skill "
+                            f"platform no longer reads (OZX-1400: it grants charges of an "
+                            f"active skill instead)",
+                            entity=level_id, pointer=f"{pptr}/buffDurationSeconds"))
                     skill = ds.get("SkillData", p.get("skillId") or "")
                     if not p.get("skillId"):
                         issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_MISSING",
                                              f"{rid}: placement {pi} is kind 'skill' with no "
                                              f"skillId; the spawn adapter throws",
                                              entity=level_id, pointer=f"{pptr}/skillId"))
-                    elif skill is not None and skill.value.get("type") != "passive":
-                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NOT_PASSIVE",
+                    elif skill is not None and skill.value.get("type") != "active":
+                        # OZX-1400: the platform became a rechargeable station
+                        # for a positive (active) skill; it used to grant a
+                        # passive, and now throws on one.
+                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NOT_ACTIVE",
                                              f"{rid}: placement {pi} grants '{p['skillId']}', which "
                                              f"is type '{skill.value.get('type')}'; a SkillPlatform "
-                                             f"only grants passive skills",
+                                             f"only offers active skills (OZX-1400)",
                                              entity=level_id, pointer=f"{pptr}/skillId"))
                     elif skill is not None:
                         # The platform draws the skill's level-1 icon in its

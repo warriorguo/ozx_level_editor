@@ -212,7 +212,8 @@ LevelData
 | `kind` | `cargo`/`oiltank`/`toxicbarrel`/`pinballhammer`/`prop`/`skill`/`device`/`trigger`/`equipment`，未知 kind fail-fast。注意 `LevelData.cs` 里那段注释的清单**漏了 `toxicbarrel`**（`ToxicBarrelSpawnAdapter` 确实认它）——kind 的权威来源是各 adapter，不是契约注释 | 39 |
 | `count` | random 模式数量 | 36 |
 | `lootTableId` | 仅 `cargo`：指定该箱子的掉落表 | 27 |
-| `skillId` | 仅 `skill`：必填，被动技能 id | 4 |
+| `skillId` | 仅 `skill`：必填，**主动**技能 id（OZX-1400 起平台是可反复充能的主动技能站，之前发被动） | 4 |
+| `charges` | 仅 `skill`：必填 int > 0，触碰平台获得 / 充满的使用次数（OZX-1400）；`buffDurationSeconds` 已无意义 | 4 |
 | `footprintCols/Rows` | 占地覆盖，0 = kind 默认（oiltank/skill 2×2，device 2×3，其余 1×1）。只有 oiltank/skill/device 支持非默认 | 3 |
 | `mountedEnemyId` | 挂在该物体上的敌人（目前只有 `cargo` 认）。OZX-1348 起一间房可以有**多条** count 模式 cargo 条目，各自挂 `mountedEnemyId` / `mountedCount`，放置按条目轮转（authored 顺序），格子不够时尾部少放 | 3 |
 | `cells` | pinned 格子列表 `{x,y}` | 2 |
@@ -602,10 +603,10 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - `cargo` 的每只箱子摇**所属条目**的 `lootTableId`，缺省回落房间 `floorLootTableId`，都没有就抛（`CargoSpawnAdapter`，`ROOM_CARGO_LOOT_SOURCE_MISSING`）。手写关卡没有 `floorLootTableId`（生成期 `[NonSerialized]` 合成），所以手写 cargo 必须自带表；plan 楼层只有写了 `probabilistic` 才有。cargo 只支持 1×1（`ROOM_CARGO_FOOTPRINT_INVALID`）。技能不要走房间 `lootPlanId`（OZX-1381 已删），用 cargo `lootTableId` 指向技能表。
 - `mountedCount` 超过该条目能放置的数量 → 抛错。
 - `spawnIf` 写了未知 key、`prop` 缺 `prefabKey`、`skill` 缺 `skillId`、`trigger` 缺 `triggerId`、`equipment` 缺/错 `itemId` → 抛错。
-- `skill` 的 `skillId` 指向的 SkillData `type != "passive"`，或其 `iconKeys` 为空 → 抛错
-  （`SkillPlatformSpawnAdapter.cs:130`、`:244`；平台正中要画 level-1 图标，
-  `ResolveIcon` 拿不到 key 就抛）。`iconKeys` 为空是**合法的 SkillData**，
-  只是不能摆在平台上——`shield_orange` 现在就是这样，chapter_2 `f0_room_2_2` 因此起不来。
+- `skill` 的 `skillId` 指向的 SkillData `type != "active"`（OZX-1400，`ROOM_PLACEMENT_SKILL_NOT_ACTIVE`）、`charges <= 0`（`ROOM_PLACEMENT_SKILL_NO_CHARGES`），或其 `iconKeys` 为空 / 不在 ResourcesDB → 抛错
+  （`SkillPlatformSpawnAdapter`；平台正中要画 level-1 图标，`ResolveIcon` 拿不到 key 就抛）。
+  `iconKeys` 为空是**合法的 SkillData**，只是不能摆在平台上（`dash`、`evade`、`teleport` 这几个主动技能现在就是这样）。
+  技能库只列出能摆的：主动、有可加载图标。出货的平台在 `level_test` / `factory2_test` / `battlefield_test` 的起始房（`laser`、`sprint`）。
 - `railCart: true` 但房间模板没有 rail 层 → 抛错（`RailCartSpawnAdapter`）。
 - `generatorType: "static"` 但 `rooms` 为空 → 抛错。
 - `enemyPool` 非空但 `enemiesPerRoom <= 0` → 抛错。

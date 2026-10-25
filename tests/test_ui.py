@@ -53,6 +53,27 @@ pytestmark = pytest.mark.skipif(
     reason="needs a sibling ozx_base checkout and node/npm")
 
 
+def _with_a_skill_platform(api, level_id):
+    """The level view, with a skill platform in floor 0's first room.
+
+    Skill platforms moved to the test levels (OZX-1400), so the level chosen
+    for its loot slots may have none — and the page's skill row would go
+    untested in silence. The platform is put in the DOCUMENT and the view
+    built by the real projection, then the document is put back.
+    """
+    doc = api.dataset.get("LevelData", level_id)
+    room = doc.value["floors"][0]["rooms"][0]
+    if any(p.get("kind") == "skill" for p in room.get("staticPlacements") or []):
+        return api.level(level_id)
+    before = room.get("staticPlacements")
+    room["staticPlacements"] = list(before or []) + [
+        {"kind": "skill", "skillId": "laser", "count": 1, "charges": 3}]
+    try:
+        return api.level(level_id)
+    finally:
+        room["staticPlacements"] = before
+
+
 @pytest.fixture(scope="module")
 def fixtures(tmp_path_factory):
     """Snapshot the API payloads the page loads at boot."""
@@ -80,7 +101,7 @@ def fixtures(tmp_path_factory):
     (out / "boot.json").write_text(json.dumps(boot))
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
     (out / "cfg.json").write_text(json.dumps(api.get_config()))
-    level = api.level(chosen["id"])
+    level = _with_a_skill_platform(api, chosen["id"])
     (out / "lvl.json").write_text(json.dumps(level))
     # A plan too: it is a different document kind with no rooms, and the
     # client has a whole second render path for it.

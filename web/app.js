@@ -412,8 +412,9 @@ function lootOptions(selected) {
 
 /** Options for a skill-platform picker.
  *
- *  Only passive skills are offered — SkillPlatformSpawnAdapter throws on an
- *  active one — but whatever is already authored is kept selectable so the
+ *  Only active skills are offered — SkillPlatformSpawnAdapter throws on
+ *  anything else since OZX-1400 — but whatever is already authored is kept
+ *  selectable so the
  *  picker never silently misreports the current value. There is no "none":
  *  a skill platform without a skillId is a crash, not a valid state.
  */
@@ -623,7 +624,8 @@ function renderRooms() {
                 .filter(Boolean).join(' · ')
                 || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
           const broken = isSkill && (!p.skillId || skill.missing
-            || (skill.skillType && skill.skillType !== 'passive') || !skill.iconKey);
+            || (skill.skillType && skill.skillType !== 'active') || !skill.iconKey
+            || !(p.charges > 0));
           const count = p.count != null ? p.count : p.cells.length;
           // OZX-1057. Both are rolled/decided once for the whole entry, so
           // they belong beside `count` rather than on the object: `chance`
@@ -633,7 +635,7 @@ function renderRooms() {
           const picker = isSkill
             ? `<select class="inline-select skill-picker"
                        data-skill-target="${esc(p.pointer)}/skillId"
-                       title="The passive skill this platform grants"
+                       title="The active skill this platform offers, refilled on touch"
                        ${p.skillIdDeclared ? '' : 'disabled'}
                        >${skillOptions(p.skillId)}</select>`
             : '';
@@ -1883,7 +1885,7 @@ async function setLootTable(pointer, tableId) {
     [{ op: 'put', path: pointer, value: tableId }], `loot → ${tableId}`);
 }
 
-/** Point a skill platform at the passive skill it grants.
+/** Point a skill platform at the active skill it offers.
  *
  *  Unlike a loot pointer this is never cleared — an absent skillId throws in
  *  SkillPlatformSpawnAdapter rather than placing nothing, so "none" is not a
@@ -1920,8 +1922,9 @@ async function addStatic(kind) {
   // The span writer replaces existing nodes; it cannot add a key to an
   // object. So a kind that needs a companion field has to be born with it,
   // or the picker for that field would have nothing to write into.
+  // OZX-1400: a platform with no charges throws, so it is born with one.
   const value = kind === 'skill'
-    ? { kind, skillId: '', count: 1 }
+    ? { kind, skillId: '', count: 1, charges: 1 }
     : { kind, count: 1 };
   await applyEdits('LevelData', state.levelId, [{
     op: 'append',
@@ -1959,7 +1962,7 @@ async function addSkill(skillId) {
   await applyEdits('LevelData', state.levelId, [{
     op: 'append',
     path: `${room.pointer}/staticPlacements`,
-    value: { kind: 'skill', skillId, count: 1 },
+    value: { kind: 'skill', skillId, count: 1, charges: 1 },
   }], `skill ${skillId} added to ${room.roomId}`);
 }
 
