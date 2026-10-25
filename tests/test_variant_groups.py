@@ -90,15 +90,23 @@ def test_the_shipped_plans_fold_variants(ds):
 
 
 def test_a_folded_entry_reports_the_group_not_just_the_representative(ds):
-    """The count on the row belongs to the group, so the row has to say so."""
+    """The count on the row belongs to the group, so the row has to say so.
+
+    Read against the raw entry it came from rather than pinned to today's
+    roster: which plants the group folds is the chapter's to change."""
     entry = next(e for e in ds.plan_view(PLAN)["floors"][FLOOR]["enemyPool"]
                  if e["isVariantGroup"])
-    assert entry["enemyId"] == "blight_sac_plant2"
-    assert entry["variantIds"] == ["blight_sac_plant3", "blight_sac_plant4"]
-    # The fold concentrates three separate caps into one.
-    assert entry["maxPerRoom"] == 8
-    assert entry["cluster"] == {"declared": True, "sizeMin": 2,
-                                "sizeMax": 3, "radius": 1.2}
+    raw = ds.get("LevelBasePlanData", PLAN).value["floors"][FLOOR]["enemyPool"][entry["index"]]
+    assert entry["enemyId"] == raw["enemyId"]
+    assert entry["variantIds"] == raw["variantIds"] and entry["variantIds"]
+    # The fold concentrates the members' caps into one, the entry's.
+    assert entry["maxPerRoom"] == raw.get("maxPerRoom")
+    if raw.get("clusterSizeMax", 0) > 1:
+        assert entry["cluster"]["declared"] is True
+        assert (entry["cluster"]["sizeMin"], entry["cluster"]["sizeMax"],
+                entry["cluster"]["radius"]) == (raw.get("clusterSizeMin", 0),
+                                                raw["clusterSizeMax"],
+                                                raw.get("clusterRadius", 0))
 
 
 def test_an_ordinary_entry_carries_neither(ds):

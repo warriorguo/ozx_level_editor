@@ -386,3 +386,11 @@ def test_a_sound_skill_drop_raises_nothing(ds):
     """loot_ch1_build3_skill: both entries are passives with matching ids."""
     assert not [i for i in validate_loot(ds, "loot_ch1_build3_skill")
                 if i["code"].startswith("LOOT_SKILL_")]
+
+
+def test_the_shipped_skill_table_is_clean_today(ds):
+    """OLE-16: the defects the two tests above used to read off shipped data
+    have been fixed upstream. That is now the assertion — if this goes red,
+    the DATA regressed, not the test."""
+    assert not [i for i in validate_loot(ds, "loot_skills")
+                if i["code"] in ("LOOT_SKILL_ITEM_UNRESOLVED", "LOOT_SKILL_ITEM_NOT_PASSIVE")]

@@ -40,7 +40,9 @@ def test_corpus_is_the_expected_size():
     game = [f for f in FILES if "GameData" in f.parts]
     tile = [f for f in FILES if "TilemapData" in f.parts]
     assert len(game) >= 363, f"only {len(game)} GameData files found"
-    assert len(tile) == 23, f"expected 23 tilemaps, found {len(tile)}"
+    # Same reasoning for the tilemaps: the room-template sync adds them by
+    # the dozen, so a count would only ever go stale.
+    assert len(tile) >= 23, f"only {len(tile)} tilemaps found"
 
 
 @pytest.mark.skipif(not FILES, reason="sibling ozx_base checkout not found")
@@ -86,8 +88,10 @@ def test_four_space_file_keeps_indent():
 @pytest.mark.skipif(not FILES, reason="sibling ozx_base checkout not found")
 def test_minified_tilemaps_stay_minified():
     tiles = [f for f in FILES if "TilemapData" in f.parts]
+    # The sync writes them minified with no trailing newline; what matters
+    # is that the outlier shape is present and survives, not how many.
     no_newline = [f for f in tiles if not f.read_bytes().endswith(b"\n")]
-    assert len(no_newline) == 22, "expected 22 tilemaps with no trailing newline"
+    assert no_newline, "expected minified tilemaps with no trailing newline"
     for path in tiles:
         raw = path.read_bytes()
         doc = jsonspan.parse(raw.decode("utf-8"))
