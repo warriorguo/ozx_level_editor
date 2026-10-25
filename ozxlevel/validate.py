@@ -10,9 +10,11 @@ Issue codes come from the TD's Appendix B; they are stable machine ids.
 
 from __future__ import annotations
 
+import math
+
 from . import plandefaults, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
-                      Dataset)
+                      Dataset, _stage_budget)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
@@ -1377,6 +1379,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_stage_decoration_issues(ds, plan_id, fi, fptr, floor))
 
     issues.extend(_stage_tilemap_issues(ds, plan_id, fi, fptr, floor))
+
+    issues.extend(_second_wave_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
 
@@ -2217,6 +2221,112 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
 
 
 DEFAULT_OVERFLOW_STAGE = "pressure"   # LevelBasePlanAssigner.DefaultOverflowStageType
+
+# PoolSampler.StageCaps: distinct types one room of a stage may hold — both
+# waves together (OZX-1342, OZX-1354). Other stages are uncapped.
+DISTINCT_TYPE_CAP = {"teaching": 2, "building": 3, "pressure": 4, "peak": 5}
+
+
+def _can_arrive_late(ds: Dataset, enemy_id: str | None) -> bool:
+    """`EnemyData.CanArriveLate`: an emerge window, and not spawnPlacement initial."""
+    enemy = ds.get("EnemyData", enemy_id or "")
+    if enemy is None:
+        return False
+    v = enemy.value
+    return (v.get("emergeDuration") or 0) > 0 and v.get("spawnPlacement") != "initial"
+
+
+def _second_wave_issues(ds: Dataset, plan_id: str, fi: int,
+                        fptr: str, floor: dict) -> list[dict]:
+    """`stageTypes[].secondWave` (OZX-1354, `LevelPlanValidator.ValidateSecondWaves`).
+
+    A wave on top of the opening one: rolled per room at `chance`, sized
+    `ceil(share × the stage's budget)`, arriving by one of `triggers` —
+    `cleared` (a follow-up) or `advance` (an ambush once the player is
+    `distance` from the entry point; OZX-1353 replaced the early `depth`).
+    Declared iff anything is written, since JsonUtility materialises an
+    omitted block.
+
+    The rule that matters is capacity. Only types that can arrive late (an
+    emerge window, not `spawnPlacement: initial`) may fill it, at most the
+    stage's distinct cap of them, largest `maxPerRoom` first (0 = uncapped).
+    Upstream throws rather than placing a smaller wave, because a wave cut to
+    one body reads as a stray enemy. Spawner lines are not counted.
+    """
+    if floor.get("generatorType") == "static":
+        return []
+    issues: list[dict] = []
+    for si, stage in enumerate(floor.get("stageTypes") or []):
+        wave = stage.get("secondWave") or {}
+        if not (wave.get("chance") or wave.get("share") or wave.get("triggers")):
+            continue
+        wptr = f"{fptr}/stageTypes/{si}/secondWave"
+        where = f"floor {fi}: stageTypes[{si}] ('{stage.get('stageType')}') secondWave"
+
+        def err(code, message, pointer=wptr):
+            issues.append(_issue("error", code, f"{where}: {message}",
+                                 entity=plan_id, pointer=pointer))
+
+        chance, share = wave.get("chance") or 0, wave.get("share") or 0
+        if not 0 < chance <= 1:
+            err("LEVEL_SECOND_WAVE_INVALID", f"chance {chance:g} is outside (0, 1]", f"{wptr}/chance")
+        if not 0 < share <= 1:
+            err("LEVEL_SECOND_WAVE_INVALID", f"share {share:g} is outside (0, 1]", f"{wptr}/share")
+        triggers = wave.get("triggers") or []
+        if not triggers:
+            err("LEVEL_SECOND_WAVE_INVALID",
+                "no triggers — say how the wave arrives ('cleared' or 'advance')")
+        for ti, trigger in enumerate(triggers):
+            tptr = f"{wptr}/triggers/{ti}"
+            trigger = trigger or {}
+            kind, distance = trigger.get("kind"), trigger.get("distance") or 0
+            if not (trigger.get("weight") or 0) > 0:
+                err("LEVEL_SECOND_WAVE_INVALID", f"triggers[{ti}] weight must be > 0", tptr)
+            if "depth" in trigger:
+                err("LEVEL_SECOND_WAVE_INVALID",
+                    f"triggers[{ti}] writes `depth`, which OZX-1353 replaced with `distance` "
+                    f"(world units from the entry point); the old field is dropped unread",
+                    f"{tptr}/depth")
+            if kind == "advance":
+                if not distance > 0:
+                    err("LEVEL_SECOND_WAVE_INVALID",
+                        f"triggers[{ti}]: 'advance' needs distance > 0 (world units from the "
+                        f"entry point)", tptr)
+            elif kind == "cleared":
+                if distance:
+                    err("LEVEL_SECOND_WAVE_INVALID",
+                        f"triggers[{ti}]: distance {distance:g} on a 'cleared' trigger — only "
+                        f"'advance' reads it", f"{tptr}/distance")
+            else:
+                err("LEVEL_SECOND_WAVE_INVALID",
+                    f"triggers[{ti}]: kind '{kind}' — a second wave arrives by 'cleared' or "
+                    f"'advance'", f"{tptr}/kind")
+
+        pool = floor.get("enemyPool") or []
+        cut = stage.get("enemyBudgetCut") or 0
+        if not pool:
+            err("LEVEL_SECOND_WAVE_NO_POOL", "the floor has no enemyPool, which a second wave is drawn from")
+            continue
+        if cut >= 1:
+            err("LEVEL_SECOND_WAVE_NO_FIGHT",
+                "the stage cuts its whole enemy budget, so there is no wave to follow")
+            continue
+        if not 0 < share <= 1:
+            continue
+        budget = _stage_budget(floor.get("enemiesPerRoom") or 0, cut)
+        needed = math.ceil(share * budget - 1e-4)
+        late = [e for e in pool if not e.get("railTrainId") and _can_arrive_late(ds, e.get("enemyId"))
+                and all(_can_arrive_late(ds, v) for v in e.get("variantIds") or [])]
+        caps = sorted(((e.get("maxPerRoom") or 0) or 10**9 for e in late), reverse=True)
+        capacity = sum(caps[:DISTINCT_TYPE_CAP.get(stage.get("stageType"), len(caps))])
+        if capacity < needed:
+            err("LEVEL_SECOND_WAVE_CAPACITY",
+                f"needs {needed} late-arriving bodies (ceil(share {share:g} × budget {budget})) "
+                f"but the pool can hold only {capacity} — late-arrivable types: "
+                f"{', '.join(e.get('enemyId') for e in late) or 'none'}. A type arrives late "
+                f"with an emerge window and no spawnPlacement 'initial'; lower share, raise "
+                f"their maxPerRoom, or add such types")
+    return issues
 
 
 def _stage_tilemap_issues(ds: Dataset, plan_id: str, fi: int,

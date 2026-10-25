@@ -976,6 +976,14 @@ class Dataset:
                      _stage_budget(floor["enemiesPerRoom"],
                                    s.get("enemyBudgetCut") or 0)
                      if floor.get("enemiesPerRoom") else None),
+                 # OZX-1354: a wave on top of the opening one, or None.
+                 "secondWave": ({"chance": (s.get("secondWave") or {}).get("chance") or 0,
+                                 "share": (s.get("secondWave") or {}).get("share") or 0,
+                                 "triggers": [t.get("kind") for t in
+                                              (s.get("secondWave") or {}).get("triggers") or []
+                                              if t]}
+                                if any((s.get("secondWave") or {}).get(k)
+                                       for k in ("chance", "share", "triggers")) else None),
                  # OZX-1291: what every generated room of this stage is
                  # dressed with when its own decorations come out empty.
                  "dressing": next(

@@ -1495,7 +1495,8 @@ function renderPlanFloors() {
             <span class="content-glyph">${esc((st.stageType || '?').slice(0, 2).toUpperCase())}</span>
             <span><strong>${esc(st.stageType || '?')}</strong><small>${
               st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}${
-              (st.dressing || []).length ? ` · dressed: ${esc(st.dressing.map((d) => `${d.decalCategory} ×${d.count}`).join(', '))}` : ''}</small></span>
+              (st.dressing || []).length ? ` · dressed: ${esc(st.dressing.map((d) => `${d.decalCategory} ×${d.count}`).join(', '))}` : ''}${
+              st.secondWave ? ` · ${Math.round(st.secondWave.chance * 100)}% of rooms get a second wave of +${Math.round(st.secondWave.share * 100)}% (${esc(st.secondWave.triggers.join(' / '))})` : ''}</small></span>
             ${budget}</div>`;
         }).join('')
       : '<div class="inline-empty">No stage slices</div>';
