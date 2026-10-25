@@ -771,10 +771,25 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                     f"'launch' and 'sound' (a wait step omits `action` entirely)",
                     entity=encounter_id, pointer=f"{sptr}/action/verb"))
             enemy_id = action.get("enemyId")
-            if not enemy_id:
+            rail_issues, rail = _rail_launch_issues(ds, encounter_id, index, sptr, action)
+            issues.extend(rail_issues)
+            if rail:
+                pass
+            elif not enemy_id:
                 issues.append(_issue("error", "ENCOUNTER_ENEMY_MISSING",
-                                     f"step {index}: launch with no enemyId",
+                                     f"step {index}: launch with no enemyId (or railTrainId / "
+                                     f"railOilTankId)",
                                      entity=encounter_id, pointer=f"{sptr}/action"))
+            elif (((ds.get("EnemyData", enemy_id) or _NO_DOC).value.get("railConfig") or {})
+                  .get("enabled")):
+                # The executor throws on it: a rail-bound enemy placed as a body
+                # stands off the rail and fails on its first frame.
+                issues.append(_issue(
+                    "error", "ENCOUNTER_RAIL_ENEMY_AS_BODY",
+                    f"step {index}: '{enemy_id}' is a rail-bound enemy; launch it as a train "
+                    f"(railTrainId naming a GameData/railenemy train — a one-car train for a "
+                    f"lone car)",
+                    entity=encounter_id, pointer=f"{sptr}/action/enemyId"))
             elif ds.get("EnemyData", enemy_id) is None:
                 issues.append(_issue("error", "ENCOUNTER_ENEMY_MISSING",
                                      f"step {index}: enemy '{enemy_id}' does not exist",
@@ -820,15 +835,105 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
             # no pool to take a representative's spawn layer from, and
             # EncounterValidator does not check it either.
             aptr = f"{sptr}/action"
-            issues.extend(_variant_issues(
-                ds, encounter_id, f"step {index}", aptr, action.get("enemyId"),
-                list(action.get("variantIds") or []),
-                via_spawner=bool(action.get("viaSpawner"))))
-            issues.extend(_cluster_issues(
-                encounter_id, f"step {index}", aptr, action,
-                via_spawner=bool(action.get("viaSpawner"))))
+            # OZX-1328: the Boss flag is read on the direct-placement path
+            # only; a channel request can be discarded (spawner killed,
+            # emitMaxTotal spent), which would lose the floor's Boss quietly.
+            if action.get("boss") and action.get("viaSpawner") and not rail:
+                issues.append(_issue(
+                    "error", "ENCOUNTER_BOSS_ON_SPAWNER_CHANNEL",
+                    f"step {index}: boss cannot ride a viaSpawner launch — the channel never "
+                    f"reads the flag, so the floor's Boss would spawn as an ordinary body",
+                    entity=encounter_id, pointer=f"{aptr}/boss"))
+            # A rail launch has had its body-placement fields refused above,
+            # by name; checking their shape as well would say it twice.
+            if not rail:
+                issues.extend(_variant_issues(
+                    ds, encounter_id, f"step {index}", aptr, action.get("enemyId"),
+                    list(action.get("variantIds") or []),
+                    via_spawner=bool(action.get("viaSpawner"))))
+                issues.extend(_cluster_issues(
+                    encounter_id, f"step {index}", aptr, action,
+                    via_spawner=bool(action.get("viaSpawner"))))
 
     return issues
+
+
+class _NoDoc:
+    value: dict = {}
+
+
+_NO_DOC = _NoDoc()
+
+
+def _rail_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
+                        action: dict) -> tuple[list[dict], bool]:
+    """A launch that lays cars on the rail (OZX-1309 trains, OZX-1317 tanks).
+
+    `railTrainId` names a `RailTrainData` (GameData/railenemy: `cars` head
+    first, coupling gap, close-up speed); `railOilTankId` an `OilTankData`
+    whose `railConfig` is enabled. One launch places one kind of thing, so
+    the two and `enemyId` are exclusive. A rail launch never reads the fields
+    that place or decorate bodies on a spawn LAYER, and an unread field
+    looks like a working one — the train still comes out — so
+    `EncounterValidator.RailLaunchProblem` refuses each by name. Since
+    OZX-1315 a train's cars DO roll the launch's `dropTableId` (a pool floor
+    stamps its loot table on every launch); a tank drops nothing. Since
+    OZX-1341 a train may ride a rail factory's spawner channel; a tank may
+    not.
+
+    Returns (issues, is_rail).
+    """
+    train = action.get("railTrainId") or None
+    tank = action.get("railOilTankId") or None
+    if not (train or tank):
+        return [], False
+    aptr = f"{sptr}/action"
+    issues: list[dict] = []
+
+    def err(code, message, pointer=aptr):
+        issues.append(_issue("error", code, f"step {index}: {message}",
+                             entity=encounter_id, pointer=pointer))
+
+    if train and tank:
+        err("ENCOUNTER_LAUNCH_TARGET_AMBIGUOUS",
+            f"names both railTrainId '{train}' and railOilTankId '{tank}' — split it into "
+            f"two steps")
+    if action.get("enemyId"):
+        err("ENCOUNTER_LAUNCH_TARGET_AMBIGUOUS",
+            f"names both enemyId '{action['enemyId']}' and a rail target; a launch places "
+            f"bodies on a spawn layer OR cars on the rail")
+    if train and ds.get("RailTrainData", train) is None:
+        err("DATA_REFERENCE_MISSING", f"railTrainId '{train}' is not a RailTrainData",
+            f"{aptr}/railTrainId")
+    if tank:
+        tank_doc = ds.get("OilTankData", tank)
+        if tank_doc is None:
+            err("DATA_REFERENCE_MISSING", f"railOilTankId '{tank}' is not an OilTankData",
+                f"{aptr}/railOilTankId")
+        elif not (tank_doc.value.get("railConfig") or {}).get("enabled"):
+            err("ENCOUNTER_RAIL_TANK_NOT_ON_RAIL",
+                f"railOilTankId '{tank}' has no enabled railConfig, so it cannot ride the rail",
+                f"{aptr}/railOilTankId")
+
+    unread = None
+    if action.get("viaSpawner") and tank:
+        unread = "viaSpawner (tanks are placed on the rail, not emitted by a spawner)"
+    elif action.get("at"):
+        unread = f"at '{action['at']}' (a train stands on the rail, not on a spawn layer)"
+    elif action.get("eliteCount"):
+        unread = "eliteCount (the cars spawn as the train data lists them)"
+    elif action.get("boss"):
+        unread = "boss (a floor's Boss is one body placed by its bossId launch)"
+    elif action.get("dropTableId") and tank:
+        unread = "dropTableId (a rail oil tank is neutral and drops nothing)"
+    elif action.get("variantIds"):
+        unread = "variantIds (a train's cars are listed in its RailTrainData)"
+    elif any(action.get(k) for k in ("clusterSizeMin", "clusterSizeMax", "clusterRadius",
+                                     "sharedRoot", "fanArcDegrees")):
+        unread = "cluster / sharedRoot fields (a train is laid along the rail, not clumped)"
+    if unread:
+        err("ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD", f"a rail launch sets {unread}, which it never reads")
+    return issues, True
 
 
 def _pin_issues(ds: Dataset, encounter_id: str, index: int,
@@ -1180,6 +1285,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                                  f"floor {fi}: enemyPool '{ref}' does not exist",
                                  entity=plan_id,
                                  pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
+    issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
@@ -1894,6 +2000,57 @@ def _pool_variant_issues(ds: Dataset, plan_id: str, fi: int,
             plan_id, where, eptr, entry,
             is_spawner=bool(entry.get("minionId")
                             and (entry.get("minionsPerSpawner") or 0) > 0)))
+    return issues
+
+
+def _rail_train_entry_issues(ds: Dataset, plan_id: str, fi: int,
+                             fptr: str, floor: dict) -> list[dict]:
+    """`enemyPool[].railTrainId` — a train as a pool type (OZX-1315).
+
+    `LevelPlanValidator.ValidateRailTrainEntries`: the floor must run on rail
+    (`railCart`, merged — every room then draws a rail tilemap), since a room
+    that samples a train with no track throws as the player walks in; the
+    entry is a train OR an enemy; and it carries none of the spawn-layer
+    fields a rail launch never reads. The id must also name a train —
+    upstream leaves that to the train data's own checks, but a typo here
+    would otherwise surface only as a missing file at generation.
+    """
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        train = entry.get("railTrainId")
+        if not train:
+            continue
+        eptr = f"{fptr}/enemyPool/{ei}"
+        who = f"floor {fi}: enemyPool[{ei}] (railTrainId '{train}')"
+
+        def err(code, message, pointer=eptr):
+            issues.append(_issue("error", code, f"{who} {message}",
+                                 entity=plan_id, pointer=pointer))
+
+        if entry.get("enemyId"):
+            err("LEVEL_RAIL_TRAIN_ENTRY_AMBIGUOUS",
+                f"also names enemyId '{entry['enemyId']}'. An entry is one type: a train on "
+                f"the rail or an enemy on a spawn layer — split it into two entries")
+        if not floor.get("railCart"):
+            err("LEVEL_RAIL_TRAIN_OFF_RAIL",
+                "is on a floor without railCart, so its rooms may draw tilemaps with no rail "
+                "and a room that samples this train has nowhere to stand it",
+                f"{eptr}/railTrainId")
+        if ds.get("RailTrainData", train) is None:
+            err("DATA_REFERENCE_MISSING", "names no RailTrainData", f"{eptr}/railTrainId")
+        unread = None
+        if entry.get("variantIds"):
+            unread = "variantIds"
+        elif any(entry.get(k) for k in ("clusterSizeMin", "clusterSizeMax", "clusterRadius")):
+            unread = "cluster fields"
+        elif entry.get("sharedRoot") or entry.get("fanArcDegrees"):
+            unread = "sharedRoot / fanArcDegrees"
+        elif entry.get("minionId") or entry.get("minionsPerSpawner"):
+            unread = "minionId / minionsPerSpawner"
+        if unread:
+            err("LEVEL_RAIL_TRAIN_FIELD_UNREAD",
+                f"sets {unread}, which a train never reads: its cars are the ones its "
+                f"RailTrainData lists, laid along the rail")
     return issues
 
 

@@ -651,7 +651,12 @@ function renderRooms() {
     const enemyEntries = room.enemies.length
       ? room.enemies.map((e, i) => {
           const source = catalogItem(enemyCatalog, e.id);
-          const bits = [source.meta];
+          // OZX-1309 / OZX-1317: a rail launch counts trains (or tanks),
+          // not bodies, and lays them along the rail.
+          const bits = e.rail === 'train'
+            ? [`train of ${e.cars.length}: ${e.cars.join(' + ')}`]
+            : e.rail === 'tank' ? ['rail oil tank — neutral, not counted for clear']
+            : [source.meta];
           if (e.eliteCount) bits.push(`elite ×${e.eliteCount}`);
           if (e.viaSpawner) bits.push(`via ${e.viaSpawner}`);
           // When the wave appears. Shown on every row so its absence is never
@@ -1515,10 +1520,10 @@ function renderPlanFloors() {
                                 : `×${e.minionsPerSpawner} — no minionId`)}</span>`
               : '';
           return `<div class="content-entry pool-entry ${e.missing ? 'missing' : ''}">
-            <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.enemyId))}</span>
-            <span><strong>${esc(e.enemyId || '?')}</strong><small>${
-              e.missing ? 'no EnemyData with this id'
-                : `weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+            <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.railTrainId || e.enemyId))}</span>
+            <span><strong>${esc(e.railTrainId || e.enemyId || '?')}</strong><small>${
+              e.missing ? (e.railTrainId ? 'no RailTrainData with this id' : 'no EnemyData with this id')
+                : `${e.railTrainId ? 'train on the rail · ' : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
             }</small></span>${groupLine(e)}${channel}
           </div>`;
         }).join('')

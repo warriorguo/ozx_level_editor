@@ -828,7 +828,8 @@ class Dataset:
                 pending_gates.append(describe_condition(condition))
                 continue
 
-            enemy_id = action.get("enemyId")
+            enemy_id = (action.get("enemyId") or action.get("railTrainId")
+                        or action.get("railOilTankId"))
             if not enemy_id:
                 continue
 
@@ -843,8 +844,14 @@ class Dataset:
             # it is charged to no budget at all — not `enemiesPerRoom`, not
             # the encounter's `maxAlive`. A room that draws three eggs holds
             # six to nine more bodies than any number on it says.
-            enemy = self.get("EnemyData", enemy_id)
-            hatch = self.hatch_brief(enemy.value) if enemy else None
+            # OZX-1309 / OZX-1317: a rail launch lays `min..max` whole trains
+            # (or tanks) on the rail. The row counts trains, not cars.
+            rail = ("train" if action.get("railTrainId")
+                    else "tank" if action.get("railOilTankId") else None)
+            enemy = (self.get("EnemyData", enemy_id) if not rail
+                     else self.get("RailTrainData" if rail == "train" else "OilTankData",
+                                   enemy_id))
+            hatch = self.hatch_brief(enemy.value) if enemy and not rail else None
             bodies = action.get("max", action.get("min", 0)) or 0
 
             out.append({
@@ -865,7 +872,10 @@ class Dataset:
                 # room edge, so they can come out short where the room is
                 # small — the row is where that gets explained.
                 "wallClearance": ((enemy.value.get("spawnMinWallDistance") or 0)
-                                  if enemy else 0),
+                                  if enemy and not rail else 0),
+                "rail": rail,
+                "cars": (list(enemy.value.get("cars") or [])
+                         if enemy and rail == "train" else []),
                 "stepIndex": index,
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),
@@ -1012,9 +1022,15 @@ class Dataset:
                     sum(s.get("portion") or 0 for s in floor.get("stageTypes") or []), 4),
                 "enemyPool": [
                     {"index": ei, "enemyId": e.get("enemyId"),
+                     # OZX-1315: a whole train as one pool type. Its type id
+                     # is the train's; it takes one enemiesPerRoom slot per
+                     # train and stands on the rail, not a spawn layer.
+                     "railTrainId": e.get("railTrainId") or None,
                      "weight": e.get("weight"), "maxPerRoom": e.get("maxPerRoom"),
                      "dropTableId": e.get("dropTableId"),
-                     "missing": self.get("EnemyData", e.get("enemyId")) is None,
+                     "missing": (self.get("RailTrainData", e["railTrainId"]) is None
+                                 if e.get("railTrainId")
+                                 else self.get("EnemyData", e.get("enemyId")) is None),
                      # OZX-1032: the spawner channel. A `category: "spawner"`
                      # enemy produces nothing on its own — it only drains what
                      # an encounter queued into it — so a spawner dropped into

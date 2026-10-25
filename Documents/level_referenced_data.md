@@ -52,6 +52,8 @@
 |---|---|
 | `EncounterAction.enemyId` / `condition.enemyId`（`killed`） | EnemyData |
 | `EncounterAction.viaSpawner` | EnemyData（**必须是房间里活着的那种敌人**，见 §1.4） |
+| `EncounterAction.railTrainId` / `EnemyPoolEntryData.railTrainId`（OZX-1309 / OZX-1315） | RailTrainData（`GameData/railenemy/`，`cars` 车头在前） |
+| `EncounterAction.railOilTankId`（OZX-1317） | OilTankData（`GameData/oiltank/`，`railConfig.enabled` 为真的那种，出货 `rail_oil_tank`） |
 | `EncounterAction.dropTableId` | LootTableData |
 | `EncounterAction.guaranteedDrop.itemId` | ItemData（**不是 loot table**） |
 | `EncounterAction.guaranteedDrop.tableId` | LootTableData（必须 `pickOne`） |
@@ -121,6 +123,10 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 ### 1.5 校验（`EncounterValidator` 已有 + 需要补的）
 
 已有（结构性，抛异常）：verb 既非 `launch` 也非 `sound`、`sound` 缺 `soundId`（缺了只在 `SoundServiceAdapter` 打一行日志，看起来触发了其实没声音）、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
+
+**轨道 launch**（OZX-1309 列车 / OZX-1317 油罐车）：`enemyId` / `railTrainId` / `railOilTankId` 三选一（`ENCOUNTER_LAUNCH_TARGET_AMBIGUOUS`），`min..max` 数的是**列车数 / 辆数**。不读刷怪层字段，写了就按名拒（`EncounterValidator.RailLaunchProblem` → `ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD`）：`at`、`eliteCount`、`boss`、`variantIds`、cluster / `sharedRoot` / `fanArcDegrees`；油罐车另拒 `viaSpawner` 与 `dropTableId`。**注意两条后来放开的**：OZX-1315 起列车的每节车会掷 launch 的 `dropTableId`（pool 楼层会给每条 launch 盖楼层表）；OZX-1341 起列车可以走 rail factory 的 `viaSpawner`。`enemyId` 指向 `railConfig.enabled` 的敌人，执行器抛（`ENCOUNTER_RAIL_ENEMY_AS_BODY`）——轨道敌人只能作为列车的一节刷。`boss` 不能走 `viaSpawner`（OZX-1328，`ENCOUNTER_BOSS_ON_SPAWNER_CHANNEL`）。
+
+pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntries`）：楼层（合并后）必须 `railCart: true`（`LEVEL_RAIL_TRAIN_OFF_RAIL`）；不能同时写 `enemyId`（`LEVEL_RAIL_TRAIN_ENTRY_AMBIGUOUS`）；不能写 variant / cluster / sharedRoot / minion 字段（`LEVEL_RAIL_TRAIN_FIELD_UNREAD`）。出货：chapter_5 的两个 basement area（票里写的 chapter_4 已过时）。
 
 **没有**做的（编辑器必须补）：`enemyId` 是否存在、`dropTableId` 是否存在、`guaranteedDrop.itemId` 是不是 item（而不是 loot table）、`guaranteedDrop.tableId` 指的表是否存在、`viaSpawner` 是否可达、`eliteCount > 0` 的敌人是否有 elite 配置、`at` 类别在目标模板里有没有点、`cleared` 之前是否真的有会产生活体的 step。
 
