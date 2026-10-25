@@ -26,6 +26,15 @@ routes[`/api/level/${level.id}`] = level;
 const planPath = `${FIXTURES}/plan.json`;
 const plan = fs.existsSync(planPath) ? JSON.parse(fs.readFileSync(planPath)) : null;
 if (plan) routes[`/api/plan/${plan.id}`] = plan;
+const readOptional = (name) => {
+  const file = `${FIXTURES}/${name}`;
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : null;
+};
+const generator = readOptional('gen.json');
+if (generator) routes['/api/generator'] = generator;
+const sample = readOptional('sample.json');
+const SAMPLE_SEED = 7;
+if (plan && sample) routes[`/api/plan-sample/${plan.id}?seed=${SAMPLE_SEED}`] = sample;
 
 const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8'),
                       { runScripts: 'outside-only', pretendToBeVisual: true });
@@ -526,6 +535,34 @@ if (plan) {
     check('toggling one off removes that index',
           posted[before]?.body.edits[0].op === 'remove',
           posted[before]?.body.edits[0].path);
+  }
+
+  // ── OLE-1: a generated sample of the plan ────────────────────────────
+  // It is the game's own generator's output, rendered by the level path,
+  // and it must never read as "the chapter": the bar says SAMPLE and seed.
+  if (generator && generator.available && sample) {
+    check('the plan offers to generate a sample', !!q('#sampleGo'));
+    q('#sampleSeed').value = String(SAMPLE_SEED);
+    click(q('#sampleGo'));
+    await settle(20);
+    check('a sample renders room cards', qa('.room-list-item').length === sample.floors[0].rooms.length,
+          `${qa('.room-list-item').length} of ${sample.floors[0].rooms.length}`);
+    check('and says it is one sample, with its seed',
+          !q('#sampleBar').hidden && q('#sampleBar').textContent.includes('SAMPLE')
+          && q('#sampleBarSeed').value === String(SAMPLE_SEED));
+    check('a sample is read-only', q('#addRoomBtn').hidden === true);
+    {
+      const before = posted.length;
+      click(qa('#skillLibrary .asset-card')[0]);
+      await settle();
+      check('a library click writes nothing to a sample', posted.length === before);
+    }
+    click(q('#sampleBack'));
+    await settle(20);
+    check('back to the plan hides the bar', q('#sampleBar').hidden === true);
+    check('and shows the plan again', floorCards().length === plan.floors.length);
+  } else if (generator && !generator.available) {
+    check('without a generator the plan says why', q('.plan-nomap').textContent.includes(generator.reason));
   }
 
   // Back to a level: the level-only chrome has to come back with it.

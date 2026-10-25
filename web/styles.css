@@ -1165,3 +1165,19 @@ button { color: inherit; }
 .tip-field > span { color: var(--dim); font-size: 8px; letter-spacing: .11em; text-transform: uppercase; }
 .tip-field input { width: 100%; max-width: 26ch; height: 24px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: #111613; font-size: 10px; outline: none; }
 .tip-field input:focus { border-color: var(--cyan); }
+
+/* OLE-1: a generated sample of a plan. The bar is never subtle — a sample
+   that reads as "the chapter" is the one mistake this view must not invite. */
+.sample-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #1a1f14; }
+.sample-what { font-size: 10px; color: var(--ink); }
+.sample-what strong { color: var(--amber); letter-spacing: .12em; margin-right: 4px; }
+.sample-what span { color: var(--dim); margin-left: 6px; }
+.sample-what input, .sample-controls input { width: 7ch; height: 22px; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #111613; font-size: 10px; }
+.sample-actions { display: flex; gap: 6px; }
+.sample-warn { grid-column: 1 / -1; font-size: 9px; }
+.sample-warn .stuck { color: var(--danger); }
+.sample-controls { display: flex; gap: 6px; align-items: center; justify-content: center; margin: 10px 0 6px; font-size: 10px; }
+.sample-table { margin: 10px auto 0; border-collapse: collapse; font-size: 9px; }
+.sample-table th, .sample-table td { padding: 2px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.sample-table tr.bad td { color: var(--danger); }
+.sample-table button.link { background: none; border: 0; color: var(--cyan); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }

@@ -14,6 +14,15 @@ that way unless there is a strong reason not to.
   it with a pretty-printer.
 - `ozxlevel/dataset.py` — GameData index and the projections the UI reads.
 - `ozxlevel/validate.py` — the silent-failure rules (see below).
+- `ozxlevel/plandefaults.py` — the `floorDefaults` merge (`FloorPlanDefaults.Merge`) and
+  `PortionResolver`; every plan check runs on merged floors and reroutes findings to the
+  node that holds the value.
+- `ozxlevel/tilemaps.py` — TilemapData facts (stat-stamped, never trusted to stay put: the
+  room-template sync replaces it) and the pinned-template door rules.
+- `ozxlevel/generate.py` — procedural previews via ozx_base's own headless `genlevel`
+  (OLE-1); never reimplement the generator in Python. It finds `dotnet` off PATH too,
+  because the app wrapper's environment has no Homebrew, and flags a build older than
+  its C# source.
 - `ozxlevel/api.py` — loopback HTTP API and static serving. Reads call
   `Dataset.refresh()` first; writes never do — they refuse when the file moved,
   because a pointer-addressed patch against changed text can hit the wrong node.

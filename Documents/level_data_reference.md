@@ -562,6 +562,9 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 ## 6. plan 如何编译成 level
 
+**编辑器里看样本（OLE-1）**：plan 视图的「Generate a sample」调用 ozx_base 自己的 headless 入口（`DotnetTests/Game.Balance` 的 `genlevel --plan <id> --seed <n> --gamedata <dir>`，OZX-991），把返回的 `LevelData` 走普通关卡视图画出来（只读，带可达性叠加）——不在 Python 里重写生成器，所以传送点、间距、stage 发牌、采样都和游戏一致。**一次只是一个样本**：样本条上写着 SAMPLE 和 seed，「Compare 5 seeds」并排给出各 seed 的房间数 / 每层 / 传送点，看的是分布不是某一次。GameData 是实时读的；C# 改了要重建 DLL，编辑器在 DLL 比 `Assets/Scripts` 里（Game.Unity / Tests 之外）最新的 `.cs` 旧时明确提示 stale 和重建命令。生成失败时原样显示 genlevel 的报错——plan 生成不出来是 plan 的问题。
+
+
 程序化关卡的作者输入是规则，房间是编译产物。编辑器要展示「输入 → 指定 seed 的结果」，就得复刻这条顺序（`LevelBasePlanAssigner.Apply`，逐楼层）：
 
 ```

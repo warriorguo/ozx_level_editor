@@ -20,10 +20,16 @@ const state = {
   levelId: null,
   floorIndex: 0,
   selectedRoomIndex: 0,
-  // 'level' (authored rooms) or 'plan' (a generation recipe with no rooms).
+  // 'level' (authored rooms), 'plan' (a generation recipe with no rooms),
+  // 'session' (a captured run) or 'sample' (one generated draw of a plan).
   mode: 'level',
   plan: null,
   planId: null,
+  // OLE-1: the generator's status, and the sample on screen.
+  generator: null,
+  sample: null,
+  sampleSeed: null,
+  sampleSummary: null,
   session: null,
   sessionName: null,
   sessions: [],
@@ -283,11 +289,105 @@ async function loadLevel(levelId) {
 
 async function loadPlan(planId) {
   state.mode = 'plan';
+  if (state.planId !== planId) state.sampleSummary = null;
   state.planId = planId;
   state.plan = await api(`/api/plan/${encodeURIComponent(planId)}`);
+  state.generator = await api('/api/generator').catch(() => null);
   resetSelection();
   $('levelPicker').value = `plan:${planId}`;
   renderPlanAll();
+}
+
+/** OLE-1: one generated draw of the open plan, rendered like a captured run.
+ *
+ *  ozx_base's own genlevel builds it, so it is the game's layout and not an
+ *  approximation. It is a SAMPLE: each seed lays the plan out differently,
+ *  and the bar above the rooms says so on every render. A plan that fails
+ *  to generate stays on the plan screen with genlevel's message.
+ */
+async function loadSample(planId, seed) {
+  setBusy(true);
+  try {
+    const view = await api(`/api/plan-sample/${encodeURIComponent(planId)}?seed=${seed}`);
+    if (view.missing) {
+      state.sample = view.sample;
+      if (state.mode !== 'plan' || state.planId !== planId) await loadPlan(planId);
+      else renderPlanAll();
+      showToast(view.sample.error || 'generation failed');
+      return;
+    }
+    state.mode = 'sample';
+    state.planId = planId;
+    state.sampleSeed = seed;
+    state.sample = view.sample;
+    state.level = view;
+    state.levelId = view.id;
+    state.floorIndex = 0;
+    state.selectedRoomIndex = 0;
+    resetSelection();
+    $('levelPicker').value = `plan:${planId}`;
+    renderAll();
+  } finally {
+    setBusy(false);
+  }
+}
+
+/** Several seeds at once, summarised — the spread, not one draw. */
+async function compareSamples(planId, first, count) {
+  setBusy(true);
+  try {
+    const seeds = Array.from({ length: count }, (_, i) => first + i);
+    state.sampleSummary = await api(
+      `/api/plan-samples/${encodeURIComponent(planId)}?seeds=${seeds.join(',')}`);
+    renderPlanAll();
+  } finally {
+    setBusy(false);
+  }
+}
+
+const randomSeed = () => 1 + Math.floor(Math.random() * 99999);
+
+function generatorNote(gen) {
+  if (!gen) return '';
+  if (!gen.available) return `<span class="stuck">${esc(gen.reason)}</span>`;
+  return gen.stale
+    ? `<span class="stuck" title="${esc(gen.buildHint)}">The generator build is older than ${esc(gen.newerSource)} — samples show the rules as built, not as written. Rebuild: ${esc(gen.buildHint)}</span>`
+    : '<span class="ok">generator build is current</span>';
+}
+
+/** The bar above a sample: what it is, and the way to another one. */
+function renderSampleBar() {
+  const bar = $('sampleBar');
+  if (!bar) return;
+  if (state.mode !== 'sample' || !state.sample) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+  const s = state.sample;
+  bar.hidden = false;
+  bar.innerHTML = `<div class="sample-what"><strong>SAMPLE</strong> of ${esc(s.planId)} · seed
+      <input id="sampleBarSeed" type="number" value="${esc(s.seed)}" aria-label="Seed" />
+      <span>— one draw of this plan; every seed lays it out differently</span></div>
+    <div class="sample-actions">
+      <button class="button ghost" id="sampleAgain">↻ Another seed</button>
+      <button class="button ghost" id="sampleBack">← Back to plan</button>
+    </div>
+    ${s.generator && s.generator.stale ? `<div class="sample-warn">${generatorNote(s.generator)}</div>` : ''}`;
+  $('sampleAgain').addEventListener('click', () => loadSample(s.planId, randomSeed()));
+  $('sampleBack').addEventListener('click', () => loadPlan(s.planId));
+  $('sampleBarSeed').addEventListener('change', (event) => {
+    const seed = parseInt(event.target.value, 10);
+    if (Number.isFinite(seed)) loadSample(s.planId, seed);
+  });
+}
+
+/** Re-read whatever is open, by what it is. */
+async function reopenCurrent() {
+  if (state.mode === 'plan') return reloadPlan();
+  if (state.mode === 'session') return loadSession(state.sessionName);
+  if (state.mode === 'sample') return loadSample(state.sample.planId, state.sampleSeed);
+  return reloadLevel();
 }
 
 /** A played run. Rendered by the ordinary level path, not a view of its own.
@@ -970,6 +1070,7 @@ function selectionSummary(libraryKind) {
   // document the user is no longer looking at.
   if (state.mode === 'plan') return 'plans have no rooms to add to';
   if (state.mode === 'session') return 'a session is read-only';
+  if (state.mode === 'sample') return 'a sample is generated, not authored — edit the plan';
   const room = selectionRoom();
   if (!room) return '';
   const kind = LIBRARY_KIND[libraryKind] ?? libraryKind;
@@ -1309,6 +1410,10 @@ function renderCatalog(list, targetId, query, kind) {
         showToast('A session is a record of a run, not an editable level');
         return;
       }
+      if (state.mode === 'sample') {
+        showToast('A sample is generated from the plan — edit the plan instead');
+        return;
+      }
       if (kind === 'static') await addStatic(card.dataset.id);
       else if (kind === 'skill') await addSkill(card.dataset.id);
       else if (kind === 'loot') await addLoot(card.dataset.id);
@@ -1346,6 +1451,7 @@ function renderLevelIssueBadge() {
 
 function renderPlanAll() {
   const plan = state.plan;
+  renderSampleBar();
   $('floorCrumb').textContent = `${plan.floors.length} FLOORS`;
   $('floorTitle').textContent = 'Floor plans';
   $('levelSub').textContent = 'PLAN';
@@ -1355,9 +1461,34 @@ function renderPlanAll() {
   // Into the plane, NOT the scroller: #mapPlane lives inside #mapScroll, so
   // replacing the scroller's contents deletes the plane and every later
   // render — including the one after a write — hits a null.
+  // OLE-1: the plan has no rooms, but ozx_base's genlevel can draw it some.
+  const gen = state.generator;
+  const failed = state.sample && state.sample.planId === plan.id && state.sample.error
+    ? `<span class="stuck" title="${esc(state.sample.detail || '')}">seed ${esc(state.sample.seed)}: ${esc(state.sample.error)}</span>` : '';
+  const summary = state.sampleSummary && state.sampleSummary.planId === plan.id
+    ? `<table class="sample-table"><tr><th>seed</th><th>rooms</th>${
+        plan.floors.map((f) => `<th>f${f.index + 1}</th>`).join('')}<th>teleports</th></tr>${
+        state.sampleSummary.samples.map((r) => r.error
+          ? `<tr class="bad"><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td colspan="${plan.floors.length + 2}" title="${esc(r.error)}">fails to generate</td></tr>`
+          : `<tr><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td>${r.rooms}</td>${
+              r.floors.map((f) => `<td title="${esc(Object.entries(f.stages).map(([k, v]) => `${k} ${v}`).join(', '))}">${f.rooms}</td>`).join('')}<td>${r.teleports}</td></tr>`).join('')}</table>`
+    : '';
   $('mapPlane').innerHTML =
-    `<div class="plan-nomap">A plan has no rooms until it is generated.<br>
-     <span>Room layout preview needs the headless generator (OLE-1).</span></div>`;
+    `<div class="plan-nomap">A plan has no rooms until it is generated.
+     ${gen && gen.available ? `<div class="sample-controls">
+        <label>seed <input id="sampleSeed" type="number" value="${esc(state.sampleSeed || randomSeed())}" /></label>
+        <button class="button" id="sampleGo">Generate a sample</button>
+        <button class="button ghost" id="sampleCompare" title="Generate five seeds and compare them">Compare 5 seeds</button>
+      </div>
+      <span>A sample is one draw — another seed lays the plan out differently.</span>` : ''}
+      ${generatorNote(gen)}${failed}${summary}</div>`;
+  if (gen && gen.available) {
+    const seedOf = () => parseInt($('sampleSeed').value, 10) || randomSeed();
+    $('sampleGo').addEventListener('click', () => loadSample(plan.id, seedOf()));
+    $('sampleCompare').addEventListener('click', () => compareSamples(plan.id, seedOf(), 5));
+    $('mapPlane').querySelectorAll('[data-sample-seed]').forEach((b) =>
+      b.addEventListener('click', () => loadSample(plan.id, Number(b.dataset.sampleSeed))));
+  }
   renderPlanFloors();
   renderPlanIssueBadge();
   for (const [cat, id, box, kind] of [
@@ -1714,6 +1845,7 @@ const codeOf = (id) => {
 };
 
 function renderAll() {
+  renderSampleBar();
   const readOnly = !!(state.level && state.level.readOnly);
   $('addRoomBtn').hidden = readOnly;
   document.querySelector('.room-canvas').classList.toggle('read-only', readOnly);
@@ -2038,7 +2170,7 @@ $('reloadBtn').addEventListener('click', async () => {
   setBusy(true);
   try {
     state.boot = await api('/api/reload');
-    await reloadLevel();
+    await reopenCurrent();
     await refreshGlobalValidation();
     showToast('Reloaded from disk');
   } finally {

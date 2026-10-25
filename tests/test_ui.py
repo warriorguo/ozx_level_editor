@@ -48,6 +48,8 @@ def ensure_jsdom():
     return JSDOM_ENTRY if JSDOM_ENTRY.exists() else None
 
 
+SAMPLE_SEED = 7   # the seed tests/ui/ui_test.mjs types before generating
+
 pytestmark = pytest.mark.skipif(
     not (OZX_BASE / "Assets/StreamingAssets/GameData").is_dir() or not have_node(),
     reason="needs a sibling ozx_base checkout and node/npm")
@@ -116,6 +118,15 @@ def fixtures(tmp_path_factory):
              if any(e["isSpawner"] for f in v["floors"] for e in f["enemyPool"])),
             views[0])
         (out / "plan.json").write_text(json.dumps(chosen_plan))
+        # OLE-1: the generator's status, and one real sample of that plan at
+        # the seed the page will ask for. Without a built generator only the
+        # status is written, and the page's sample checks stand down.
+        gen = api.generator_status()
+        (out / "gen.json").write_text(json.dumps(gen))
+        if gen.get("available"):
+            sample = api.plan_sample(chosen_plan["id"], SAMPLE_SEED)
+            if not sample.get("missing"):
+                (out / "sample.json").write_text(json.dumps(sample))
     return out
 
 
