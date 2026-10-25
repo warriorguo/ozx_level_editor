@@ -102,6 +102,16 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     f"door leaves nothing to load. Use teaching or building",
                     entity=level_id, pointer=f"{rptr}/stageType"))
 
+            # OZX-1159 renamed the ride from a steam train to a rail cart. As
+            # with `dropTableIdOverride`, the old name is no alias: JsonUtility
+            # drops an undeclared field silently, so the room just has no cart.
+            if "steamTrain" in room:
+                issues.append(_issue(
+                    "error", "LEVEL_ROOM_FIELD_RENAMED",
+                    f"{rid}: `steamTrain` was renamed `railCart` (OZX-1159); the old "
+                    f"name is ignored without a word, so this room gets no cart",
+                    entity=level_id, pointer=f"{rptr}/steamTrain"))
+
             # Non-cave rooms MUST declare staticPlacements. Every spawn adapter
             # calls RequireDeclared and throws on null — an empty array is the
             # way to say "this room places nothing".

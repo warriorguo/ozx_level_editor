@@ -117,7 +117,7 @@ LevelData
 | `roomShape` | string | `bridge` / `platform` / null | **0** |
 | `bossId` | string | 楼层 boss 敌人 id | **0** |
 | `seed` | int | 渲染种子，0 = 由 roomId 派生 | **0** |
-| `steamTrain` | bool | 沿 rail 层跑蒸汽车；房间没有 rail 层却开启 = fail-fast | **0** |
+| `railCart` | bool | 这间房自带一台可乘坐的轨道矿车（OZX-1159 前叫 `steamTrain`）；房间没有 rail 层却开启 = fail-fast。旧名 JsonUtility 静默丢弃 → `LEVEL_ROOM_FIELD_RENAMED` | 1 |
 
 两个反直觉点：
 
@@ -532,7 +532,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
   （`SkillPlatformSpawnAdapter.cs:130`、`:244`；平台正中要画 level-1 图标，
   `ResolveIcon` 拿不到 key 就抛）。`iconKeys` 为空是**合法的 SkillData**，
   只是不能摆在平台上——`shield_orange` 现在就是这样，chapter_2 `f0_room_2_2` 因此起不来。
-- `steamTrain: true` 但房间模板没有 rail 层 → 抛错。
+- `railCart: true` 但房间模板没有 rail 层 → 抛错（`RailCartSpawnAdapter`）。
 - `generatorType: "static"` 但 `rooms` 为空 → 抛错。
 - `enemyPool` 非空但 `enemiesPerRoom <= 0` → 抛错。
 - spawner 通道四条（`LevelPlanValidator.ValidateSpawnerPairs`，见 §5.4）→ 抛错。
