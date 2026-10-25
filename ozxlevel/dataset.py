@@ -909,6 +909,13 @@ class Dataset:
             })
         return out
 
+    def _enemy_family(self, enemy_id: str | None) -> dict | None:
+        """`{"id", "tier"}` for an enemy that declares a family, else None."""
+        enemy = self.get("EnemyData", enemy_id or "")
+        if enemy is None or not enemy.value.get("family"):
+            return None
+        return {"id": enemy.value["family"], "tier": enemy.value.get("tier") or 0}
+
     def _stage_weights(self, floor: dict, base: str) -> list[dict]:
         """`floorLootPlan.stageWeights` — per-stage loot multipliers.
 
@@ -1053,6 +1060,11 @@ class Dataset:
                      # is the train's; it takes one enemiesPerRoom slot per
                      # train and stands on the rail, not a spawn layer.
                      "railTrainId": e.get("railTrainId") or None,
+                     # OZX-1427: which family this is a variant of, and how
+                     # strong — what decides how deep in the run it may
+                     # appear (OZX-1429).
+                     "family": (self._enemy_family(e.get("enemyId"))
+                                if not e.get("railTrainId") else None),
                      "weight": e.get("weight"), "maxPerRoom": e.get("maxPerRoom"),
                      "dropTableId": e.get("dropTableId"),
                      "missing": (self.get("RailTrainData", e["railTrainId"]) is None

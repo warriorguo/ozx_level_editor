@@ -1206,10 +1206,12 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
               for raw in doc.value.get("floors") or []]
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
     issues.extend(_final_area_issues(plan_id, doc.value, merged))
+    arrival = _arrival_order(doc.value.get("areaLinks") or [], len(merged))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
         for issue in _floor_plan_issues(ds, plan_id, fi, floor,
-                                        bool(doc.value.get("waivePoolCoverage"))):
+                                        bool(doc.value.get("waivePoolCoverage")),
+                                        arrival[fi]):
             pointer = plandefaults.reroute(issue["pointer"], fi, source)
             if pointer == issue["pointer"]:
                 issues.append(issue)
@@ -1462,8 +1464,76 @@ def _area_category(theme_id: str | None) -> str:
     return theme_id.rsplit("/", 1)[-1]
 
 
+def _arrival_order(links: list, n: int) -> list:
+    """`LevelPlanValidator.ArrivalOrder` (OZX-1429): each area's earliest k.
+
+    The fewest area-to-area links from the entry area (floors[0], k = 1),
+    plus one, walking links both ways (every link has its way back). No
+    links = the implicit chain. An area no route reaches gets None — that is
+    LEVEL_AREA_UNREACHABLE's to report, and no tier bound applies to it.
+    """
+    adjacent: dict = {a: [] for a in range(n)}
+    if links:
+        for l in links:
+            a, b = l.get("fromArea", 0), l.get("toArea", 0)
+            if 0 <= a < n and 0 <= b < n:
+                adjacent[a].append(b)
+                adjacent[b].append(a)
+    else:
+        for a in range(n - 1):
+            adjacent[a].append(a + 1)
+            adjacent[a + 1].append(a)
+    order = [None] * n
+    if n:
+        order[0] = 1
+        queue = [0]
+        while queue:
+            a = queue.pop(0)
+            for b in adjacent[a]:
+                if order[b] is None:
+                    order[b] = order[a] + 1
+                    queue.append(b)
+    return order
+
+
+def _variant_tier_issues(ds: Dataset, plan_id: str, fi: int, fptr: str,
+                         floor: dict, arrival: int | None) -> list[dict]:
+    """A variant's tier ≤ the area's arrival order (OZX-1429).
+
+    A level opens with only the weakest variant of each family and each
+    further area unlocks one more tier: the k-th area reached deploys tier
+    ≤ k, k being its EARLIEST arrival so the bound holds on every route.
+    Every body the pool can place is checked — the entry's enemyId and each
+    of its variantIds. Elite promotion is not tier-limited, and a rail train
+    is not checked (its cars are the train's, not family variants).
+    """
+    if not arrival or floor.get("generatorType") == "static":
+        return []
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        if entry.get("railTrainId"):
+            continue
+        ids = [("enemyId", entry.get("enemyId"))] + [
+            (f"variantIds/{vi}", v) for vi, v in enumerate(entry.get("variantIds") or [])]
+        for suffix, enemy_id in ids:
+            enemy = ds.get("EnemyData", enemy_id or "")
+            if enemy is None:
+                continue
+            fid, tier = family_of(enemy.value, enemy.id)
+            if tier > arrival:
+                issues.append(_issue(
+                    "error", "LEVEL_VARIANT_TIER_TOO_EARLY",
+                    f"floor {fi}: enemyPool[{ei}] '{enemy_id}' is tier {tier} of family "
+                    f"'{fid}', but this area can be reached as the k = {arrival} area of the "
+                    f"run, which deploys tier ≤ {arrival}; use a weaker variant here, or move "
+                    f"this one to an area reached later",
+                    entity=plan_id, pointer=f"{fptr}/enemyPool/{ei}/{suffix}"))
+    return issues
+
+
 def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
-                       floor: dict, waive_coverage: bool = False) -> list[dict]:
+                       floor: dict, waive_coverage: bool = False,
+                       arrival: int | None = None) -> list[dict]:
     """One merged floor. Pointers are written as if every field were the
     floor's own; `validate_plan` reroutes the inherited ones."""
     issues: list[dict] = []
@@ -1557,6 +1627,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_stage_tilemap_issues(ds, plan_id, fi, fptr, floor))
 
     issues.extend(_second_wave_issues(ds, plan_id, fi, fptr, floor))
+
+    issues.extend(_variant_tier_issues(ds, plan_id, fi, fptr, floor, arrival))
     return issues
 
 
@@ -2853,7 +2925,53 @@ def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
     if doc is None:
         return [_issue("error", "DATA_REFERENCE_MISSING",
                        f"enemy '{enemy_id}' not found")]
-    return _wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
+    return (_wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
+            + _family_issues(ds, enemy_id, doc.value))
+
+
+def family_of(enemy: dict, enemy_id: str) -> tuple[str, int]:
+    """`EnemyData.FamilyId` / `Tier` (OZX-1427): own id and tier 1 when no family."""
+    return (enemy.get("family") or enemy_id, (enemy.get("tier") or 0) if enemy.get("family") else 1)
+
+
+def _family_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
+    """`family` / `tier` (OZX-1427): variants of one creature, weakest = 1.
+
+    `EnemyFamily.ValidateAll` runs over the whole enemy library at boot and
+    throws on any of these. Per enemy: the two come as a pair or not at all,
+    and a tier is ≥ 1. Per family: its tiers are exactly 1..n, each on one
+    variant (two on one tier leaves "which is stronger" undecided; a gap is
+    a variant nobody wrote), and a family of more than one has every member
+    write both — a member leaning on the own-id default while another names
+    its id would be joined by accident. A family finding is reported on each
+    member it involves, since each file is half of the mistake.
+    """
+    family, tier = v.get("family") or None, v.get("tier") or 0
+    if tier < 0 or (family and tier == 0) or (not family and tier != 0):
+        return [_issue(
+            "error", "ENEMY_FAMILY_HALF_DECLARED",
+            f"family {family!r} / tier {tier}: write both (tier ≥ 1, 1 the weakest variant) "
+            f"or neither", entity=enemy_id, pointer="/family" if family else "/tier")]
+    fid, _ = family_of(v, enemy_id)
+    members = [d for d in ds.of_type("EnemyData") if family_of(d.value, d.id)[0] == fid]
+    if len(members) == 1 and not family:
+        return []
+    issues: list[dict] = []
+    if not family:
+        issues.append(_issue(
+            "error", "ENEMY_FAMILY_INCONSISTENT",
+            f"other enemies name '{fid}' as their family, but '{enemy_id}' does not write "
+            f"family/tier itself — every member of a family declares both",
+            entity=enemy_id, pointer="/family"))
+    tiers = sorted(family_of(d.value, d.id)[1] for d in members)
+    if tiers != list(range(1, len(members) + 1)):
+        roster = ", ".join(f"{d.id} tier {family_of(d.value, d.id)[1]}"
+                           for d in sorted(members, key=lambda d: (family_of(d.value, d.id)[1], d.id)))
+        issues.append(_issue(
+            "error", "ENEMY_FAMILY_INCONSISTENT",
+            f"family '{fid}' ({roster}): tiers must be exactly 1..{len(members)}, each on one "
+            f"variant — no gaps, no shared tier", entity=enemy_id, pointer="/tier"))
+    return issues
 
 
 # The smallest single room: 16×10 cells, a cell one world unit, so its

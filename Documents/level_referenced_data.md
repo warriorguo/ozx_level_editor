@@ -188,6 +188,11 @@ pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntrie
 
 `role` 是这份数据里最重要的一个字段：它同时决定敌人放在哪层生成点、以及 encounter 不写 `at` 时的默认落点。改 `role` 等于改所有引用该敌人的 encounter 的落点。
 
+**变体家族**（OZX-1427 / OZX-1428 / OZX-1429，核对于 `ozx_base@5cd9b22e`）：`EnemyData.family` + `tier`（1 = 最弱）把同一种生物的几个变体归成一族。`EnemyFamily.ValidateAll` 开机时对整个敌人库检查：两个字段要么都写要么都不写、`tier ≥ 1`（`ENEMY_FAMILY_HALF_DECLARED`）；一族的 tier 恰好是 1..n、每档一个，成员不止一个时每个成员都要自己写（`ENEMY_FAMILY_INCONSISTENT`）。没写 family 的敌人自成一族、tier 1。
+
+- **新敌人按族判定**（OZX-1428）：某个变体出现过，整族都不算新；pool 仍按变体写。这影响「一局见全池子」的计数与采样器，由生成器体现（OLE-1）。
+- **area 的 tier 上限**（OZX-1429，`ValidateVariantTiers`）：第 k 个能到达的 area（入口 k = 1，沿 area 连接最短步数 + 1，连接双向走，`ArrivalOrder`）的 pool 里，每具能放下的身体（`enemyId` 与每个 `variantIds`）`tier ≤ k`。精英提拔不受限，轨道列车不查 → `LEVEL_VARIANT_TIER_TOO_EARLY`。
+
 ### 2.3 编辑器要给的信息
 
 enemy picker 至少显示 `category / role / movementType / attackType / footprint / 有无 elite`，并在选中后显示「哪些 encounter、enemyPool、placement 在用它」。elite 复选框要在敌人没有 elite 配置时禁用并说明原因。

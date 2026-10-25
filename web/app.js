@@ -1531,7 +1531,8 @@ function renderPlanFloors() {
             <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.railTrainId || e.enemyId))}</span>
             <span><strong>${esc(e.railTrainId || e.enemyId || '?')}</strong><small>${
               e.missing ? (e.railTrainId ? 'no RailTrainData with this id' : 'no EnemyData with this id')
-                : `${e.railTrainId ? 'train on the rail · ' : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+                : `${e.railTrainId ? 'train on the rail · ' : ''}${
+                    e.family ? `tier ${e.family.tier} ${e.family.id} · ` : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
             }</small></span>${groupLine(e)}${channel}
           </div>`;
         }).join('')
