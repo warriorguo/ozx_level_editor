@@ -71,7 +71,7 @@ These are the ones that produce broken levels with no error, so they belong in v
 - **Unknown `generatorType` silently becomes `tree`** (`ParseGeneratorType`), so an unknown value there must be an Error, not a Warning.
 - **`inlineEncounter` / `inlineLootPlan` / `floorLootTableId` are `[NonSerialized]`** runtime synthesis. Never write them back to source JSON.
 - **Duplicate `(dataType, id)` is silently overwritten** by `JsonDataRepository` — the last file loaded wins, with no error.
-- **A door to another floor's room without twin `stairLinks` is a silent dead end**, and a new `openDoors` mask with no matching same-`stageType` tilemap gets sealed by the generator.
+- **Areas join through an ordinary twin pair of doors, not `stairLinks`** (OZX-1116): a `FloorData` is an area, room ids are unique across the level, and only area 0 may hold a `start` room — `start` has only mask-1 tilemaps, so a later area's entry room (which gets a return door) would fail to load. `stairLinks` now only drill into caves and basements. A new `openDoors` mask with no matching same-`stageType` tilemap gets sealed by the generator.
 
 ## Writing data back
 

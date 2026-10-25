@@ -87,7 +87,7 @@ LevelData
 | `themeId` | string | 主题（如 `themes/factory`） | 11 |
 | `rooms` | RoomNodeData[] | 本层房间 | 12 |
 | `caveLinks` | CaveLinkData[] | 洞穴通道（同层） | 1 |
-| `stairLinks` | CaveLinkData[] | 楼梯（跨层，规则见 §7.1） | 4 |
+| `stairLinks` | CaveLinkData[] | 楼梯——OZX-1116 起只用于往房间里钻的 basement / cave 垂直支线（规则见 §7.1）；**area 之间不再用它** | 4 |
 | `exitRoomId` | string | 专用出口房，只有一扇 Up 门通往下一层 start | 0（生成器写） |
 | `topRoomIds` | string[] | 朝向上一层的顶边房间，供 `ConnectFloors` 选跨层连接源 | 0（生成器写） |
 | `topMiddleRoomId` | string | `topRoomIds` 的首选中点（tree 的居中分支） | 0（生成器写） |
@@ -130,9 +130,19 @@ LevelData
 
 | 通道 | 载体 | 范围 | 是否需要孪生 |
 |---|---|---|---|
-| 门 | `RoomNodeData.doors` | 同层相邻 | 需要（方向相反的 twin） |
+| 门 | `RoomNodeData.doors` | 同 area 相邻，**或跨 area 的接缝**（OZX-1116） | 需要（方向相反的 twin） |
 | 洞穴 | `FloorData.caveLinks` | 同层任意两房，中间有一段通道房 | 单条记录描述 A↔B |
-| 楼梯 | `FloorData.stairLinks` | **跨层** | 需要（对侧楼层的反向记录，见 §7.1） |
+| 楼梯 | `FloorData.stairLinks` | 垂直支线（basement / cave） | 需要（对侧楼层的反向记录，见 §7.1） |
+
+**area 不是楼层**（OZX-1116，核对于 `ozx_base@87f9ef02`）。`FloorData` 是部署单元（theme / enemyPool / stageTypes / floorLootPlan 成套的那一份），area 之间**共面平铺、普通门衔接、无缝过渡**。由此三条：
+
+1. **`toRoomId` 在整关范围解析**——`FloorGraph.Build(LevelData)` 把所有 area 的房间放进一张扁平索引，所以 roomId 也必须**整关唯一**（撞 id 直接抛；`LEVEL_ROOM_ID_DUPLICATE` 会说出另一个 area）。
+2. **跨 area 的接缝是一对孪生普通门**，和同 area 的门同一条孪生规则（`LEVEL_DOOR_TWIN_MISSING`）。旧的「跨层门必须配 stairLinks」反过来了，`LEVEL_CROSS_FLOOR_DOOR_NO_STAIR` 已删除。`toDoorId` 写了就应等于对面那扇门的方向，否则落点偏（`DoorService` 按方向找到达门，找不到只是没有入口偏置）→ `LEVEL_DOOR_ARRIVAL_MISMATCH`（Warning）。ch2 的接缝：`f0_room_1_5` Up ↔ `f1_room_1_0` Down。
+3. **只有 area 0 可以有 `stageType: "start"`**——后续 area 的入口房是走进来的；而且 `start` 在 tilemap 库里只有 mask 1 的模板，回程门让它变成 mask 5，`RoomTilemapQuery` 直接抛 → `LEVEL_START_STAGE_NOT_FIRST_AREA`（Error）。改成 teaching / building。
+
+接缝门的方向只决定小地图把下一个 area 画在哪一侧；同 area 门的几何自洽规则不约束它。
+
+**`exitsRun` 门**（`DoorLinkData.exitsRun`，第一、二章已用）：不通向任何房间，走出去即通关。不是图上的边（`LeadsToRoom` 为 false），不查目标、孪生、可达。规则：不能再写 `toRoomId`（上游 fail-fast → `LEVEL_DOOR_EXIT_HAS_TARGET`）；不该上锁（闸门本就要清房才开 → `LEVEL_DOOR_EXIT_LOCKED`）；与 `isFinalRoom` 二选一（后者清房即通关，闸门成装饰 → `LEVEL_DOOR_EXIT_WITH_FINAL_ROOM`）。
 
 ---
 
@@ -538,7 +548,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **`defaultStaticPlacements` 里的 `oiltank` 不会下发给 start room**：规则在 `StaticPlacementPolicy` 里，JSON 上完全看不出来，所以照着 JSON 画预览会在出生房画出一个游戏里不存在的油罐（OZX-1057）。
 - **`floorLootPlan.probabilistic[].itemId` / `stageMustDrop[].drops[].itemId` 悬空**：合成表照常建起来，只是那一条永远掉不出东西（见 §5.3）。
 - **`floorLootPlan.categoryCaps[].category` 不是 taxonomy 节点**：cap 匹配不到任何道具，等于没写；这里至今没有 fail-fast。
-- **跨层门没有配 stairLinks**：静默死路。
+- **跨 area 的接缝门缺了回程门**：单向门，过去回不来（OZX-1116 之前跨 area 的门本身就是死路，现在它是合法的接缝，只是要成对）。
 - **新的 `openDoors` 组合没有对应模板**：生成器重映射时把门封掉，源数据看起来完全正常。
 - **只填 `bossId` 的静态 boss 房**：不刷任何怪。
 - **`requiredForExit` / `requiredForExitItemIds` 指向本房不会掉落的 item**：门锁不住（这是刻意的宽松，不是 bug，但值得提示）。

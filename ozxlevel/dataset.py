@@ -1080,6 +1080,9 @@ class Dataset:
             level_id = document.get("id") or level_id
         tables = (document or {}).get("generatedLootTables") or {}
         floors = []
+        area_of = {r.get("roomId"): fi
+                   for fi, f in enumerate(value.get("floors") or [])
+                   for r in f.get("rooms") or [] if r.get("roomId")}
         for f_index, floor in enumerate(value.get("floors") or []):
             rooms = []
             for r_index, room in enumerate(floor.get("rooms") or []):
@@ -1105,6 +1108,8 @@ class Dataset:
                          "dir": DIRECTIONS.get(d.get("direction", 0), "?"),
                          "toRoomId": d.get("toRoomId"),
                          "toDoorId": d.get("toDoorId", 0),
+                         # Leads out of the run, not to a room.
+                         "exitsRun": bool(d.get("exitsRun")),
                          "locked": bool(d.get("locked")),
                          "keyId": d.get("keyId"),
                          "pointer": f"{base}/doors/{i}"}
@@ -1190,7 +1195,7 @@ class Dataset:
                         for t in room.get("guaranteedCargoTableIds") or []
                     ],
                 })
-            layout = self.floor_layout(floor)
+            layout = self.floor_layout(floor, area_of)
             for room in rooms:
                 pos = layout["positions"].get(room["roomId"])
                 room["gridX"] = pos["x"] if pos else None
@@ -1221,7 +1226,7 @@ class Dataset:
         }
 
 
-    def floor_layout(self, floor: dict) -> dict:
+    def floor_layout(self, floor: dict, area_of: dict | None = None) -> dict:
         """Grid positions and door connectors for one floor.
 
         This mirrors ``MiniMapLayoutBuilder.BuildGridLayout`` in
@@ -1232,6 +1237,10 @@ class Dataset:
 
         Grid Y increases upward, as it does in production. Flipping for
         screen coordinates is the renderer's job, not this function's.
+
+        `area_of` (roomId -> floor index, over the whole level) names the area
+        a door leaves for. Since OZX-1116 that door is a seam: areas are laid
+        side by side and joined by an ordinary twin pair, not stacked.
         """
         rooms = floor.get("rooms") or []
         by_id = {r.get("roomId"): r for r in rooms if r.get("roomId")}
@@ -1282,6 +1291,8 @@ class Dataset:
                     "keyId": door.get("keyId"),
                     "horizontal": _DIRECTION_OFFSET[door.get("direction", 0)][0] != 0,
                     "crossFloor": not same_floor,
+                    "toArea": (area_of or {}).get(target) if not same_floor else None,
+                    "direction": DIRECTIONS.get(door.get("direction", 0)),
                 })
 
         return {

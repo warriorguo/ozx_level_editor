@@ -2,8 +2,8 @@
 
 A broken level usually does not crash — it just quietly plays wrong. A door
 whose twin is missing is a one-way door. An unknown `generatorType` becomes
-`tree`. A cross-floor door with no `stairLinks` is a dead end. Those are the
-rules worth having, and they are Errors, not Warnings.
+`tree`. A `start` room past the first area cannot load. Those are the rules
+worth having, and they are Errors, not Warnings.
 
 Issue codes come from the TD's Appendix B; they are stable machine ids.
 """
@@ -46,8 +46,16 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                      pointer=f"/floors/{fi}/rooms/{ri}"))
                 continue
             if rid in locations:
+                # OZX-1116: `FloorGraph.Build(LevelData)` indexes every area's
+                # rooms in one flat table and throws on a clash, so a roomId
+                # has to be unique across the LEVEL, not just its area.
+                other = locations[rid][0]
                 issues.append(_issue("error", "LEVEL_ROOM_ID_DUPLICATE",
-                                     f"duplicate roomId '{rid}'", entity=level_id,
+                                     f"duplicate roomId '{rid}'"
+                                     + (f" (also on area {other}; room ids are one "
+                                        f"namespace across the level)"
+                                        if other != fi else ""),
+                                     entity=level_id,
                                      pointer=f"/floors/{fi}/rooms/{ri}/roomId"))
             locations[rid] = (fi, ri)
 
@@ -80,6 +88,19 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                 issues.append(_issue("warning", "TYPE_VALUE_UNKNOWN",
                                      f"{rid}: unknown stageType '{stage}'",
                                      entity=level_id, pointer=f"{rptr}/stageType"))
+            elif stage == "start" and fi > 0:
+                # OZX-1116: areas join seamlessly, so a later area's entry room
+                # is walked into, not spawned in — and `start` has only mask-1
+                # tilemaps, so the return door makes it mask 5, which no start
+                # template has and no superset falls back to. RoomTilemapQuery
+                # throws and the room never loads.
+                issues.append(_issue(
+                    "error", "LEVEL_START_STAGE_NOT_FIRST_AREA",
+                    f"{rid}: stageType 'start' on area {fi}. Only area 0 is where "
+                    f"the run begins; a later area's entry room is walked into, and "
+                    f"`start` has only single-door (mask 1) tilemaps, so its return "
+                    f"door leaves nothing to load. Use teaching or building",
+                    entity=level_id, pointer=f"{rptr}/stageType"))
 
             # Non-cave rooms MUST declare staticPlacements. Every spawn adapter
             # calls RequireDeclared and throws on null — an empty array is the
@@ -175,6 +196,9 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          entity=level_id, pointer=dptr))
                 seen_dirs[direction] = di
 
+                if door.get("exitsRun"):
+                    issues.extend(_run_exit_issues(level_id, rid, di, dptr, door, room))
+                    continue
                 if not target:
                     issues.append(_issue("error", "LEVEL_DOOR_TARGET_MISSING",
                                          f"{rid}: door {di} has no toRoomId",
@@ -203,16 +227,24 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                        "toDoorId": direction, "locked": False},
                              "label": "Create twin door"}))
 
-                # A door to another floor is a dead end without paired stairs.
-                if t_fi != fi:
-                    stairs = room.get("stairLinks") or []
-                    paired = any(s.get("toRoomId") == target for s in stairs)
-                    if not paired:
-                        issues.append(_issue(
-                            "error", "LEVEL_CROSS_FLOOR_DOOR_NO_STAIR",
-                            f"{rid}: door to '{target}' crosses from floor {fi} to {t_fi} "
-                            f"with no matching stairLink — silently a dead end at runtime",
-                            entity=level_id, pointer=dptr))
+                # A door into another area is a SEAM, not a dead end (OZX-1116):
+                # the graph is built over the whole level, areas sit side by
+                # side, and the join is an ordinary twin pair — checked above.
+                # `stairLinks` are for drilling down into a cave or basement.
+                #
+                # `toDoorId` picks the arrival door in the target room. A wrong
+                # one finds no door on that side and costs an entry-point bias
+                # (DoorService), so it is a warning; omitted it is not checked,
+                # since the enum's 0 is indistinguishable from "unset".
+                if twins and "toDoorId" in door and door["toDoorId"] != twin_dir:
+                    issues.append(_issue(
+                        "warning", "LEVEL_DOOR_ARRIVAL_MISMATCH",
+                        f"{rid}: door {DIRECTIONS.get(direction)}→{target} arrives at "
+                        f"toDoorId {DIRECTIONS.get(door['toDoorId'], door['toDoorId'])}, "
+                        f"but the twin door is on the {DIRECTIONS.get(twin_dir)} side",
+                        entity=level_id, pointer=f"{dptr}/toDoorId",
+                        fix={"op": "set", "path": f"{dptr}/toDoorId",
+                             "value": twin_dir, "label": "Arrive at the twin"}))
 
                 if door.get("locked") and not door.get("keyId"):
                     issues.append(_issue("warning", "LEVEL_DOOR_LOCKED_NO_KEY",
@@ -240,6 +272,46 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: not reachable from start room '{start}'",
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
+    return issues
+
+
+def _run_exit_issues(level_id: str, rid: str, di: int, dptr: str,
+                     door: dict, room: dict) -> list[dict]:
+    """A door with `exitsRun` leads out of the run, not to a room.
+
+    Walking through it is the victory (`RunExitEnteredEvent` →
+    `SessionVictoryEvent`), and it is not an edge of the graph —
+    `LeadsToRoom` is false for it, so no target, twin or reachability rule
+    applies. What does apply, from `Game.Level/README.md`:
+
+    - it names no room: a `toRoomId` as well is a fail-fast, because a door
+      either leaves or goes somewhere;
+    - it is gated like any door by `RefreshRoomGateStates` — it opens when
+      the room is clear — so a lock and key on it only gets in the way;
+    - `isFinalRoom` on the same room wins first (the run ends the moment the
+      room clears), and the gate becomes decoration.
+    """
+    issues: list[dict] = []
+    if door.get("toRoomId"):
+        issues.append(_issue(
+            "error", "LEVEL_DOOR_EXIT_HAS_TARGET",
+            f"{rid}: door {di} exits the run and also names toRoomId "
+            f"'{door['toRoomId']}'; a door leaves or goes somewhere, never both",
+            entity=level_id, pointer=f"{dptr}/toRoomId"))
+    if door.get("locked") or door.get("keyId"):
+        issues.append(_issue(
+            "warning", "LEVEL_DOOR_EXIT_LOCKED",
+            f"{rid}: door {di} exits the run and is locked. The gate already "
+            f"stays shut until the room is clear, so a key adds nothing but a "
+            f"way to never finish",
+            entity=level_id, pointer=dptr))
+    if room.get("isFinalRoom"):
+        issues.append(_issue(
+            "warning", "LEVEL_DOOR_EXIT_WITH_FINAL_ROOM",
+            f"{rid}: is isFinalRoom AND has a run-exit door. isFinalRoom ends the "
+            f"run the moment the room clears, so the exit is never reached — pick "
+            f"one",
+            entity=level_id, pointer=dptr))
     return issues
 
 

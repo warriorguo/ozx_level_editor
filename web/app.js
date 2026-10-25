@@ -768,7 +768,7 @@ function renderRooms() {
       const open = room.openDoors.includes(dir);
       const door = room.doors.find((d) => d.dir === dir);
       const title = open
-        ? `${dir} → ${door.toRoomId}${door.locked ? ' (locked)' : ''}`
+        ? `${dir} → ${door.exitsRun ? 'exits the run' : door.toRoomId}${door.locked ? ' (locked)' : ''}`
         : `Open ${dir} door`;
       return `<button class="door ${open ? 'open' : ''}" data-door="${dir}" title="${esc(title)}">${dir}</button>`;
     }).join('');
@@ -1126,10 +1126,14 @@ function renderMap() {
     if (!a || !a.hasLayout) continue;
 
     if (link.crossFloor || !b || !b.hasLayout) {
-      // A door leaving this floor. Draw a stub rather than a line to nowhere.
+      // A door leaving this area. OZX-1116: areas sit side by side and the
+      // seam is an ordinary door, so the stub points the way the door faces
+      // and names the area — not a stair arrow, which is what it used to be.
       const pos = gridToPx(bounds, a.gridX, a.gridY);
+      const arrow = { N: '↑', S: '↓', W: '←', E: '→' }[link.direction] || '→';
+      const where = link.toArea == null ? '' : `area ${link.toArea + 1} · `;
       parts.push(`<div class="cross-stub" style="left:${pos.left + 6}px;top:${pos.top - 15}px"
-        >↕ ${esc(link.to)}</div>`);
+        title="a seam: an ordinary door into the next area">${arrow} ${esc(where + link.to)}</div>`);
       continue;
     }
 
