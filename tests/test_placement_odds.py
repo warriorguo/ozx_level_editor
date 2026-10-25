@@ -134,16 +134,38 @@ def test_a_floor_on_a_pinned_entry_is_not_read(ds, floor):
     assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" in found
 
 
-def test_a_floor_outside_the_sidewall_fill_is_not_read(ds, floor):
-    """Narrower than the field's own documentation, which says "random fill".
-
-    `PropSpawnAdapter` passes countMin to `SideWallPlacementLogic.ChooseAnchors`
-    on the side-wall branch only; the plain random fill beside it never sees
-    it, so the floor is read off the JSON and then dropped.
-    """
-    assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" in codes(
+def test_a_prop_off_the_wall_reads_countmin_as_a_range(ds, floor):
+    """OZX-1465: `PropSpawnAdapter`'s plain random fill now rolls
+    [countMin, count] per room (`RollRangedCount`, as toxicbarrel) — it used
+    to read the field and drop it. The side-wall fill keeps its decline."""
+    assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" not in codes(
         ds, [{**POD, "placement": None}])
     assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" not in codes(ds, [POD])
+
+
+def test_a_kind_that_never_reads_countmin_is_told_so(ds, floor):
+    assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" in codes(
+        ds, [{"kind": "cargo", "count": 5, "countMin": 2}])
+
+
+def test_an_empty_range_is_refused(ds, floor):
+    """RollRangedCount throws on countMin > count."""
+    assert "ROOM_PLACEMENT_COUNT_MIN_ABOVE_MAX" in codes(
+        ds, [{"kind": "prop", "prefabKey": "prefab/groundbomb", "count": 2, "countMin": 3}])
+
+
+@pytest.mark.parametrize("plan_id", ["chapter_4", "chapter_5", "chapter_6", "chapter_7"])
+def test_the_shipped_ground_bombs_read_as_a_range(ds, plan_id):
+    """OZX-1465 put prefab/groundbomb on every area of chapters 4–7."""
+    view = ds.plan_view(plan_id)
+    for f in view["floors"]:
+        bombs = [p for p in f["defaultStaticPlacements"]
+                 if p["prefabKey"] == "prefab/groundbomb"]
+        assert bombs, (plan_id, f["index"] if "index" in f else None)
+        assert all(b["countMinReading"] == "range" for b in bombs)
+    pods = [p for f in ds.plan_view("chapter_3")["floors"]
+            for p in f["defaultStaticPlacements"] if p.get("placement") == "sidewall"]
+    assert pods and all(p["countMinReading"] == "floor" for p in pods)
 
 
 def test_a_floor_of_one_or_zero_is_no_floor_at_all(ds, floor):

@@ -558,6 +558,8 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 **更新（核对于 `ozx_base@5cd9b22e`）**：读 `chance` 的 kind 现在是 `prop` 和 `groundlaser`（OZX-1377，`ChanceHonouringKinds`）；`countMin` 除了 prop 的 `sidewall`，还被两个 kind 当作**数量区间**的下限读：`toxicbarrel`（OZX-1226，`RollRangedCount`，`[countMin, count]` 均匀、每条掷一次）和 `groundlaser`。
 
+**更新（OZX-1465，核对于 `ozx_base@b3d4d526`）**：上面「普通 random fill 读了就丢」**已不成立**。非 `sidewall` 的 `kind: "prop"` 现在也走 `RollRangedCount`——每房在 `[countMin, count]` 里均匀掷一个目标数，摆得下几个摆几个，没掷到的部分记 `Declined`（`Game.Unity/Room/PropSpawnAdapter.cs:224`）；`countMin > count` 时抛（`Game.Room/StaticPlacement/AuthoredStaticPlacementsLogic.cs:55`）。`sidewall` 的「不够就一个都不放」不变。所以 `countMin` 现在有两种读法：sidewall prop = 成组下限，toxicbarrel / groundlaser / 墙外 prop = 每房区间下限；其余 kind 不读。chapter_4–7 每个 area 的 `defaultStaticPlacements` 都加了 `{kind: "prop", prefabKey: "prefab/groundbomb", count: 5, countMin: 2, chance: 0.3}`——每房 30% 出现，出现时 2–5 颗。编辑器的 `countMinReading` 字段（`range` / `floor` / null）就是这条规则（`ozxlevel/dataset.py` `countmin_reading`）。
+
 **`groundlaser`**（OZX-1371，选点 OZX-1373）：固定 12 格（列 {2, 7} × 下组行 {2, 3, 6} / 上组行 {9, 12, 13}，10×16 房），左右成对，优先玩家进门一侧（上门 → 上组，下门 → 下组，侧门或非门进入 → 下组），两台间距须 > 2 格。只读 `countMin` / `count`（台数，缺省 2 / 4，**必须落在 2–4** 且区间里有偶数——票里写的 2–6 已过时）和 `chance`；写 `cells` / footprint / `placement` 都抛（`GroundLaserPlacementLogic.ResolvePairRange` → `ROOM_GROUNDLASER_INVALID`）。ch3–ch6 每层默认 `chance: 0.3`。
 
 ## 6. plan 如何编译成 level
@@ -622,7 +624,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **重复 `(dataType, id)`**：后加载者直接覆盖，无任何提示。
 - **未知 `generatorType`**：静默变成 `tree`。
 - **spawner 条目只写了一半**：`minionId` 或 `minionsPerSpawner` 缺一个时 `EnemyPoolEntry.IsSpawner` 判定为假，这条按普通敌人采样——工厂原地站着不产任何东西，没有任何报错（OZX-1032，见 §5.4）。
-- **`countMin` 写在不是 `placement: "sidewall"` 的 entry 上**：读了就丢，摆放照旧（OZX-1057，见 §5.6）。
+- **`countMin` 写在不读它的 kind 上**（cargo / oiltank 等；prop、toxicbarrel、groundlaser 都读）：读了就丢，摆放照旧（OZX-1057；OZX-1465 起墙外 prop 也读，见 §5.6）。
 - **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
 - **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。
 - **`defaultStaticPlacements` 里的 `oiltank` 不会下发给 start room**：规则在 `StaticPlacementPolicy` 里，JSON 上完全看不出来，所以照着 JSON 画预览会在出生房画出一个游戏里不存在的油罐（OZX-1057）。

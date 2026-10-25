@@ -42,6 +42,31 @@ OIL_TANK_KIND = "oiltank"
 # the filter out of the way writes a number above every maxLevel it can drop.
 SKILL_DROP_LEVEL_CAP_DEFAULT = 5
 
+# The kinds that read a static placement's `countMin` as the low end of a
+# per-room RANGE: each room rolls [countMin, count] uniformly and places
+# what fits (`AuthoredStaticPlacementsLogic.RollRangedCount`). toxicbarrel
+# since OZX-1226, groundlaser since OZX-1373; a `prop` off the side wall
+# joined them in OZX-1465 (`PropSpawnAdapter`, e.g. prefab/groundbomb).
+COUNTMIN_RANGE_KINDS = ("toxicbarrel", "groundlaser")
+
+
+def countmin_reading(p: dict) -> str | None:
+    """How the adapter reads this entry's `countMin`.
+
+    "range" — a per-room roll in [countMin, count]; "floor" — the side-wall
+    set-piece declines entirely below it (OZX-1090); None — not read at all
+    (pinned cells, or a kind whose adapter never looks). Only meaningful
+    when `countMin >= 2`; 0 and 1 mean "no low end" on every path.
+    """
+    if p.get("cells"):
+        return None
+    kind = p.get("kind")
+    if kind in COUNTMIN_RANGE_KINDS:
+        return "range"
+    if kind == "prop":
+        return "floor" if p.get("placement") == "sidewall" else "range"
+    return None
+
 # The five families Level Studio owns; everything else is read-only closure.
 OWNED = ("levels", "level_plans", "encounters", "enemies", "loot_tables")
 
@@ -1103,6 +1128,7 @@ class Dataset:
                      "prefabKey": p.get("prefabKey"),
                      "count": p.get("count") or 0,
                      "countMin": p.get("countMin") or 0,
+                     "countMinReading": countmin_reading(p),
                      "chance": p.get("chance") or 0,
                      "chancePercent": round((p.get("chance") or 1) * 100, 1),
                      "placement": p.get("placement"),
@@ -1276,11 +1302,14 @@ class Dataset:
                          # OZX-1057: `count` has always been the ceiling that
                          # random fill takes what it can of; these are the two
                          # ends the entry grew. `countMin` is the floor below
-                         # which the entry declines entirely, and `chance` is
+                         # which a side-wall set-piece declines entirely (off
+                         # the wall it is the low end of a per-room range,
+                         # OZX-1465 — `countMinReading`), and `chance` is
                          # rolled ONCE for the whole entry — a room either is
                          # a cultivation chamber with up to three pods or an
                          # ordinary room with none, never one lonely pod.
                          "countMin": p.get("countMin") or 0,
+                         "countMinReading": countmin_reading(p),
                          "chance": p.get("chance") or 0,
                          # 0 is "not authored", which appears every time. The
                          # UI must not draw that as a 0% placement.

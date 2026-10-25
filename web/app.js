@@ -619,14 +619,18 @@ function hatchLine(e) {
  * Both are decided once for the whole entry, which is the thing a reader has
  * to know: `count: 3, chance: 0.2` is a room that is either a cultivation
  * chamber with three pods or an ordinary room with none — never one pod in
- * every fifth room. Returns '' when neither is authored, so an ordinary
- * placement gains no second line.
+ * every fifth room. `countMin` reads two ways (`countMinReading`): on a
+ * side-wall prop it is a floor the set-piece declines below; everywhere else
+ * that reads it — toxicbarrel, groundlaser, a prop off the wall (OZX-1465) —
+ * each room rolls a count in [countMin, count]. Returns '' when neither is
+ * authored, so an ordinary placement gains no second line.
  */
 function oddsLine(p) {
   const bits = [];
   if (p.chance > 0 && p.chance < 1) bits.push(`${p.chancePercent}% to appear at all`);
-  // 0 and 1 both mean "no floor" — the entry takes whatever fits.
-  if (p.countMin >= 2) bits.push(`all-or-nothing below ${p.countMin}`);
+  // 0 and 1 both mean "no low end" — the entry takes whatever fits.
+  if (p.countMin >= 2 && p.countMinReading === 'range') bits.push(`${p.countMin}–${p.count} per room`);
+  else if (p.countMin >= 2 && p.countMinReading === 'floor') bits.push(`all-or-nothing below ${p.countMin}`);
   if (!bits.length) return '';
   return `<span class="odds-line" title="Rolled once for the whole entry, not once per object">
     <span class="drop-tag">odds</span>${esc(bits.join(' · '))}</span>`;
@@ -730,7 +734,8 @@ function renderRooms() {
           // OZX-1057. Both are rolled/decided once for the whole entry, so
           // they belong beside `count` rather than on the object: `chance`
           // says whether the entry appears at all, `countMin` says the room
-          // takes the whole set-piece or none of it.
+          // takes the whole set-piece or none of it — or, off the wall, how
+          // low the per-room roll goes.
           const odds = oddsLine(p);
           const picker = isSkill
             ? `<select class="inline-select skill-picker"

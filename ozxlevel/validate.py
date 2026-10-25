@@ -14,7 +14,7 @@ import math
 
 from . import plandefaults, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
-                      Dataset, _stage_budget)
+                      Dataset, _stage_budget, countmin_reading)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
@@ -722,14 +722,9 @@ def _cargo_issues(entity: str, where: str, pi: int, pptr: str, p: dict,
 # than silently appearing every time (`ChanceHonouringKinds`; groundlaser
 # since OZX-1377). `countMin` is narrower still — see below.
 CHANCE_HONOURING_KINDS = {"prop", "groundlaser"}
-# For a prop, the side-wall fill is the only path that passes `countMin`
-# through to its anchor chooser (`PropSpawnAdapter` →
-# `SideWallPlacementLogic.ChooseAnchors`); the plain random fill next to it
-# does not, so a floor is read there and then dropped. Two kinds read it as
-# the low end of a count RANGE instead: toxicbarrel (OZX-1226,
-# `RollRangedCount`) and groundlaser (OZX-1373, lasers per room).
-COUNTMIN_HONOURING_PLACEMENTS = {"sidewall"}
-COUNTMIN_RANGE_KINDS = {"toxicbarrel", "groundlaser"}
+# Who reads `countMin`, and how, is `countmin_reading` (dataset.py): a floor
+# on the side-wall prop fill, a per-room range on toxicbarrel, groundlaser
+# and — since OZX-1465 — a prop off the wall; nothing else reads it.
 
 # GroundLaserPlacementLogic: lasers per room, placed in left-right pairs on
 # fixed cells of a 10×16 room.
@@ -743,9 +738,11 @@ def _placement_count_issues(level_id: str, rid: str, pi: int,
     `count` has always been a ceiling — random fill places what the room can
     hold. These are the two ends that grew around it:
 
-    - `countMin` is the floor below which the entry declines ENTIRELY, so a
-      wall-mounted set-piece that would stand alone reads as a room rather
-      than as clutter, and the cells go to whatever runs next.
+    - `countMin` is, on a side-wall prop, the floor below which the entry
+      declines ENTIRELY, so a wall-mounted set-piece that would stand alone
+      reads as a room rather than as clutter. Everywhere else that reads it
+      (toxicbarrel, groundlaser, a prop off the wall since OZX-1465) it is
+      the low end of a per-room range, rolled in [countMin, count].
     - `chance` is rolled once for the whole entry, not once per object. A room
       is either a cultivation chamber with up to three pods or an ordinary
       room with none; rolling per object would thin every room out evenly,
@@ -778,12 +775,17 @@ def _placement_count_issues(level_id: str, rid: str, pi: int,
                 entity=level_id, pointer=f"{pptr}/chance"))
 
     if count_min >= 2:
+        reading = countmin_reading(p)
         if count and count_min > count:
+            # A range kind throws on this (RollRangedCount); the side-wall
+            # floor just never fits. Either way nothing is placed.
             issues.append(_issue(
                 "error", "ROOM_PLACEMENT_COUNT_MIN_ABOVE_MAX",
                 f"{rid}: placement {pi} has countMin {count_min} above count {count}. "
-                f"count is the ceiling random fill takes what it can of, so a floor "
-                f"above it can never be met and the entry is never placed",
+                + ("[countMin, count] is the per-room range, and the adapter throws on "
+                   "an empty one" if reading == "range" else
+                   "count is the ceiling random fill takes what it can of, so a floor "
+                   "above it can never be met and the entry is never placed"),
                 entity=level_id, pointer=f"{pptr}/countMin"))
         elif pinned:
             issues.append(_issue(
@@ -791,17 +793,11 @@ def _placement_count_issues(level_id: str, rid: str, pi: int,
                 f"{rid}: placement {pi} pins its cells, so countMin is not read — a "
                 f"pinned entry already names exactly what it wants",
                 entity=level_id, pointer=f"{pptr}/countMin"))
-        elif kind in COUNTMIN_RANGE_KINDS:
-            pass
-        elif p.get("placement") not in COUNTMIN_HONOURING_PLACEMENTS:
-            # Narrower than the field's own documentation, which says "random
-            # fill". Verified against PropSpawnAdapter: the plain fill branch
-            # never passes countMin on.
+        elif reading is None:
             issues.append(_issue(
                 "warning", "ROOM_PLACEMENT_COUNT_MIN_UNREAD",
-                f"{rid}: placement {pi} sets countMin {count_min} but is not "
-                f"placement 'sidewall'; only the side-wall fill passes a floor to its "
-                f"anchor chooser, so this one is read and then dropped",
+                f"{rid}: placement {pi} is kind '{kind}', whose adapter never reads "
+                f"countMin; it places up to count, whatever fits",
                 entity=level_id, pointer=f"{pptr}/countMin"))
 
     if kind == "groundlaser":
