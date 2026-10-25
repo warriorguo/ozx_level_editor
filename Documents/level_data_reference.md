@@ -213,7 +213,7 @@ LevelData
 | `lootTableId` | 仅 `cargo`：指定该箱子的掉落表 | 27 |
 | `skillId` | 仅 `skill`：必填，被动技能 id | 4 |
 | `footprintCols/Rows` | 占地覆盖，0 = kind 默认（oiltank/skill 2×2，device 2×3，其余 1×1）。只有 oiltank/skill/device 支持非默认 | 3 |
-| `mountedEnemyId` | 挂在该物体上的敌人（目前只有 `cargo` 认）。pinned 天然可追溯；count 模式下只有该 kind **唯一一条** count 条目时才允许 | 3 |
+| `mountedEnemyId` | 挂在该物体上的敌人（目前只有 `cargo` 认）。OZX-1348 起一间房可以有**多条** count 模式 cargo 条目，各自挂 `mountedEnemyId` / `mountedCount`，放置按条目轮转（authored 顺序），格子不够时尾部少放 | 3 |
 | `cells` | pinned 格子列表 `{x,y}` | 2 |
 | `mountedCount` | 带敌人的实例数。0 = pinned 每个都带 / count 模式只带 1 个 | 2 |
 | `itemId` | 仅 `equipment` 必填；也被任何设了 `requiredForExit` 的条目读取 | 1 |
@@ -589,7 +589,8 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 
 - 非 cave 房 `staticPlacements == null` → `AuthoredStaticPlacementsLogic.RequireDeclared` 抛错。
 - pinned `cells` 不在 Static 层 → 抛错（`equipment` 例外，按 ground 校验）。
-- `mountedEnemyId` 用在非 `cargo` kind，或落在有多条 count 条目的 kind 上 → 抛错。
+- `mountedEnemyId` 用在非 `cargo` kind → 抛错（OZX-1348 前「多条 count 条目」也抛，已放开）。
+- `cargo` 的每只箱子摇**所属条目**的 `lootTableId`，缺省回落房间 `floorLootTableId`，都没有就抛（`CargoSpawnAdapter`，`ROOM_CARGO_LOOT_SOURCE_MISSING`）。手写关卡没有 `floorLootTableId`（生成期 `[NonSerialized]` 合成），所以手写 cargo 必须自带表；plan 楼层只有写了 `probabilistic` 才有。cargo 只支持 1×1（`ROOM_CARGO_FOOTPRINT_INVALID`）。技能不要走房间 `lootPlanId`（OZX-1381 已删），用 cargo `lootTableId` 指向技能表。
 - `mountedCount` 超过该条目能放置的数量 → 抛错。
 - `spawnIf` 写了未知 key、`prop` 缺 `prefabKey`、`skill` 缺 `skillId`、`trigger` 缺 `triggerId`、`equipment` 缺/错 `itemId` → 抛错。
 - `skill` 的 `skillId` 指向的 SkillData `type != "passive"`，或其 `iconKeys` 为空 → 抛错

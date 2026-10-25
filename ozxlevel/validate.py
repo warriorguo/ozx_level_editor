@@ -170,6 +170,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                              pointer=f"{pptr}/{name}"))
 
                 issues.extend(_placement_count_issues(level_id, rid, pi, pptr, p))
+                issues.extend(_cargo_issues(level_id, rid, pi, pptr, p,
+                                            bool(room.get("floorLootTableId"))))
 
                 # SkillPlatformSpawnAdapter throws on both of these when the
                 # room spawns, so an unfinished skill platform takes the whole
@@ -649,6 +651,41 @@ def _run_exit_issues(level_id: str, rid: str, di: int, dptr: str,
             f"run the moment the room clears, so the exit is never reached — pick "
             f"one",
             entity=level_id, pointer=dptr))
+    return issues
+
+
+def _cargo_issues(entity: str, where: str, pi: int, pptr: str, p: dict,
+                  has_floor_table: bool) -> list[dict]:
+    """A `cargo` entry's crates: where their loot comes from, and their size.
+
+    OZX-1348: every crate rolls its OWN entry's `lootTableId`, falling back
+    to the room's `floorLootTableId`, and `CargoSpawnAdapter` throws when
+    neither is there — for count and pinned crates alike. (Before it, only
+    the first count entry with a table counted, and several count entries
+    could not each carry a mount; neither restriction remains.) On a
+    hand-written level `floorLootTableId` never exists — it is the
+    generator's `[NonSerialized]` stamp — and on a plan it exists exactly
+    when the floor has probabilistic loot to synthesise it from.
+
+    The adapter also only supports a 1×1 crate.
+    """
+    if p.get("kind") != "cargo":
+        return []
+    issues: list[dict] = []
+    if not p.get("lootTableId") and not has_floor_table:
+        issues.append(_issue(
+            "error", "ROOM_CARGO_LOOT_SOURCE_MISSING",
+            f"{where}: placement {pi} is cargo with no lootTableId, and there is no floor "
+            f"loot table to fall back to (a hand-written room never has one; a plan floor "
+            f"has one only with floorLootPlan.probabilistic). CargoSpawnAdapter throws",
+            entity=entity, pointer=pptr))
+    if (p.get("footprintCols") or 1) > 1 or (p.get("footprintRows") or 1) > 1:
+        issues.append(_issue(
+            "error", "ROOM_CARGO_FOOTPRINT_INVALID",
+            f"{where}: placement {pi} is a {p.get('footprintCols') or 1}x"
+            f"{p.get('footprintRows') or 1} cargo; CargoSpawnAdapter only places 1×1 crates "
+            f"and throws on anything larger",
+            entity=entity, pointer=pptr))
     return issues
 
 
@@ -1295,10 +1332,13 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     # this floor whose own `staticPlacements` came out empty — and where
     # `chance` / `countMin` are actually authored today, since a
     # procedural floor has no hand-written rooms to put them on.
+    loot = floor.get("floorLootPlan") or {}
+    has_floor_table = bool(loot.get("probabilistic") or loot.get("probabilisticPresets"))
     for pi, p in enumerate(floor.get("defaultStaticPlacements") or []):
         pptr = f"{fptr}/defaultStaticPlacements/{pi}"
         issues.extend(_placement_count_issues(
             plan_id, f"floor {fi}", pi, pptr, p))
+        issues.extend(_cargo_issues(plan_id, f"floor {fi}", pi, pptr, p, has_floor_table))
     boss = floor.get("bossId")
     if boss and ds.get("EnemyData", boss) is None:
         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
