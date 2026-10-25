@@ -964,6 +964,13 @@ class Dataset:
                      _stage_budget(floor["enemiesPerRoom"],
                                    s.get("enemyBudgetCut") or 0)
                      if floor.get("enemiesPerRoom") else None),
+                 # OZX-1291: what every generated room of this stage is
+                 # dressed with when its own decorations come out empty.
+                 "dressing": next(
+                     ([{"decalCategory": d.get("decalCategory"), "count": d.get("count") or 0}
+                       for d in (e.get("decorations") or [])]
+                      for e in (floor.get("stageDecorations") or [])
+                      if (e or {}).get("stageType") == s.get("stageType")), []),
                  "pointer": f"{at('stageTypes')}/stageTypes/{si}"}
                 for si, s in enumerate(floor.get("stageTypes") or [])
             ]

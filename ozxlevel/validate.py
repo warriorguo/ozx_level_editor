@@ -1227,6 +1227,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                 entity=plan_id, pointer=f"{fptr}/transitionKeyId"))
 
     issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
+
+    issues.extend(_stage_decoration_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
 
@@ -2012,6 +2014,50 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 f"the minion's own cap and charged to enemiesPerRoom, so it is "
                 f"truncated every time — the room gets at most {minion_cap}",
                 entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
+    return issues
+
+
+def _stage_decoration_issues(ds: Dataset, plan_id: str, fi: int,
+                             fptr: str, floor: dict) -> list[dict]:
+    """`FloorPlanData.stageDecorations` (OZX-1291): dressing per stage.
+
+    `AssignStageDecorations` copies an entry's `decorations` onto every
+    generated non-cave room of that stage whose own list is empty (start and
+    boss included), and throws on an entry with no stageType or a stage named
+    twice. Each decoration then meets the room theme the same way a
+    hand-placed one does, so the floor's effective `themeId` decides whether
+    it draws. The list is an array, so a floor that writes one replaces the
+    chapter's whole.
+    """
+    issues: list[dict] = []
+    seen: set = set()
+    theme = floor.get("themeId")
+    for si, entry in enumerate(floor.get("stageDecorations") or []):
+        sptr = f"{fptr}/stageDecorations/{si}"
+        stage = (entry or {}).get("stageType")
+        if not stage:
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_DECORATION_UNSCOPED",
+                f"floor {fi}: stageDecorations[{si}] names no stageType; every entry must "
+                f"name the stage it dresses", entity=plan_id, pointer=sptr))
+        elif stage in seen:
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_DECORATION_DUPLICATE",
+                f"floor {fi}: stageDecorations declares '{stage}' twice; one stage has one "
+                f"dressing list", entity=plan_id, pointer=f"{sptr}/stageType"))
+        elif stage not in STAGE_TYPES:
+            issues.append(_issue(
+                "warning", "TYPE_VALUE_UNKNOWN",
+                f"floor {fi}: stageDecorations[{si}] names stage '{stage}', which is not a "
+                f"stage type; no room will match it", entity=plan_id, pointer=f"{sptr}/stageType"))
+        if stage:
+            seen.add(stage)
+        for di, deco in enumerate((entry or {}).get("decorations") or []):
+            category = (deco or {}).get("decalCategory")
+            if category:
+                issues.extend(decal_category_issues(
+                    ds, plan_id, f"floor {fi}: stageDecorations[{si}] ('{stage}') decoration {di}",
+                    f"{sptr}/decorations/{di}/decalCategory", category, theme))
     return issues
 
 

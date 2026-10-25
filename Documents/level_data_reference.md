@@ -362,6 +362,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `floorLootPlan` | 楼层掉落方案，见 §5.3 | 12 |
 | `transitionKeyId` | 过渡钥匙 item id；编译期自动绑到 peak/跨层流程并插锁门 | 10 |
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
+| `stageDecorations` | `[{ stageType, decorations: [{ decalCategory, count }] }]`（OZX-1291）：生成期按房间最终的 `stageType`，把该条的 `decorations` 拷到 `decorations` 为空的非 cave 生成房上（start / boss 也算）。缺 `stageType` 或同一 stage 写两次 `AssignStageDecorations` 抛（`LEVEL_STAGE_DECORATION_UNSCOPED` / `_DUPLICATE`）；每条贴花与手摆的同规则，按楼层 effective `themeId` 判能不能画（§4.6）。数组整体替换 | ch3 / ch4（floorDefaults） |
 | `spawnerMinionsPerRoom` | int（OZX-1219）：spawner 产线的独立额度，按房共享。0 = OZX-1064 的规则（产线占 `enemiesPerRoom`、受 minion 条目 `maxPerRoom` 约束）；> 0 = 产线只花这份额度，`enemiesPerRoom` 只数直接放置、minion 的 `maxPerRoom` 只管直接放置，每座 spawner 取 `minionsPerSpawner`、被剩余额度截断、一只都给不出就不放这座。可从 floorDefaults 继承。`LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` 据此改判：有额度时比的是额度，不是 minion 的 cap | 8（ch5–7） |
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |

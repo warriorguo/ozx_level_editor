@@ -1489,7 +1489,8 @@ function renderPlanFloors() {
           return `<div class="content-entry plan-stage">
             <span class="content-glyph">${esc((st.stageType || '?').slice(0, 2).toUpperCase())}</span>
             <span><strong>${esc(st.stageType || '?')}</strong><small>${
-              st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}</small></span>
+              st.portion == null ? 'no portion' : `${Math.round(st.portion * 100)}% of rooms`}${
+              (st.dressing || []).length ? ` · dressed: ${esc(st.dressing.map((d) => `${d.decalCategory} ×${d.count}`).join(', '))}` : ''}</small></span>
             ${budget}</div>`;
         }).join('')
       : '<div class="inline-empty">No stage slices</div>';
