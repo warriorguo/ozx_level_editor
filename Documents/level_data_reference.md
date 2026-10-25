@@ -104,7 +104,7 @@ LevelData
 | `roomCategory` | string | `normal` / `basement` / `cave` / `test` | 84 |
 | `doors` | DoorLinkData[] | 见 §4.4 | 83 |
 | `encounterId` | string | 驱动本房刷怪的 `EncounterData` id | 52 |
-| `stageType` | string | `start`/`teaching`/`building`/`default`/`pressure`/`peak`/`release`/`boss`/`exit`。**缺省 ≠ default**，53/84 未填 | 31 |
+| `stageType` | string | `start`/`teaching`/`building`/`default`/`pressure`/`peak`/`release`/`boss`/`exit`/`story`。**缺省 ≠ default**，53/84 未填。`story`（OZX-1171）：不打架、只推进剧情的房，只在教学章手摆；和 `release` 一样没有 `encounterId` 是合法的，演出靠 `trigger` 摆放 + 遭遇的 `sound` 动作 | 31 |
 | `decorations` | DecorationEntryData[] | 纯视觉，可选，见 §4.6 | 31 |
 | `staticPlacements` | StaticPlacementEntryData[] | **非 cave 房必须声明**（空数组也行），见 §4.5 | 83 声明 / 28 非空 |
 | `appearance` | RoomAppearanceData | 本房相对楼层主题的差异，见 §4.7 | 11 |
@@ -122,6 +122,18 @@ LevelData
 | `requireRail` | bool | 这间房必须抽到带 rail 图层的 tilemap，好让矿车骑过去（OZX-1164）。程序化关卡由 `AssignRail` 逐房标；手写可自填。和 `railCart` 是两件事：一间房放车，每间房铺轨 | 2 |
 
 **钉了 `templateId` 的房间跳过 rail 过滤**（`RoomTilemapSelector` / `RoomLoadManager` 按文件名直接取，不走 `RoomTilemapQuery`）。所以钉的图没有 rail 时：`railCart` → `RailCartSpawnAdapter` 抛（`LEVEL_ROOM_RAIL_MISSING`，Error）；`requireRail` → 矿车骑到这间就停（同码，Warning）。按文件名查的是**整个池子**，同名图在多个目录里（`all_start_5_01` 在 normal/ 无 rail、test/ 有 rail）时结果取决于加载顺序，编辑器只在所有同名副本结论一致时才下判断。
+
+**钉了 `templateId` 也跳过门的全部检查**（OZX-1171，对齐 `Game.Tests/Level/PinnedTemplateDoorTests`）。`RoomTilemapQuery` 会拿模板的 `openDoors` 匹配房间的门掩码，钉图直接绕过、下游也不再问，所以下面四条在关卡 JSON 里完全看不出来，编辑器要拦（实现在 `ozxlevel/tilemaps.py`）：
+
+| 码 | 规则 |
+|---|---|
+| `LEVEL_PIN_TEMPLATE_MISSING` | `templateId` 找不到任何 tilemap → 房间加载抛。出货里只有 `level_cave_demo`（ORT-45 之前的旧名，上游测试点名放行） |
+| `LEVEL_PIN_DOOR_SIDE_CLOSED` | 模板 `openDoors` 必须**包含**房间每一扇门的那一侧（相等或超集） |
+| `LEVEL_PIN_DOORWAY_NO_FLOOR` | 门立在所朝那条边的**中点格**（10×16：Top=(5,15)、Bottom=(5,0)、Left=(0,8)、Right=(9,8)），那一格必须有 Ground 或 Bridge，否则从这扇门进来的人落在地图外 |
+| `LEVEL_PIN_DOORS_UNCONNECTED` | 门与门之间要能走通：可走 = 有地面且**既不是 Static 也不是 Pipeline**。Pipeline 是实心可破坏的墙（独立物理层），寻路网格不建模它——ch2 第一版剧情房就是这样被封死的。`exitsRun` 闸门也算，要走得到 |
+| `LEVEL_PIN_PLACEMENT_IN_DOORWAY` | 钉格摆放（`cells`）跳过 `DoorClearance`，实体压在门格上就把门封了；`trigger` / `equipment` 是踩过去的，不算 |
+
+洞穴（没有 tilemap）和复合房（门落在拼接后的网格上）不在范围内。同名模板有多份副本时，只报**每份都有**的问题。上游还有一条「`holdsGates` 的 touch 步骤不能被绕过」，需要遭遇的步骤语义，这里暂未做。
 
 两个反直觉点：
 

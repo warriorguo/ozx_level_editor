@@ -101,7 +101,7 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 | 字段 | 说明 | 实测用量 |
 |---|---|---|
-| `verb` | 唯一合法值 `launch`；缺席 = 纯等待 | 205 launch / 2 缺席 |
+| `verb` | `launch`，或 `sound`（OZX-1173：只读 `soundId`，其余 launch 字段都不适用，`EncounterValidator` 校验完 `soundId` 非空就 return）；缺席 = 纯等待 | 205 launch / 2 缺席 |
 | `enemyId` | 必填 | 205 |
 | `min` / `max` | 数量区间，闭区间随机 | 最常见是 min==max |
 | `eliteCount` | 前 N 只以 elite 出生 | 11 step |
@@ -120,7 +120,7 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 ### 1.5 校验（`EncounterValidator` 已有 + 需要补的）
 
-已有（结构性，抛异常）：verb 非 `launch`、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
+已有（结构性，抛异常）：verb 既非 `launch` 也非 `sound`、`sound` 缺 `soundId`（缺了只在 `SoundServiceAdapter` 打一行日志，看起来触发了其实没声音）、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
 
 **没有**做的（编辑器必须补）：`enemyId` 是否存在、`dropTableId` 是否存在、`guaranteedDrop.itemId` 是不是 item（而不是 loot table）、`guaranteedDrop.tableId` 指的表是否存在、`viaSpawner` 是否可达、`eliteCount > 0` 的敌人是否有 elite 配置、`at` 类别在目标模板里有没有点、`cleared` 之前是否真的有会产生活体的 step。
 

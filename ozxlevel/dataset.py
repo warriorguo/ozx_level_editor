@@ -16,7 +16,7 @@ import math
 import pathlib
 from typing import Any
 
-from . import jsonspan, plandefaults
+from . import jsonspan, plandefaults, tilemaps
 from .sprites import SpriteIndex
 from .themes import ThemeIndex
 
@@ -387,28 +387,32 @@ class Dataset:
             "spriteKey": v.get("spriteKey"),
         }
 
-    def pinned_template_rail(self, template_id: str) -> bool | None:
-        """Whether a pinned `templateId` carries rail: True, False or None.
+    def pinned_templates(self, template_id: str) -> list[dict]:
+        """Every tilemap a pinned `templateId` could resolve to.
 
-        A pin is looked up by file name across the whole tilemap pool
+        A pin is looked up by file name across the whole pool
         (`RoomLoadManager`: `SourceFile == templateId`), not by the room's
         category, and the same name exists in more than one folder —
-        `all_start_5_01` is in both normal/ (no rail) and test/ (rail). Which
-        copy wins depends on load order, so the answer is only definite when
-        every copy agrees; otherwise, and when no copy exists, it is None.
+        `all_teaching_15_04` is in both basement/ and normal/. Which copy wins
+        is load order, so a finding about a pin is only made when it holds
+        for every copy; an empty list means the pin names nothing.
 
         Read on demand and never cached: TilemapData is replaced wholesale by
-        the room-template sync, and there are only a handful of pinned rooms.
+        the room-template sync, and only a handful of rooms pin a template.
         """
         if not template_id or self.tilemap_data is None or not self.tilemap_data.is_dir():
-            return None
-        answers = set()
-        for path in self.tilemap_data.glob(f"*/{template_id}.json"):
+            return []
+        out = []
+        for path in sorted(self.tilemap_data.glob(f"*/{template_id}.json")):
             try:
-                rail = json.loads(path.read_bytes().decode("utf-8")).get("rail") or []
+                out.append(json.loads(path.read_bytes().decode("utf-8")))
             except (OSError, ValueError):
-                return None
-            answers.add(any(any(cell for cell in col or []) for col in rail))
+                continue
+        return out
+
+    def pinned_template_rail(self, template_id: str) -> bool | None:
+        """Whether a pinned template carries rail — None unless every copy agrees."""
+        answers = {tilemaps.has_rail(t) for t in self.pinned_templates(template_id)}
         return answers.pop() if len(answers) == 1 else None
 
     def taxonomy(self) -> dict:
@@ -816,8 +820,11 @@ class Dataset:
             action = step.get("action")
             condition = step.get("condition")
 
-            if not action:
-                # Absent action == pure wait, not an enemy source.
+            # Absent action == pure wait, not an enemy source. A `sound`
+            # action (OZX-1173) spawns nothing either, but it holds the
+            # playhead on its condition the same way, so the launches after
+            # it inherit that gate.
+            if not action or action.get("verb") == "sound":
                 pending_gates.append(describe_condition(condition))
                 continue
 

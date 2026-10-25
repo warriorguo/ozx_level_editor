@@ -10,13 +10,16 @@ Issue codes come from the TD's Appendix B; they are stable machine ids.
 
 from __future__ import annotations
 
-from . import plandefaults
+from . import plandefaults, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
                       Dataset)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
-               "pressure", "peak", "release", "boss", "exit"}
+               "pressure", "peak", "release", "boss", "exit",
+               # OZX-1171: a room that only moves the story on. Hand-placed in
+               # the teaching chapters; no plan deals it.
+               "story"}
 ROOM_CATEGORIES = {"normal", "basement", "cave", "test"}
 
 
@@ -113,6 +116,7 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     entity=level_id, pointer=f"{rptr}/steamTrain"))
 
             issues.extend(_pinned_rail_issues(ds, level_id, rid, rptr, room))
+            issues.extend(_pinned_door_issues(ds, level_id, rid, rptr, room))
             if "exitBlockedTip" in room:
                 issues.extend(_tip_issues(
                     level_id, f"{rid}: exitBlockedTip", f"{rptr}/exitBlockedTip",
@@ -360,6 +364,44 @@ def _tip_issues(level_id: str, where: str, pointer: str, tip,
     return issues
 
 
+def _pinned_door_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
+                        room: dict) -> list[dict]:
+    """Can the player get through a pinned template's doors? (OZX-1171)
+
+    A pin skips `RoomTilemapQuery`, so a template whose sides, floor or
+    walls disagree with the room's doors is accepted in silence and the room
+    reads as ordinary JSON. ch2's first story room was exactly that: its
+    lanes ran on Pipeline, which is solid, so the doors never connected.
+    `PinnedTemplateDoorTests` guards shipped data; these are the same rules
+    at edit time (see `ozxlevel.tilemaps.pin_door_findings`).
+
+    Caves and composites are out of scope, as they are upstream: a cave has
+    no tilemap, and a composite places its doors on the stitched grid, not
+    on the pinned tile. A name that resolves to no tilemap at all throws at
+    room load. When the name resolves to several copies, a door finding is
+    only made if every copy has it.
+    """
+    template = room.get("templateId")
+    if not template or room.get("roomCategory") == "cave":
+        return []
+    if (room.get("roomCols") or 1) > 1 or (room.get("roomRows") or 1) > 1:
+        return []
+    copies = ds.pinned_templates(template)
+    if not copies:
+        if ds.tilemap_data is None or not ds.tilemap_data.is_dir():
+            return []
+        return [_issue(
+            "error", "LEVEL_PIN_TEMPLATE_MISSING",
+            f"{rid}: templateId '{template}' names no tilemap; RoomLoadManager "
+            f"throws when the room loads",
+            entity=level_id, pointer=f"{rptr}/templateId")]
+    per_copy = [tilemaps.pin_door_findings(room, t) for t in copies]
+    common = [f for f in per_copy[0] if all(f in other for other in per_copy[1:])]
+    return [_issue("error", code, f"{rid}: pinned '{template}' {message}",
+                   entity=level_id, pointer=f"{rptr}{suffix}")
+            for code, suffix, message in common]
+
+
 def _pinned_rail_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
                         room: dict) -> list[dict]:
     """A pinned template has to carry the track the room asks for (OZX-1164).
@@ -525,16 +567,36 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
     issues: list[dict] = []
     for index, step in enumerate(doc.value.get("steps") or []):
         sptr = f"/steps/{index}"
+        condition = step.get("condition")
+        if condition:
+            kind = condition.get("kind")
+            if kind not in {"time", "cleared", "touch", "killed", "custom"}:
+                issues.append(_issue("warning", "TYPE_VALUE_UNKNOWN",
+                                     f"step {index}: unknown condition kind '{kind}'",
+                                     entity=encounter_id, pointer=f"{sptr}/condition/kind"))
         action = step.get("action")
         if action:
             verb = action.get("verb")
-            # EncounterValidator accepts exactly one verb. "wait" is not a
-            # verb — a wait step is one with no action at all.
+            # OZX-1173: `sound` plays one sfx and shares no field with a
+            # launch — EncounterValidator returns before the launch checks,
+            # so demanding an enemyId of it would be wrong. A missing id only
+            # logs a line in SoundServiceAdapter: a step that looks fired and
+            # is silent, which is why the validator throws on it. Whether the
+            # id is registered in SoundConfig is upstream's to check.
+            if verb == "sound":
+                if not action.get("soundId"):
+                    issues.append(_issue(
+                        "error", "ENCOUNTER_SOUND_ID_MISSING",
+                        f"step {index}: a 'sound' action needs a soundId; without one "
+                        f"the step looks like it fired and plays nothing",
+                        entity=encounter_id, pointer=f"{sptr}/action"))
+                continue
+            # "wait" is not a verb — a wait step is one with no action at all.
             if verb != "launch":
                 issues.append(_issue(
                     "error", "ENCOUNTER_ACTION_VERB_INVALID",
-                    f"step {index}: verb '{verb}' is invalid; the only legal verb is "
-                    f"'launch' (a wait step omits `action` entirely)",
+                    f"step {index}: verb '{verb}' is invalid; the legal verbs are "
+                    f"'launch' and 'sound' (a wait step omits `action` entirely)",
                     entity=encounter_id, pointer=f"{sptr}/action/verb"))
             enemy_id = action.get("enemyId")
             if not enemy_id:
@@ -594,13 +656,6 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                 encounter_id, f"step {index}", aptr, action,
                 via_spawner=bool(action.get("viaSpawner"))))
 
-        condition = step.get("condition")
-        if condition:
-            kind = condition.get("kind")
-            if kind not in {"time", "cleared", "touch", "killed", "custom"}:
-                issues.append(_issue("warning", "TYPE_VALUE_UNKNOWN",
-                                     f"step {index}: unknown condition kind '{kind}'",
-                                     entity=encounter_id, pointer=f"{sptr}/condition/kind"))
     return issues
 
 

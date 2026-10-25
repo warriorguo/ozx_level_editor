@@ -754,7 +754,7 @@ function renderRooms() {
     ].filter(Boolean).join('')
       || '<div class="inline-empty">No loot on this room</div>';
 
-    const stageOptions = ['', 'start', 'teaching', 'building', 'default', 'pressure', 'peak', 'release', 'boss', 'exit']
+    const stageOptions = ['', 'start', 'teaching', 'building', 'default', 'pressure', 'peak', 'release', 'boss', 'exit', 'story']
       .map((v) => `<option value="${v}" ${room.stageType === (v || null) || room.stageType === v ? 'selected' : ''}>${v || '⟨unset⟩'}</option>`)
       .join('');
     const categoryOptions = ['', 'normal', 'basement', 'cave', 'test']
