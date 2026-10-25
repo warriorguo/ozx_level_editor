@@ -1498,7 +1498,9 @@ function renderPlanFloors() {
           // minions are ON TOP of enemies/room — the room's real body count
           // is enemiesPerRoom + minionsPerSpawner × however many drew.
           const channel = e.isSpawner
-            ? `<span class="spawner-line" title="OZX-1032: each of these that a room draws is paired with a viaSpawner launch of ${esc(e.minionId)}, on top of the room's enemies/room budget">
+            ? `<span class="spawner-line" title="${esc(f.spawnerMinionsPerRoom > 0
+                ? `OZX-1219: each of these that a room draws is fed from the room's own allowance of ${f.spawnerMinionsPerRoom} minions, shared by every spawner; enemies/room counts only bodies placed directly`
+                : `OZX-1064: each of these that a room draws is paired with a viaSpawner launch of ${e.minionId}, charged to the room's enemies/room and capped by the minion's maxPerRoom`)}">
                  <span class="drop-tag">spawns</span>${esc(`×${e.minionsPerSpawner} ${e.minionId} each`)}</span>`
             // Half a pair reads as a spawner to a designer and as an ordinary
             // enemy to the sampler. The validator errors; the row says why.
@@ -1582,6 +1584,8 @@ function renderPlanFloors() {
           <div><span>generator</span><strong class="${inheritedMark(f, 'generatorType')}">${esc(f.generatorType || 'tree (default)')}</strong></div>
           <div><span>rooms</span><strong class="${inheritedMark(f, 'roomCountMin') || inheritedMark(f, 'roomCountMax')}">${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
           <div><span>enemies/room</span><strong class="${inheritedMark(f, 'enemiesPerRoom')}">${f.enemiesPerRoom ?? '—'}</strong></div>
+          ${f.spawnerMinionsPerRoom > 0 ? `<div><span>minion lines</span><strong class="${inheritedMark(f, 'spawnerMinionsPerRoom')}"
+            title="OZX-1219: spawner production lines draw from this allowance instead of enemies/room">${f.spawnerMinionsPerRoom}/room</strong></div>` : ''}
           <div><span>key</span><strong class="${inheritedMark(f, 'transitionKeyId')}">${esc(f.transitionKeyId || '—')}</strong></div>
           <div><span>rail</span><strong class="${f.railCart ? inheritedMark(f, 'railCart') : 'noboss'}"
             title="OZX-1164: every room draws a tilemap with track, and the start room gets a cart. A floor can switch it on over the chapter, never off.">${

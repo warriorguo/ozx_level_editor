@@ -1892,6 +1892,23 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
         # minionsPerSpawner above the minion's cap is a number that can never
         # be met — not an error (the spawner still shows up, producing fewer),
         # but the plan says one thing and the room does another, every time.
+        #
+        # OZX-1219 gives the lines their own allowance instead:
+        # `spawnerMinionsPerRoom` > 0 is shared by every spawner in the room,
+        # and the minion's maxPerRoom goes back to bounding only the bodies
+        # placed directly. The cap above then says nothing about the line;
+        # the allowance does — a spawner asking for more than the whole room's
+        # allowance is truncated even when it is the only one drawn.
+        quota = floor.get("spawnerMinionsPerRoom") or 0
+        if quota > 0:
+            if count > quota:
+                issues.append(_issue(
+                    "warning", "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED",
+                    f"{who} asks for {count} minions per spawner, above this floor's "
+                    f"spawnerMinionsPerRoom of {quota} — the allowance every spawner in "
+                    f"the room shares — so it is truncated every time, even alone",
+                    entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
+            continue
         minion_entry = next((e for e in pool if e.get("enemyId") == minion), None)
         minion_cap = (minion_entry or {}).get("maxPerRoom") or 0
         if minion_cap and count > minion_cap:

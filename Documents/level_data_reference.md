@@ -357,6 +357,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `floorLootPlan` | 楼层掉落方案，见 §5.3 | 12 |
 | `transitionKeyId` | 过渡钥匙 item id；编译期自动绑到 peak/跨层流程并插锁门 | 10 |
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
+| `spawnerMinionsPerRoom` | int（OZX-1219）：spawner 产线的独立额度，按房共享。0 = OZX-1064 的规则（产线占 `enemiesPerRoom`、受 minion 条目 `maxPerRoom` 约束）；> 0 = 产线只花这份额度，`enemiesPerRoom` 只数直接放置、minion 的 `maxPerRoom` 只管直接放置，每座 spawner 取 `minionsPerSpawner`、被剩余额度截断、一只都给不出就不放这座。可从 floorDefaults 继承。`LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` 据此改判：有额度时比的是额度，不是 minion 的 cap | 8（ch5–7） |
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |

@@ -973,6 +973,10 @@ class Dataset:
                 "roomCountMin": floor.get("roomCountMin"),
                 "roomCountMax": floor.get("roomCountMax"),
                 "enemiesPerRoom": floor.get("enemiesPerRoom"),
+                # OZX-1219: the room's own allowance for spawner production
+                # lines. 0 = the OZX-1064 rule (lines spend enemiesPerRoom and
+                # the minion's maxPerRoom); > 0 = they spend only this.
+                "spawnerMinionsPerRoom": floor.get("spawnerMinionsPerRoom") or 0,
                 # OZX-1164: every room of the area draws a rail tilemap and the
                 # start room gets a cart. A bool, so a floor can switch it on
                 # over the chapter but never off.

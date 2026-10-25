@@ -76,7 +76,9 @@ def test_the_shipped_plan_declares_a_spawner(ds):
     spawners = [e for f in view["floors"] for e in f["enemyPool"] if e["isSpawner"]]
     assert spawners, "no spawner entry in chapter_3"
     assert all(e["minionId"] and e["minionsPerSpawner"] > 0 for e in spawners)
-    assert {e["enemyId"] for e in spawners} == {"evil_ground_factory"}
+    # The roster is the chapter's to change (alien_beta joined on floor 1);
+    # what this file needs is that the factory line it tests is still there.
+    assert "evil_ground_factory" in {e["enemyId"] for e in spawners}
 
 
 def test_a_half_declared_pair_is_not_a_spawner(ds, plan):
@@ -231,3 +233,37 @@ def test_an_uncapped_minion_cannot_truncate(ds, plan):
     minion = next(e for e in pool if e["enemyId"] == entry["minionId"])
     minion["maxPerRoom"] = 0
     assert "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED" not in codes(ds)
+
+
+# ── OZX-1219: a line allowance of the room's own ─────────────────────────
+
+
+def test_with_a_line_allowance_the_minions_cap_no_longer_bounds_the_line(ds, plan):
+    """`spawnerMinionsPerRoom` > 0: the lines spend only that allowance, and
+    the minion's maxPerRoom goes back to bounding bodies placed directly."""
+    plan.value["floors"][2]["spawnerMinionsPerRoom"] = 30
+    assert "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED" not in codes(ds)
+
+
+def test_a_line_above_the_whole_allowance_still_truncates(ds, plan):
+    plan.value["floors"][2]["spawnerMinionsPerRoom"] = 5
+    found = [i for i in validate_plan(ds, "chapter_3")
+             if i["code"] == "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED"]
+    assert len(found) == 1 and "spawnerMinionsPerRoom of 5" in found[0]["message"]
+
+
+def test_the_allowance_is_inherited_like_any_number(ds, plan):
+    plan.value["floorDefaults"]["spawnerMinionsPerRoom"] = 30
+    try:
+        assert "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED" not in codes(ds)
+        assert ds.plan_view("chapter_3")["floors"][2]["spawnerMinionsPerRoom"] == 30
+    finally:
+        plan.value["floorDefaults"].pop("spawnerMinionsPerRoom")
+
+
+def test_the_shipped_allowances_silence_the_old_warning(ds):
+    """chapter_5–7 run lines of 16–26 minions against minions capped at 1–3;
+    every one of those floors declares an allowance, so none truncates."""
+    for plan_id in ("chapter_5", "chapter_6", "chapter_7"):
+        assert not [i for i in validate_plan(ds, plan_id)
+                    if i["code"] == "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED"], plan_id
