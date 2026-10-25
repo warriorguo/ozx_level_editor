@@ -39,6 +39,7 @@
 | `FloorPlanData.transitionKeyId` | ItemData | 可选 |
 | `FloorPlanData.stageTypes[].encounterId/lootPlanId` | EncounterData / LootTableData | 可选 |
 | `floorLootPlan.probabilistic[].itemId` / `guaranteed[].itemId` / `stageMustDrop[].drops[].itemId` | ItemData | 必需 |
+| `floorLootPlan.probabilistic[].tableId` / `guaranteed[].tableId` / `stageMustDrop[].drops[].tableId`（OZX-1109） | LootTableData（`pickOne`） | 与 itemId 二选一 |
 | `floorLootPlan.guaranteed[].boundEnemyId` | EnemyData | 三选一 |
 | `floorLootPlan.guaranteed[].boundRoomId` | 本层 roomId | 三选一 |
 | `floorLootPlan.categoryCaps[].category` | ItemTaxonomy 节点 | 必需 |

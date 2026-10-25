@@ -253,3 +253,83 @@ def test_a_must_drop_on_an_unknown_stage_warns(ds, loot):
               if i["code"] == "TYPE_VALUE_UNKNOWN"
               and "stageMustDrop" in (i["pointer"] or "")]
     assert issues and issues[0]["severity"] == "warning"
+
+
+# ── OZX-1109: chance and tableId on a must-drop, and the stage with no fight ─
+
+
+def must_drop(loot, stage="release", **drop):
+    loot.setdefault("stageMustDrop", []).append({"stageType": stage, "drops": [drop]})
+
+
+def test_the_shipped_release_skill_draws_from_a_table(ds):
+    """chapter_3's release rooms promise "a skill" through `tableId` — the
+    shape that used to read as a must-drop with no itemId."""
+    drops = [d for e in ds.get("LevelBasePlanData", PLAN).value["floors"][0]
+             ["floorLootPlan"]["stageMustDrop"] for d in e["drops"]]
+    assert any(d.get("tableId") and 0 < d.get("chance", 0) < 1 for d in drops)
+    assert "LOOT_SLOT_EMPTY" not in codes(ds)
+
+
+def test_a_must_drop_names_an_item_or_a_table_never_both_or_neither(ds, loot):
+    must_drop(loot, count=1)
+    assert "LOOT_SLOT_EMPTY" in codes(ds)
+    loot["stageMustDrop"][-1]["drops"][0].update(
+        itemId="item_health_small", tableId="loot_skills")
+    assert "LOOT_SLOT_AMBIGUOUS" in codes(ds)
+
+
+def test_a_must_drop_table_must_be_a_usable_pickone(ds, loot):
+    must_drop(loot, tableId="no_such_table")
+    assert "LOOT_TABLE_MISSING" in codes(ds)
+
+
+@pytest.mark.parametrize("chance", [-0.1, 1.5])
+def test_a_must_drop_chance_outside_the_unit_range_is_refused(ds, loot, chance):
+    must_drop(loot, itemId="item_health_small", chance=chance)
+    assert "LOOT_MUST_DROP_CHANCE_INVALID" in codes(ds)
+
+
+@pytest.mark.parametrize("chance", [None, 0, 0.3, 1])
+def test_an_unauthored_must_drop_chance_is_always(ds, loot, chance):
+    """0 = omitted = every room — the only reading JsonUtility leaves, since an
+    omitted float in a [Serializable] sub-config materialises as 0."""
+    drop = {"itemId": "item_health_small"}
+    if chance is not None:
+        drop["chance"] = chance
+    must_drop(loot, **drop)
+    assert "LOOT_MUST_DROP_CHANCE_INVALID" not in codes(ds)
+
+
+def test_a_must_drop_with_no_stage_is_refused(ds, loot):
+    loot.setdefault("stageMustDrop", []).append(
+        {"drops": [{"itemId": "item_health_small"}]})
+    assert "LOOT_MUST_DROP_UNSCOPED" in codes(ds)
+
+
+def test_a_guarantee_bound_to_a_stage_with_no_enemies_is_refused(ds, loot):
+    """chapter_3 floor 0's release cuts its whole budget; there is no opening
+    enemy for the pin to ride, and `ResolveStageRoom` throws."""
+    guaranteed(loot, itemId="item_health_small", count=1, boundStage="release")
+    found = [i for i in validate_plan(ds, PLAN)
+             if i["code"] == "LOOT_GUARANTEED_STAGE_NO_ENEMIES"]
+    assert found and found[0]["severity"] == "error"
+    assert found[0]["pointer"].endswith("/boundStage")
+
+
+def test_a_guarantee_bound_to_a_fighting_stage_is_fine(ds, loot):
+    guaranteed(loot, itemId="item_health_small", count=1, boundStage="peak")
+    assert "LOOT_GUARANTEED_STAGE_NO_ENEMIES" not in codes(ds)
+
+
+def test_tuning_the_probabilistic_share_of_a_stage_with_no_enemies_warns(ds, loot):
+    loot.setdefault("stageWeights", []).append({"stageType": "release", "weight": 2})
+    found = [i for i in validate_plan(ds, PLAN)
+             if i["code"] == "LOOT_STAGE_WEIGHT_NO_ENEMIES"]
+    assert found and found[0]["severity"] == "warning"
+
+
+def test_zeroing_a_stage_with_no_enemies_says_nothing(ds, loot):
+    """weight 0 agrees with what happens anyway."""
+    loot.setdefault("stageWeights", []).append({"stageType": "release", "weight": 0})
+    assert "LOOT_STAGE_WEIGHT_NO_ENEMIES" not in codes(ds)

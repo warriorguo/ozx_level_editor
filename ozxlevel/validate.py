@@ -788,27 +788,88 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
     for si, entry in enumerate(plan.get("stageMustDrop") or []):
         sptr = f"{lptr}/stageMustDrop/{si}"
         stage = entry.get("stageType")
-        if stage and stage not in STAGE_TYPES:
+        if not stage:
+            # InjectStageMustDrops throws on this one rather than skipping it.
+            issues.append(_issue(
+                "error", "LOOT_MUST_DROP_UNSCOPED",
+                f"floor {fi}: floorLootPlan.stageMustDrop[{si}] names no stageType",
+                entity=plan_id, pointer=sptr))
+        elif stage not in STAGE_TYPES:
             issues.append(_issue(
                 "warning", "TYPE_VALUE_UNKNOWN",
                 f"floor {fi}: floorLootPlan.stageMustDrop[{si}] names stage "
                 f"'{stage}', which is not a stage type; no room will match it",
                 entity=plan_id, pointer=f"{sptr}/stageType"))
         for di, drop in enumerate(entry.get("drops") or []):
-            item_id = drop.get("itemId")
             dptr = f"{sptr}/drops/{di}"
-            if not item_id:
+            where = f"floor {fi}: floorLootPlan.stageMustDrop[{si}].drops[{di}]"
+            # OZX-1109 gave a must-drop the same item-or-table choice as a
+            # guaranteed entry: stageMustDrop pays EVERY room of its stage, so a
+            # named itemId is the same thing in every room of every run.
+            issues.extend(_slot_target_issues(
+                ds, plan_id, where, dptr,
+                drop.get("itemId") or None, drop.get("tableId") or None,
+                require_one=True))
+            chance = drop.get("chance") or 0
+            if chance < 0 or chance > 1:
                 issues.append(_issue(
-                    "error", "LOOT_SLOT_EMPTY",
-                    f"floor {fi}: floorLootPlan.stageMustDrop[{si}].drops[{di}] has "
-                    f"no itemId",
-                    entity=plan_id, pointer=dptr))
-            elif ds.get("ItemData", item_id) is None:
-                issues.append(_issue(
-                    "error", "DATA_REFERENCE_MISSING",
-                    f"floor {fi}: floorLootPlan.stageMustDrop[{si}].drops[{di}]: "
-                    f"itemId '{item_id}' is not an ItemData",
-                    entity=plan_id, pointer=f"{dptr}/itemId"))
+                    "error", "LOOT_MUST_DROP_CHANCE_INVALID",
+                    f"{where}: chance is {chance}, outside (0, 1]. 0 or omitted "
+                    f"means every room of the stage gets it; a negative or >1 "
+                    f"value is a typo, not a probability",
+                    entity=plan_id, pointer=f"{dptr}/chance"))
+    issues.extend(_no_fight_stage_issues(plan_id, fi, fptr, floor, plan))
+    return issues
+
+
+def _no_fight_stage_issues(plan_id: str, fi: int, fptr: str, floor: dict,
+                           plan: dict) -> list[dict]:
+    """A stage with no enemies can only be paid through `stageMustDrop` (OZX-1109).
+
+    `enemyBudgetCut: 1` (OZX-1089) makes the generator skip the stage's rooms,
+    so not one launch exists there — and the other two channels both ride a
+    launch:
+
+    - a `guaranteed` entry with `boundStage` on it is a pin on the stage's
+      last-killed opening enemy, and `ResolveStageRoom` throws when the stage
+      has none. Error, because generation would;
+    - `probabilistic` is synthesised into the table stamped on each encounter
+      action's `dropTableId`, so in those rooms it pays exactly nothing — no
+      throw, just zero, which is the harder one to find. There is no
+      per-stage line in `probabilistic` to point at, so the tell is a
+      `stageWeights` entry tuning that stage's share: the author is
+      expecting a drop that cannot happen.
+
+    `stageMustDrop` lands a crate instead of a body, which is why it is the
+    one channel that still works.
+    """
+    dry = {s.get("stageType") for s in (floor.get("stageTypes") or [])
+           if s.get("stageType") and (s.get("enemyBudgetCut") or 0) >= 1}
+    if not dry:
+        return []
+    lptr = f"{fptr}/floorLootPlan"
+    issues: list[dict] = []
+    for gi, entry in enumerate(plan.get("guaranteed") or []):
+        stage = entry.get("boundStage")
+        if stage in dry:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_STAGE_NO_ENEMIES",
+                f"floor {fi}: floorLootPlan.guaranteed[{gi}] binds to stage "
+                f"'{stage}', which cuts its whole enemy budget (enemyBudgetCut 1). "
+                f"A guaranteed entry is paid by the stage's last-killed opening "
+                f"enemy and there is none, so generation throws. A stage with no "
+                f"fight pays through stageMustDrop, which lands a crate",
+                entity=plan_id, pointer=f"{lptr}/guaranteed/{gi}/boundStage"))
+    for wi, entry in enumerate(plan.get("stageWeights") or []):
+        stage = entry.get("stageType")
+        if stage in dry and entry.get("weight", 0) != 0:
+            issues.append(_issue(
+                "warning", "LOOT_STAGE_WEIGHT_NO_ENEMIES",
+                f"floor {fi}: stageWeights[{wi}] tunes the probabilistic share of "
+                f"stage '{stage}', which has no enemies (enemyBudgetCut 1). "
+                f"Probabilistic loot drops off encounter actions, so that stage "
+                f"gets none of it whatever the weight; use stageMustDrop",
+                entity=plan_id, pointer=f"{lptr}/stageWeights/{wi}"))
     return issues
 
 

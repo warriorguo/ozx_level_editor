@@ -307,7 +307,7 @@ LevelBasePlanData
 | `guaranteed[]` | `itemId` **或** `tableId`, `count`, `chance`(0=必出), **四**选一绑定：`boundEnemyId` / `boundRoomId` / `boundStage` / ~~`boundWaveLastEnemy`~~ | **必须且只能设一个绑定**；`boundWaveLastEnemy` 现在无条件抛错（named wave 已移除，OZX-650） |
 | `categoryCaps[]` | `category`（taxonomy 节点）, `maxPerFloor` | 每层每类上限 |
 | `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
-| `stageMustDrop[]` | `stageType`, `drops[{itemId,count}]` | 该 stage 的**每个房间**各生成一个装着该 item 的 cargo |
+| `stageMustDrop[]` | `stageType`, `drops[{itemId` **或** `tableId, count, chance}]` | 该 stage 的**每个房间**各生成一个 cargo；`chance`(0/省略=必出) **逐房**在生成期掷（OZX-1109） |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
 
@@ -321,6 +321,11 @@ LevelBasePlanData
 | `guaranteed[].itemId` / `.tableId` / `.boundEnemyId` / `.boundStage` / `.boundRoomId` | 生成期抛（`LevelBasePlanAssigner`）——抛得对，但抛在跑生成器的时候 |
 | `categoryCaps[].category` | 不是 taxonomy 节点 → 匹配不到任何道具，这条 cap 读起来像调过、实际什么都没做。**注意 `categoryCaps` 至今没有 fail-fast**，而同样的问题 OZX-1044 给 `stageWeights.category` 加了一条 |
 | `stageMustDrop[].drops[].itemId` | 同 probabilistic |
+| `stageMustDrop[].drops[].tableId` | 同 guaranteed：二选一、`pickOne` 且非空，生成期抛（OZX-1109） |
+
+**无敌人的 stage 只有 `stageMustDrop` 一条投放通道**（OZX-1109）。`enemyBudgetCut: 1` 的 stage 一个 launch 都没有，而另两条通道都挂在 launch 上：`guaranteed.boundStage` 指向它会被 `ResolveStageRoom` 抛（`LevelBasePlanAssigner.cs`，「a stage with no fight pays its guarantees through stageMustDrop」）——编辑器报 `LOOT_GUARANTEED_STAGE_NO_ENEMIES`（Error）；`probabilistic` 合成的表盖在 encounter action 的 `dropTableId` 上，那些房间里静默为零，`probabilistic` 本身没有按 stage 的行可指，所以只能在作者给该 stage 写了非零 `stageWeights` 时报 `LOOT_STAGE_WEIGHT_NO_ENEMIES`（Warning）。`stageMustDrop` 落的是箱子不是尸体，所以它还活着。
+
+`stageMustDrop[].drops[].chance` 的 0 = 必出是刻意的：`MustDropItemData` 是 `[Serializable]` 子配置，`JsonUtility` 把省略的 float 读成 0，「省略 = 必出」只能这么表达；「永不掉」无法表达也是刻意的——删条目即可。区间外 `LOOT_MUST_DROP_CHANCE_INVALID`，空 `stageType` 上游抛，报 `LOOT_MUST_DROP_UNSCOPED`。
 
 `boundRoomId` 只有手写 `rooms` 的楼层才查得了——程序化房间 id 是生成期造的，作者写不出来，所以在生成楼层上没有可比对的集合。
 
