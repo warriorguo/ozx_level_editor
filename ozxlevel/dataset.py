@@ -1476,12 +1476,16 @@ def _cluster_brief(source: dict) -> dict | None:
     lo = source.get("clusterSizeMin") or 0
     hi = source.get("clusterSizeMax") or 0
     radius = source.get("clusterRadius") or 0
+    # OZX-1191: a shared-root tuft — all members on the anchor, fanned over
+    # `fanArcDegrees` along the anchor → room-centre axis — instead of a ring.
+    shared = {"sharedRoot": bool(source.get("sharedRoot")),
+              "fanArcDegrees": source.get("fanArcDegrees") or 0}
     if hi <= 1 and lo <= 1:
         # A radius with no size still has to reach the view: it is authored
         # text that does nothing, and the row is where that gets noticed.
         return {"declared": False, "sizeMin": lo, "sizeMax": hi,
-                "radius": radius} if radius else None
-    return {"declared": True, "sizeMin": lo, "sizeMax": hi, "radius": radius}
+                "radius": radius, **shared} if radius else None
+    return {"declared": True, "sizeMin": lo, "sizeMax": hi, "radius": radius, **shared}
 
 
 def _code(identifier: str) -> str:

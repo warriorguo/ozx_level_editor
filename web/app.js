@@ -456,7 +456,11 @@ function groupLine(e) {
   if (variants.length) bits.push(`1 of ${variants.length + 1} forms per body`);
   if (c && c.declared) {
     const size = c.sizeMin === c.sizeMax ? `${c.sizeMax}` : `${c.sizeMin}–${c.sizeMax}`;
-    bits.push(`clumps of ${size} @ r${c.radius}`);
+    // OZX-1191: a shared root has no ring — every member stands on the
+    // anchor and the arc fans them out.
+    bits.push(c.sharedRoot
+      ? `tufts of ${size} on one root, fanned ${c.fanArcDegrees}°`
+      : `clumps of ${size} @ r${c.radius}`);
   } else if (c) {
     // A radius with no size is authored text that does nothing.
     bits.push(`clusterRadius ${c.radius} with no clump size`);

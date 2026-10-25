@@ -1637,7 +1637,19 @@ def _cluster_issues(entity: str, where: str, ptr: str, source: dict,
     lo = source.get("clusterSizeMin") or 0
     hi = source.get("clusterSizeMax") or 0
     radius = source.get("clusterRadius") or 0
+    shared = bool(source.get("sharedRoot"))
     issues: list[dict] = []
+
+    # OZX-1191: a shared-root tuft — every member ON the anchor, fanned over
+    # an arc. `EncounterValidator.SharedRootProblem` is the one rule set for
+    # both places the pair is authored (a pool entry is passed with
+    # viaSpawner false, since its own bodies are placed directly).
+    problem = _shared_root_problem(shared, source.get("fanArcDegrees") or 0, hi,
+                                   radius, via_spawner)
+    if problem:
+        issues.append(_issue(
+            "error", "CLUSTER_SHARED_ROOT_INVALID", f"{where}: {problem}",
+            entity=entity, pointer=f"{ptr}/{'sharedRoot' if shared else 'fanArcDegrees'}"))
 
     if hi <= 1 and lo <= 1:
         if radius > 0:
@@ -1653,7 +1665,9 @@ def _cluster_issues(entity: str, where: str, ptr: str, source: dict,
             "error", "CLUSTER_SIZE_RANGE_INVALID",
             f"{where} has clusterSizeMin {lo} above clusterSizeMax {hi}",
             entity=entity, pointer=f"{ptr}/clusterSizeMin"))
-    if radius <= 0:
+    # A shared-root tuft stands on its anchor on purpose and has no ring, so
+    # the radius rule is the one it is exempt from.
+    if radius <= 0 and not shared:
         issues.append(_issue(
             "error", "CLUSTER_RADIUS_MISSING",
             f"{where} clumps up to {hi} bodies but clusterRadius is {radius}. "
@@ -1677,6 +1691,27 @@ def _cluster_issues(entity: str, where: str, ptr: str, source: dict,
             f"spawner's emit anchors and never reads the clump fields",
             entity=entity, pointer=ptr))
     return issues
+
+
+def _shared_root_problem(shared: bool, arc: float, size_max: int, radius: float,
+                         via_spawner: bool) -> str | None:
+    """`EncounterValidator.SharedRootProblem`, message for message."""
+    if not shared:
+        return (f"fanArcDegrees={arc:g} without sharedRoot — nothing reads the arc. "
+                f"Set sharedRoot, or drop it") if arc else None
+    if not (0 < arc <= 360):
+        return (f"sharedRoot needs fanArcDegrees in (0, 360], got {arc:g}. At 0 every "
+                f"member would grow in the same direction, one on top of the other")
+    if size_max <= 1:
+        return (f"sharedRoot needs clusterSizeMax > 1 (got {size_max}) — the flag groups "
+                f"the members of a clump onto one root, and a clump of one has none to share")
+    if radius > 0:
+        return (f"sharedRoot and clusterRadius={radius:g} are exclusive: a shared-root "
+                f"clump stands every member ON the anchor, a radius rings them around it")
+    if via_spawner:
+        return ("sharedRoot cannot ride a viaSpawner launch — the channel places what it "
+                "produces at the spawner's emit anchors and never reads the flag")
+    return None
 
 
 def _variant_issues(ds: Dataset, entity: str, where: str, ptr: str,

@@ -422,7 +422,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 ### 5.4 EnemyPoolEntryData（OZX-1032 spawner 通道 + OZX-1063 变体组与成簇）
 
-`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner?, variantIds?, clusterSizeMin?, clusterSizeMax?, clusterRadius? }`。
+`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner?, variantIds?, clusterSizeMin?, clusterSizeMax?, clusterRadius?, sharedRoot?, fanArcDegrees? }`。
 
 #### 5.4.0 变体组与成簇（OZX-1063，核对于 `ozx_base@f0a78923`）
 
@@ -430,7 +430,8 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 |---|---|
 | `variantIds` | `enemyId` 的其它形态。整条条目**按一种类型**采样 / 计数 / 限量，每具身体的具体 id 在放置时**各自等权抽一次**（独立、允许重复） |
 | `clusterSizeMin` / `clusterSizeMax` | 成簇大小。0/1 = 不成簇 |
-| `clusterRadius` | 簇内环半径；`clusterSizeMax > 1` 时必填 |
+| `clusterRadius` | 簇内环半径；`clusterSizeMax > 1` 时必填（`sharedRoot` 除外） |
+| `sharedRoot` / `fanArcDegrees` | OZX-1191：同根一丛（触手）。全部成员**落在锚点上**，沿「锚点 → 房间中心」轴在 `fanArcDegrees` 的扇形里均分朝向。规则即 `EncounterValidator.SharedRootProblem`（pool 条目与 launch 同一套）：`fanArcDegrees ∈ (0, 360]`、`clusterSizeMax > 1`、不能再写 `clusterRadius`（环和同根是反义）、不能走 `viaSpawner`；没 `sharedRoot` 写了 arc 也报 → `CLUSTER_SHARED_ROOT_INVALID`。出货：`spawn_tentacles`、`tentacle_short/medium/long` |
 
 同样四个字段也在 `EncounterData` 的 `steps[].action` 上——采样器把条目的值抄到它合成的 step 上。
 
