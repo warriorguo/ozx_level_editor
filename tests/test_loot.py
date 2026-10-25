@@ -37,9 +37,9 @@ def test_independent_weights_are_percentages_not_shares(ds):
     view = ds.loot_table_view("loot_boss")
     assert view["pickOne"] is False
     chances = {e["itemId"]: e["chance"] for e in view["entries"]}
-    assert chances == {"item_exp_large": 100.0,
-                       "item_health_large": 80.0,
-                       "key_gold": 100.0}
+    authored = {e["itemId"]: float(e["weight"])
+                for e in ds.get("LootTableData", "loot_boss").value["entries"]}
+    assert chances == authored, "each weight is its own roll, shown as written"
     assert sum(chances.values()) > 100, "independent weights may exceed 100 in total"
 
 
@@ -63,19 +63,22 @@ def test_none_resolves_to_none(ds):
 # ── the two room channels ────────────────────────────────────────────────
 
 
-def test_room_clear_and_cargo_loot_are_separate_channels(ds):
-    """They roll at different moments, so they are never merged into one list."""
+def test_owed_prizes_and_cargo_loot_are_separate_channels(ds):
+    """They pay at different moments — the opening wave's last kill, and a
+    crate being opened — so they are never merged into one list. The
+    room-clear channel they used to sit beside is gone (OZX-1381)."""
     view = ds.level_view("chapter_1")
     rooms = {r["roomId"]: r for r in view["floors"][0]["rooms"]}
 
-    # f0_room_1_4 has both: a room-clear plan AND a cargo box.
+    # f0_room_1_4 has both: the key it owes AND a cargo box.
     both = rooms["f0_room_1_4"]
-    assert both["roomClearLoot"]["id"] == "loot_ch1_key"
+    assert [p["itemId"] for p in both["guaranteedDrops"]] == ["key_gold"]
     assert [c["table"]["id"] for c in both["cargoLoot"]] == ["loot_ch1_laser"]
+    assert "roomClearLoot" not in both
 
-    # f0_room_0_0 has cargo only, and no room-clear plan.
+    # f0_room_0_0 has cargo only, and owes nothing.
     cargo_only = rooms["f0_room_0_0"]
-    assert cargo_only["roomClearLoot"] is None
+    assert cargo_only["guaranteedDrops"] == []
     assert cargo_only["cargoLoot"]
 
 
@@ -171,7 +174,7 @@ def test_loot_entries_carry_the_resolved_item(ds):
     view = ds.loot_table_view("loot_ch1_build3_skill")
     by_id = {e["itemId"]: e for e in view["entries"]}
     crimson = by_id["crimson_barrage"]
-    assert crimson["displayName"] == "Crimson Barrage"
+    assert crimson["displayName"] == ds.get("ItemData", "crimson_barrage").value["displayName"]
     assert crimson["itemType"] == "skill"
     assert crimson["rarity"] == "uncommon"
 

@@ -214,20 +214,23 @@ check('immediate waves are not highlighted',
       whens.filter((w) => w.textContent.trim() === 'immediately')
            .every((w) => !w.classList.contains('gated')));
 
-// ── a pinned prize is drawn BESIDE the drop, not instead of it ───────────
-// OZX-1041: `guaranteedDrop` is paid on top of whatever the table rolled, so
-// a page that replaced the drop line with it would understate every pinned
-// wave by a whole table.
+// ── what a room owes is its own line in the Loot column ──────────────────
+// OZX-1380: a room's guaranteedDrops are paid by the last kill of its opening
+// wave, on top of that body's drops — not by a table the room rolls, so they
+// are drawn as pins, and the room-clear row they replaced is gone.
 {
-  const pins = qa('.enemy-content .pin-line');
-  check('a pinned prize gets its own line', pins.length === 1, `${pins.length} pins`);
-  const carrier = pins[0]?.closest('.drop-carrier');
-  check('the wave still shows the table it rolls',
-        !!carrier?.querySelector('.drop-line'));
-  check('the pin names what it pays and to how many',
-        /×1\s+Silver Key/.test(pins[0]?.textContent || ''), pins[0]?.textContent);
-  check('an authored chance is shown as odds',
-        (pins[0]?.textContent || '').includes('7%'), pins[0]?.textContent);
+  const owed = level.floors[0].rooms.flatMap((r) => r.guaranteedDrops || []);
+  const pins = qa('.loot-content .pin-line');
+  check('each owed prize gets its own line', pins.length === owed.length,
+        `${pins.length} of ${owed.length}`);
+  if (owed.length) {
+    check('the line names what it pays and how many',
+          pins[0]?.textContent.includes(`×${owed[0].count}`)
+          && pins[0]?.textContent.includes(owed[0].displayName || owed[0].itemId),
+          pins[0]?.textContent);
+  }
+  check('there is no room-clear row any more',
+        !qa('.loot-label').some((l) => l.textContent.trim() === 'room clear'));
 }
 
 // ── a skill platform says which skill it grants ──────────────────────────

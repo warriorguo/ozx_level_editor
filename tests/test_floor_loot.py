@@ -185,19 +185,14 @@ def test_a_bound_stage_must_be_one_this_floor_declares(ds, loot):
     assert "LOOT_GUARANTEED_STAGE_UNKNOWN" not in codes(ds)
 
 
-def test_a_bound_room_is_only_checkable_on_an_authored_floor(ds, loot):
-    """Procedural room ids are invented at generation and are not authorable,
-    so on a generated floor there is no set to check against — claiming the
-    id is wrong would be worse than saying nothing."""
+def test_a_bound_room_is_a_dead_binding(ds, loot):
+    """OZX-1380 removed `boundRoomId`: the generator picks the room, and the
+    last kill of its opening wave pays. JsonUtility drops the field, so the
+    entry is left with no binding at all."""
     guaranteed(loot, itemId="key_silver", count=1, boundRoomId="f0_room_9_9")
-    assert "DATA_REFERENCE_MISSING" not in codes(ds)
-
-    doc = ds.get("LevelBasePlanData", PLAN)
-    doc.value["floors"][0]["rooms"] = [{"roomId": "hand_written"}]
-    try:
-        assert "DATA_REFERENCE_MISSING" in codes(ds)
-    finally:
-        del doc.value["floors"][0]["rooms"]
+    found = codes(ds)
+    assert "LOOT_GUARANTEED_BINDING_DEAD" in found
+    assert "LOOT_GUARANTEED_BINDING_COUNT" not in found
 
 
 def test_a_chance_outside_the_unit_range_is_refused(ds, loot):

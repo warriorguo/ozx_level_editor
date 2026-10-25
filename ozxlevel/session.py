@@ -204,12 +204,14 @@ def key_sources(document: dict) -> dict[str, set[str]]:
     walked: the room's own plan, its floor table, its guaranteed cargo, a
     static placement's table, and the waves of its `inlineEncounter`.
 
-    The one that actually carries the cross-floor keys in this data has moved.
-    Before OZX-1041 it was a synthesised one-entry table stamped onto a wave's
-    `dropTableIdOverride`; now it is a `guaranteedDrop` pin naming the key
-    item outright, and `loot_story_f{n}_0` does not exist any more. So a key
-    is looked for in two shapes — inside a table, and named directly on a pin
-    — because a capture taken before the change is still a capture.
+    The one that actually carries the cross-floor keys in this data has moved
+    twice. Before OZX-1041 it was a synthesised one-entry table stamped onto a
+    wave's `dropTableIdOverride`; OZX-1041 made it a `guaranteedDrop` pin on
+    the launch; OZX-1380 moved that pin to the ROOM, as `guaranteedDrops`,
+    paid by the last-killed body of the opening wave. A key is looked for in
+    every one of those shapes, because a capture taken before a change is
+    still a capture. OZX-1381 deleted the room-clear channel (`lootPlanId`),
+    which is read here for the same reason.
     """
     tables = document.get("generatedLootTables") or {}
 
@@ -230,7 +232,8 @@ def key_sources(document: dict) -> dict[str, set[str]]:
         return found
 
     def keys_on_pin(pin):
-        """A `{itemId|tableId, count}` pin — on a launch, or on a cargo box."""
+        """A `{itemId|tableId, count}` pin — on a room, a cargo box, or (before
+        OZX-1380) a launch."""
         if not isinstance(pin, dict):
             return set()
         found = {pin["itemId"]} if is_key(pin.get("itemId")) else set()
@@ -245,6 +248,8 @@ def key_sources(document: dict) -> dict[str, set[str]]:
             found: set[str] = set()
             for table_id in (room.get("lootPlanId"), room.get("floorLootTableId")):
                 found |= keys_in(table_id)
+            for pin in room.get("guaranteedDrops") or []:
+                found |= keys_on_pin(pin)
             for cargo in room.get("guaranteedCargo") or []:
                 found |= keys_on_pin(cargo)
             # Pre-OZX-1041 captures: guaranteed cargo was a list of table ids.

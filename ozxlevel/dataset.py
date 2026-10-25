@@ -687,7 +687,18 @@ class Dataset:
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
     def wave_pin(self, action: dict, tables: dict | None = None) -> dict | None:
-        """OZX-1041: the prize pinned to this launch, or None.
+        """A launch's `guaranteedDrop` — only in captures from before OZX-1380.
+
+        OZX-1380 moved the pin off the launch onto the room
+        (`RoomNodeData.guaranteedDrops`). Older session captures still carry
+        it, and reading it is free; authored data that still writes one is
+        an error (`ENCOUNTER_PIN_REMOVED`), since JsonUtility drops the field.
+        """
+        return self.pin_view(action.get("guaranteedDrop"), tables)
+
+    def pin_view(self, pin: dict | None, tables: dict | None = None) -> dict | None:
+        """One pinned prize — a room's `guaranteedDrops[]` entry, a guaranteed
+        crate, or (in old captures) a launch's pin. None when it names nothing.
 
         A pin is paid ON TOP of whatever the table rolled, to the first
         `count` enemies of the launch — exactly parallel to `eliteCount`
@@ -702,7 +713,7 @@ class Dataset:
         object being present means nothing upstream and nothing here: a pin
         exists iff it names an item or a table.
         """
-        pin = action.get("guaranteedDrop") or {}
+        pin = pin or {}
         item_id = pin.get("itemId") or None
         table_id = pin.get("tableId") or None
         if not item_id and not table_id:
@@ -963,7 +974,6 @@ class Dataset:
             stages = [
                 {"stageType": s.get("stageType"), "portion": s.get("portion"),
                  "encounterId": s.get("encounterId"),
-                 "lootPlanId": s.get("lootPlanId"),
                  # OZX-1089: the SHARE of the floor's enemiesPerRoom this
                  # stage gives back, not a multiplier. The direction is
                  # deliberate — JsonUtility reads an omitted float as 0, so a
@@ -1165,8 +1175,8 @@ class Dataset:
         loot columns exactly like an authored one.
 
         Two fields differ and are handled where they are read, not here: the
-        generator leaves `encounterId` and `lootPlanId` empty and puts the
-        real content in `inlineEncounter` / `floorLootTableId`, and the loot
+        generator leaves `encounterId` empty and puts the real content in
+        `inlineEncounter` / `floorLootTableId`, and the loot
         ids it uses are synthesised in memory and live in the document's own
         `generatedLootTables`.
         """
@@ -1197,7 +1207,6 @@ class Dataset:
                     "roomShape": room.get("roomShape"),
                     "templateId": room.get("templateId"),
                     "encounterId": room.get("encounterId"),
-                    "lootPlanId": room.get("lootPlanId"),
                     "bossId": room.get("bossId"),
                     "isFinalRoom": bool(room.get("isFinalRoom")),
                     "hasTeleportSpot": bool(room.get("hasTeleportSpot")),
@@ -1276,16 +1285,32 @@ class Dataset:
                     "enemies": self.encounter_enemies(
                         room.get("encounterId") or None,
                         inline=room.get("inlineEncounter"), tables=tables),
-                    "roomClearLoot": self.loot_table_view(
-                        room.get("lootPlanId") or room.get("floorLootTableId"),
-                        tables),
+                    # OZX-1380: what the room owes — a key, a guaranteed
+                    # drop — paid by the LAST-KILLED body of its opening
+                    # wave, on top of that body's own drops. OZX-1381 deleted
+                    # the room-clear channel (`lootPlanId`) this replaces as
+                    # the room's own line in the Loot column.
+                    "guaranteedDrops": [
+                        dict(self.pin_view(d, tables) or {"missing": True, "count": 0},
+                             pointer=f"{base}/guaranteedDrops/{i}")
+                        for i, d in enumerate(room.get("guaranteedDrops") or [])
+                    ],
+                    "guaranteedDropsPointer": f"{base}/guaranteedDrops",
                     "cargoLoot": [
                         {"placementIndex": i,
                          "kind": p.get("kind"),
                          "pointer": f"{base}/staticPlacements/{i}/lootTableId",
-                         "table": self.loot_table_view(p.get("lootTableId"), tables)}
+                         # OZX-1348: each crate rolls its own entry's table and
+                         # falls back to the room's floorLootTableId — the
+                         # synthesised floor table on a generated room. That
+                         # fallback is shown for what it is, not as the
+                         # entry's own choice.
+                         "fromFloor": not p.get("lootTableId"),
+                         "table": self.loot_table_view(
+                             p.get("lootTableId") or room.get("floorLootTableId"), tables)}
                         for i, p in enumerate(room.get("staticPlacements") or [])
                         if p.get("lootTableId")
+                        or (p.get("kind") == "cargo" and room.get("floorLootTableId"))
                     ] + [
                         # Guaranteed cargo is a generated-only channel. It used
                         # to be a list of one-entry table ids the assigner
@@ -1296,7 +1321,7 @@ class Dataset:
                         # wrapper table displaced.
                         {"placementIndex": None, "kind": "guaranteed",
                          "pointer": None, "table": None,
-                         "pin": self.wave_pin({"guaranteedDrop": c}, tables)}
+                         "pin": self.pin_view(c, tables)}
                         for c in room.get("guaranteedCargo") or []
                     ] + [
                         # Pre-OZX-1041 captures still on disk. Reading them is

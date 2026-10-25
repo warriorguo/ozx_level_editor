@@ -252,16 +252,23 @@ def test_the_real_dump_parses_as_one_document(dump):
 
 
 @real_only
-def test_the_real_dump_carries_its_keys_in_the_death_channel(dump):
-    """Not on the room: the cross-floor keys ride a wave's guaranteedDrop
-    pin, which is InjectGuaranteedDrops. A view that only read room-level loot
-    would report no key anywhere — and one still looking for the synthesised
-    `loot_story_f{n}_0` table would too, since OZX-1041 deleted it."""
+def test_the_real_dump_carries_its_keys_in_the_death_channel():
+    """Wherever the keys ride, every locked door's key has a source. They
+    have moved twice — a wave's guaranteedDrop pin (OZX-1041), then the
+    room's guaranteedDrops (OZX-1380) — and a view that only read one shape
+    would report no key anywhere.
+
+    Read from the newest capture that has a lock at all: a chapter joined by
+    unkeyed areaLinks produces runs with none."""
+    dump = next((d for d in (session.load(doc["name"], OZX_BASE) for doc in REAL)
+                 if any(dd.get("locked") for f in d["floors"] for r in f["rooms"]
+                        for dd in r.get("doors") or [])), None)
+    if dump is None:
+        pytest.skip("no session dump on disk has a locked door")
     sources = session.key_sources(dump)
     assert sources, "no key source found in a dump that has locked doors"
     locked = [d for f in dump["floors"] for r in f["rooms"]
               for d in r.get("doors") or [] if d.get("locked")]
-    assert locked
     needed = {d.get("keyId") for d in locked}
     assert needed <= {k for keys in sources.values() for k in keys}
 
@@ -287,9 +294,10 @@ def test_a_generated_level_renders_through_the_ordinary_level_view(dump):
     # view that only read encounterId would call every room quiet.
     assert any(r["enemies"] for r in rooms), "no room resolved any enemies"
     # Loot ids are synthesised in memory; resolving them against GameData
-    # alone reports every one as a missing table.
-    resolved = [r for r in rooms
-                if r["roomClearLoot"] and not r["roomClearLoot"]["missing"]]
+    # alone reports every one as a missing table. The crates roll the floor
+    # table, so that is where a synthesised table shows (OZX-1348).
+    resolved = [c for r in rooms for c in r["cargoLoot"]
+                if c.get("fromFloor") and c["table"] and not c["table"]["missing"]]
     assert resolved, "no synthesised loot table resolved"
     # And the layout has to survive, or there is no floor map.
     assert any(r["hasLayout"] for r in rooms)

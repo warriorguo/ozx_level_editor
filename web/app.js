@@ -352,7 +352,7 @@ function catalogItem(list, id) {
 
 /** Options for a loot-table picker: every table, plus an explicit "none".
  *  Clearing a picker removes the key rather than writing an empty string —
- *  an omitted lootPlanId and a blank one are not the same thing. */
+ *  an omitted lootTableId and a blank one are not the same thing. */
 /** A glyph for a catalog row: the real sprite when we can resolve one.
  *
  *  The sheet is served whole and cropped with background-position — that is
@@ -436,7 +436,7 @@ function skillOptions(selected) {
  *  Shown on the enemy row rather than in the Loot column because that is
  *  where it is authored: an enemy drop comes from the encounter action or the
  *  EnemyData, never from the room, so the Loot column — which reads the
- *  room's own lootPlanId and its cargo — can never reveal it. This is the
+ *  room's own prizes and its cargo — can never reveal it. This is the
  *  channel skills reach the player through, and it was invisible.
  */
 /** OZX-1063: a variant group and/or a clump, on a pool entry or on a wave.
@@ -550,7 +550,9 @@ function pinRow(pin, label) {
     ? (pin.tableId
         ? 'a pin may only draw from a pickOne table that has entries'
         : 'no ItemData with this id')
-    : 'guaranteedDrop — paid on top of whatever the table rolled';
+    : label === 'owed'
+      ? 'OZX-1380: paid by the last-killed body of the opening wave, on top of its own drops'
+      : 'guaranteedDrop — paid on top of whatever the table rolled';
   return `<span class="${cls}" title="${esc(title)}">
     <span class="drop-tag">${esc(label)}</span>${esc(`×${pin.count} ${what}${odds}`)}</span>`;
 }
@@ -692,8 +694,10 @@ function renderRooms() {
 
     // ── loot ────────────────────────────────────────────────────────────
     // Two separate channels, and conflating them is how "my drop didn't
-    // happen" bugs start: lootPlanId rolls when the room is cleared, a
-    // cargo placement's lootTableId rolls when that box is opened.
+    // happen" bugs start: the room's guaranteedDrops are paid by the
+    // last-killed body of its opening wave (OZX-1380), a cargo placement's
+    // lootTableId rolls when that box is opened. The room-clear table that
+    // used to sit here is gone (OZX-1381).
     const lootRow = (table, label, pointer, dataType, docId) => {
       if (!table) return '';
       if (table.missing) {
@@ -754,13 +758,14 @@ function renderRooms() {
     };
 
     const lootEntries = [
-      lootRow(room.roomClearLoot, 'room clear', `${room.pointer}/lootPlanId`, 'LevelData', state.levelId),
+      ...(room.guaranteedDrops || []).map((pin) => pinRow(pin, 'owed')),
       ...room.cargoLoot.map((c) =>
         // Guaranteed cargo is pinned to the room, not to one box, so it has
         // no placement index to name. Since OZX-1041 it is a pin rather than
         // a wrapper table, and a pin has no table row to draw.
         (c.pin ? pinRow(c.pin, 'guaranteed cargo')
-               : lootRow(c.table, c.placementIndex == null ? c.kind : `${c.kind} #${c.placementIndex}`,
+               : lootRow(c.table, c.placementIndex == null ? c.kind
+                   : `${c.kind} #${c.placementIndex}${c.fromFloor ? ' · floor table' : ''}`,
                          c.pointer, 'LevelData', state.levelId))),
     ].filter(Boolean).join('')
       || '<div class="inline-empty">No loot on this room</div>';
@@ -845,7 +850,7 @@ function renderRooms() {
         <div class="content-list">${staticEntries}</div>
       </section>
       <section class="${colCls('loot')} loot-content" data-kind="loot">
-        <div class="content-head">Loot <span>${room.cargoLoot.length + (room.roomClearLoot ? 1 : 0)}</span></div>
+        <div class="content-head">Loot <span>${room.cargoLoot.length + (room.guaranteedDrops || []).length}</span></div>
         <div class="content-list">${lootEntries}</div>
       </section>
       <section class="${colCls('enemies')} enemy-content" data-kind="enemies">
@@ -1234,7 +1239,7 @@ function renderMap() {
     const chips = [];
     if (bodies.placed) chips.push(`<span class="chip enemies">${bodies.label} enemies</span>`);
     if (room.staticPlacements.length) chips.push(`<span class="chip">${room.staticPlacements.length} static</span>`);
-    if (room.lootPlanId) chips.push('<span class="chip loot">loot</span>');
+    if ((room.guaranteedDrops || []).length) chips.push('<span class="chip loot" title="owes a prize to the last kill of its opening wave">owes</span>');
     if (room.bossId) chips.push('<span class="chip boss">boss</span>');
 
     const title = [
@@ -1872,15 +1877,10 @@ async function setLootTable(pointer, tableId) {
       [{ op: 'remove', path: pointer }], 'loot table cleared');
     return;
   }
-  if (current == null) {
-    // The key is absent, so there is no span to replace. Adding a key to an
-    // existing object is not something the span writer does yet.
-    showToast('This room has no loot key yet — add it in the JSON first');
-    await reloadLevel();
-    return;
-  }
+  // `put`: set the key if the entry has one, add it if the crate was
+  // rolling the floor table instead.
   await applyEdits('LevelData', state.levelId,
-    [{ op: 'set', path: pointer, value: tableId }], `loot → ${tableId}`);
+    [{ op: 'put', path: pointer, value: tableId }], `loot → ${tableId}`);
 }
 
 /** Point a skill platform at the passive skill it grants.
@@ -1901,11 +1901,10 @@ function pointerValue(pointer) {
   const room = currentFloor().rooms.find((r) => pointer.startsWith(r.pointer + '/'));
   if (!room) return null;
   const rest = pointer.slice(room.pointer.length + 1);
-  if (rest === 'lootPlanId') return room.lootPlanId;
   const m = rest.match(/^staticPlacements\/(\d+)\/lootTableId$/);
   if (m) {
     const entry = room.cargoLoot.find((c) => c.placementIndex === Number(m[1]));
-    return entry ? entry.table.id : null;
+    return entry && !entry.fromFloor ? entry.table.id : null;
   }
   const sk = rest.match(/^staticPlacements\/(\d+)\/skillId$/);
   if (sk) return room.staticPlacements[Number(sk[1])].skillId;
@@ -1966,17 +1965,24 @@ async function addSkill(skillId) {
 
 async function addLoot(tableId) {
   const room = selectionRoom();
-  // A specific loot slot was picked (one cargo box, or the room-clear plan),
-  // so assign to exactly that pointer.
+  // A specific loot slot was picked (one cargo box), so assign to exactly
+  // that pointer.
   if (state.selection.kind === 'loot' && state.selection.pointer) {
     await setLootTable(state.selection.pointer, tableId);
     return;
   }
-  if (room.lootPlanId == null) {
-    showToast(`${room.roomId} has no lootPlanId key yet — add it in the JSON first`);
+  // Nothing picked: the room-clear table this used to set is gone
+  // (OZX-1381), and a crate carrying the table is what upstream now uses for
+  // a room's own loot — a skill table included (OZX-1348).
+  if (!room.staticPlacementsDeclared) {
+    showToast(`${room.roomId}: staticPlacements is null — fix that first`);
     return;
   }
-  await setLootTable(`${room.pointer}/lootPlanId`, tableId);
+  await applyEdits('LevelData', state.levelId, [{
+    op: 'append',
+    path: `${room.pointer}/staticPlacements`,
+    value: { kind: 'cargo', count: 1, lootTableId: tableId },
+  }], `a crate of ${tableId} added to ${room.roomId}`);
 }
 
 async function addEnemy(enemyId) {

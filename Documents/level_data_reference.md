@@ -109,7 +109,8 @@ LevelData
 | `staticPlacements` | StaticPlacementEntryData[] | **非 cave 房必须声明**（空数组也行），见 §4.5 | 83 声明 / 28 非空 |
 | `appearance` | RoomAppearanceData | 本房相对楼层主题的差异，见 §4.7 | 11 |
 | `templateId` | string | 钉死 tilemap 模板，跳过 `RoomTilemapQuery` 匹配 | 8 |
-| `lootPlanId` | string | 清场掉落表 | 8 |
+| ~~`lootPlanId`~~ | string | **OZX-1381 删除**（房间清场掉落通道没了；写了被静默丢弃 → `LEVEL_FIELD_REMOVED`）。房间自己的奖品写 `guaranteedDrops`，技能等走 cargo 的 `lootTableId` | 0 |
+| `guaranteedDrops` | GuaranteedDrop[] | OZX-1380：房间欠的奖品（钥匙、保底装备），由**开局波最后被击杀的那只**额外支付；要求房间有遭遇且开局波必有一具身体，见 `level_referenced_data.md` §1.6 | 4 |
 | `hasTeleportSpot` | bool | 传送点 | 5 |
 | `requiredForExitItemIds` | string[] | 未拾取这些 item 则门不开（对照本房实际掉落匹配） | 2 |
 | `exitBlockedTip` | string | `requiredForExitItemIds` 还在地上、出口拒绝放行时 HUD 横幅显示的一行（OZX-1168，规则同 `lockedTip`，见 §4.4） | 2 |
@@ -371,7 +372,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |
-| `caves` | `{linkType, encounterId, lootPlanId}` | 1 |
+| `caves` | `{linkType, encounterId}`（`lootPlanId` 已删，OZX-1381） | 1 |
 | `bossId` | 楼层 boss，合成为单敌人 inline encounter | 0（字段写了 null） |
 | `stairs` | `{targetFloor, linkType, encounterId}` | 0 |
 | `rooms` | 预定义房间；`generatorType="static"` 时必填，否则 fail-fast | 0 |
@@ -383,7 +384,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 ### 5.2 StageTypePlanData
 
-`{ stageType, portion, encounterId, lootPlanId, enemyBudgetCut? }`。`portion` 是相对比例（不必和为 1，实现按总和归一）。
+`{ stageType, portion, encounterId, enemyBudgetCut?, secondWave? }`（`lootPlanId` / `overflowLootPlanId` 随清场通道删除，OZX-1381 → `LEVEL_FIELD_REMOVED`）。`portion` 是相对比例（不必和为 1，实现按总和归一）。
 
 **`enemyBudgetCut`（OZX-1089，float [0,1]，省略 = 0）是「还回去多少」，不是「乘几」。** 这个方向是刻意的：`JsonUtility` 把省略的 float 读成 0，所以一个「0 = ×1」的系数会把作者写的 `0`（「这里不要敌人」）读成「拿满预算」——正是这个字段要修的那个 bug 换一层。写成 cut：省略 = 0 = 什么都不改，而危险的那个值（1 = 完全不刷敌人）必须手打。
 
@@ -408,7 +409,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 |---|---|---|
 | `probabilistic[]` | `itemId` **或** `tableId`, `weight`(0=1.0), `minCount`/`maxCount`(0=1), `floorCap`(0=无限) | 采样成每房的 `inlineLootPlan`，并合成楼层表 |
 | `probabilisticPresets[]` | `loot_presets.json` 的组名 | 加载期前置到 `probabilistic` 前面（OZX-1012，OLE 尚未展开——见 OLE-10） |
-| `guaranteed[]` | `itemId` **或** `tableId`, `count`, `chance`(0=必出), **四**选一绑定：`boundEnemyId` / `boundRoomId` / `boundStage` / ~~`boundWaveLastEnemy`~~ | **必须且只能设一个绑定**；`boundWaveLastEnemy` 现在无条件抛错（named wave 已移除，OZX-650） |
+| `guaranteed[]` | `itemId` **或** `tableId`, `count`, `chance`(0=必出), **二**选一绑定：`boundEnemyId` / `boundStage`（~~`boundRoomId`~~ OZX-1380 删、~~`boundWaveLastEnemy`~~ OZX-650 删 → `LOOT_GUARANTEED_BINDING_DEAD`） | **必须且只能设一个绑定**；落点 = 选中房间开局波最后被击杀的那只（追加到该房 `guaranteedDrops`） |
 | `categoryCaps[]` | `category`（taxonomy 节点）, `maxPerFloor` | 每层每类上限 |
 | `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
 | `stageMustDrop[]` | `stageType`, `drops[{itemId` **或** `tableId, count, chance}]` | 该 stage 的**每个房间**各生成一个 cargo；`chance`(0/省略=必出) **逐房**在生成期掷（OZX-1109） |
@@ -422,7 +423,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | 边 | 漏了会怎样 |
 |---|---|
 | `probabilistic[].itemId` | `RegisterScaledTable` 把条目**原样**搬进合成表的 `LootEntryData`，从不查 id。表照常工作，只是永远少掉一样东西，零报错 |
-| `guaranteed[].itemId` / `.tableId` / `.boundEnemyId` / `.boundStage` / `.boundRoomId` | 生成期抛（`LevelBasePlanAssigner`）——抛得对，但抛在跑生成器的时候 |
+| `guaranteed[].itemId` / `.tableId` / `.boundEnemyId` / `.boundStage` | 生成期抛（`LevelBasePlanAssigner`）——抛得对，但抛在跑生成器的时候 |
 | `categoryCaps[].category` | 不是 taxonomy 节点 → 匹配不到任何道具，这条 cap 读起来像调过、实际什么都没做。**注意 `categoryCaps` 至今没有 fail-fast**，而同样的问题 OZX-1044 给 `stageWeights.category` 加了一条 |
 | `stageMustDrop[].drops[].itemId` | 同 probabilistic |
 | `stageMustDrop[].drops[].tableId` | 同 guaranteed：二选一、`pickOne` 且非空，生成期抛（OZX-1109） |
@@ -431,7 +432,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 `stageMustDrop[].drops[].chance` 的 0 = 必出是刻意的：`MustDropItemData` 是 `[Serializable]` 子配置，`JsonUtility` 把省略的 float 读成 0，「省略 = 必出」只能这么表达；「永不掉」无法表达也是刻意的——删条目即可。区间外 `LOOT_MUST_DROP_CHANCE_INVALID`，空 `stageType` 上游抛，报 `LOOT_MUST_DROP_UNSCOPED`。
 
-`boundRoomId` 只有手写 `rooms` 的楼层才查得了——程序化房间 id 是生成期造的，作者写不出来，所以在生成楼层上没有可比对的集合。
+`boundRoomId` 已被 OZX-1380 删除：房间由生成器选（能承载的房间 = 开局波必有身体的那些）。
 
 `category` 存不存在要查**节点表**，不能用「它底下有没有道具」判断：中间节点自己不直接挂道具也是合法节点（上游为此专门有 `HasCategory`）。
 
@@ -571,10 +572,10 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 几个必须知道的细节：
 
 1. **stage 按 BFS 顺序分配**（`OrderRoomsByBFS`，从 start 房开始），比例用**最大余数法**（`PortionResolver`）换算成整数房间数，保证总和等于房间数。
-2. **stage 赋值会覆盖房间的 `encounterId` 和 `lootPlanId`**——包括把它们覆盖成 `null`。在 plan 驱动的楼层里，`FloorPlanData.rooms` 上手写的 encounter 会被 stage 条目盖掉。
-3. 比例分配后剩下的房间走 overflow，默认 `stageType = pressure`、`lootPlanId = loot_common`。
+2. **stage 赋值会覆盖房间的 `encounterId`**——包括把它覆盖成 `null`。在 plan 驱动的楼层里，`FloorPlanData.rooms` 上手写的 encounter 会被 stage 条目盖掉。
+3. 比例分配后剩下的房间走 overflow，默认 `stageType = pressure`。
 4. enemy pool 先合成 `inlineEncounter`；只要 floor 的 `probabilistic` 非空，随后合成的楼层表就会覆盖这些 action 的 `dropTableId`——**enemy pool entry 自带的 `dropTableId` 因此可能不生效**。
-5. `guaranteed.boundEnemyId` 写的是第一个匹配 action 的 `guaranteedDrop` pin，**不再覆盖它的 `dropTableId`**（OZX-1041）；过渡钥匙同理，落在钥匙房最后一个 launch 的 pin 上。两个字段互不覆盖，所以第 4 步和第 5 步之间**不再有写入顺序依赖**——这是过去「我改的 drop 没生效」的主要来源之一。
+5. `guaranteed` 条目与过渡钥匙追加到选中房间的 `guaranteedDrops`（OZX-1380），由开局波最后被击杀的那只支付，**不碰任何 `dropTableId`**——所以第 4 步和第 5 步之间没有写入顺序依赖。无开局身体的房间（含 release）不能被选中，生成时抛。
 6. 编译产物落在 `[NonSerialized]` 字段上（§2），因此源 json 无法解释「这个 seed 下这个房间到底有什么」。这正是工具要提供 Effective 视图的原因。
 
 ---
@@ -640,7 +641,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - 建双向门时同时生成孪生；建跨层楼梯时同时生成对侧反向记录。
 - `staticPlacements` 在新建非 cave 房时默认写 `[]`，不要留 null。
 - 区分「未填」与「填了 0/空」：`stageType`、`roomShape`、`generatorType`、所有 `count`/`weight`/`portion` 都要三态。
-- 引用字段（`encounterId`/`lootPlanId`/`templateId`/`enemyId`/`itemId`/`skillId`/`keyId`）只能从现有 id 中选。
+- 引用字段（`encounterId`/`templateId`/`enemyId`/`itemId`/`skillId`/`keyId`/`lootTableId`）只能从现有 id 中选。
 - 程序化关卡必须能按固定 seed 编译并展示 §6 的覆盖链，否则设计师无法解释「为什么我改的 drop 没生效」。
 
 **不要做**

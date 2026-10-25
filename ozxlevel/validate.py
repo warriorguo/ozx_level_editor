@@ -149,8 +149,17 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                      f"bossId alone does not drive EncounterRunner",
                                      entity=level_id, pointer=f"{rptr}/bossId"))
 
+            # OZX-1381 deleted the room-clear channel. JsonUtility drops the
+            # field unread, so a room still naming one drops nothing on clear.
+            if room.get("lootPlanId"):
+                issues.append(_issue(
+                    "error", "LEVEL_FIELD_REMOVED",
+                    f"{rid}: lootPlanId '{room['lootPlanId']}' — the room-clear loot channel "
+                    f"was removed (OZX-1381) and the field is dropped unread. Put the table on "
+                    f"a cargo entry's lootTableId, or the prize in guaranteedDrops",
+                    entity=level_id, pointer=f"{rptr}/lootPlanId"))
+            issues.extend(_room_pin_issues(ds, level_id, rid, rptr, room))
             for name, dtype in (("encounterId", "EncounterData"),
-                                ("lootPlanId", "LootTableData"),
                                 ("bossId", "EnemyData")):
                 ref = room.get(name)
                 if ref and ds.get(dtype, ref) is None:
@@ -1025,108 +1034,137 @@ def _rail_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
 
 def _pin_issues(ds: Dataset, encounter_id: str, index: int,
                 sptr: str, action: dict) -> list[dict]:
-    """`EncounterAction.guaranteedDrop` — the prize pinned to a launch.
+    """`EncounterAction.guaranteedDrop` — removed by OZX-1380.
 
-    OZX-1041 split the one `dropTableIdOverride` string into two fields
-    because the two meanings kept overwriting each other: pinning a prize used
-    to mean replacing the launch's drop table, which handed the prize to every
-    enemy the launch spawned and cost them the loot they would have dropped.
-
-    Every rule here is `EncounterValidator` / `LootTableDraw.Require`, moved
-    forward to editing time, and every one of them guards a failure that is
-    otherwise silent or arrives mid-room:
-
-    - a half-filled pin pays nobody, and JsonUtility materialises the object
-      whether or not it was authored, so `guaranteedDrop != null` proves
-      nothing — a pin exists iff it names an item or a table;
-    - an `itemId` that is really a loot table id drops nothing;
-    - a `tableId` that is not `pickOne` rolls each entry independently, so the
-      pin's count stops meaning anything;
-    - a pin on a `viaSpawner` launch can be discarded with the request (the
-      spawner dies, the room changes) — and the pin can be the floor's key.
+    The prize pinned to a launch moved to the ROOM (`guaranteedDrops`), paid
+    by the last-killed body of the opening wave: a pin on a launch could ride
+    a later wave the player walks away from, or a spawner request that is
+    discarded. JsonUtility drops the undeclared field without a word, so a
+    file still carrying one pays nothing. A pin exists iff it names an item
+    or a table (the object itself is always materialised).
     """
     pin = action.get("guaranteedDrop")
-    if not isinstance(pin, dict):
+    if not isinstance(pin, dict) or not (pin.get("itemId") or pin.get("tableId")):
         return []
-    pptr = f"{sptr}/action/guaranteedDrop"
+    return [_issue(
+        "error", "ENCOUNTER_PIN_REMOVED",
+        f"step {index}: guaranteedDrop '{pin.get('itemId') or pin.get('tableId')}' is on the "
+        f"launch, where OZX-1380 removed it; the field is dropped unread. Move it to the "
+        f"room's guaranteedDrops, which the last kill of the opening wave pays",
+        entity=encounter_id, pointer=f"{sptr}/action/guaranteedDrop")]
+
+
+def pin_shape_issues(ds: Dataset, entity: str, where: str, pptr: str,
+                     pin: dict) -> list[dict]:
+    """One `GuaranteedDrop`: `EncounterValidator.ValidateGuaranteedDrop`.
+
+    An item or a `pickOne` table with entries (`LootTableDraw.Require`),
+    never both and never neither; at least one copy; and a chance in (0, 1],
+    0 meaning "not authored" (always). Every one of these is otherwise a
+    prize that arrives as nothing, or a throw at RoomReady.
+    """
     item_id = pin.get("itemId") or None
     table_id = pin.get("tableId") or None
     count = pin.get("count") or 0
     chance = pin.get("chance") or 0
     issues: list[dict] = []
 
+    def err(code, message, pointer=pptr):
+        issues.append(_issue("error", code, f"{where} {message}", entity=entity, pointer=pointer))
+
     if item_id and table_id:
-        return [_issue(
-            "error", "ENCOUNTER_PIN_AMBIGUOUS",
-            f"step {index}: guaranteedDrop names both itemId '{item_id}' and "
-            f"tableId '{table_id}'; a pin drops one named thing or draws from "
-            f"one table, never both",
-            entity=encounter_id, pointer=pptr)]
-
-    if not item_id and not table_id:
-        if count or chance:
-            issues.append(_issue(
-                "error", "ENCOUNTER_PIN_EMPTY",
-                f"step {index}: guaranteedDrop names neither itemId nor tableId, "
-                f"so nothing would be dropped",
-                entity=encounter_id, pointer=pptr))
+        err("ROOM_PIN_AMBIGUOUS",
+            f"names both itemId '{item_id}' and tableId '{table_id}'; a pin drops one "
+            f"named thing or draws from one table, never both")
         return issues
-
+    if not item_id and not table_id:
+        err("ROOM_PIN_EMPTY", "names neither itemId nor tableId, so nothing would drop")
+        return issues
     if item_id:
         if ds.get("ItemData", item_id) is None:
             named_table = ds.get("LootTableData", item_id) is not None
-            issues.append(_issue(
-                "error", "ENCOUNTER_PIN_ITEM_MISSING",
-                f"step {index}: guaranteedDrop.itemId '{item_id}' is not an ItemData"
-                + (" — it is a loot table; a pin that draws from a table uses "
-                   "`tableId`" if named_table else ""),
-                entity=encounter_id, pointer=f"{pptr}/itemId"))
+            err("ROOM_PIN_ITEM_MISSING",
+                f"itemId '{item_id}' is not an ItemData"
+                + (" — it is a loot table; a pin that draws from a table uses `tableId`"
+                   if named_table else ""), f"{pptr}/itemId")
     else:
         table = ds.get("LootTableData", table_id)
         if table is None:
-            issues.append(_issue(
-                "error", "LOOT_TABLE_MISSING",
-                f"step {index}: guaranteedDrop.tableId '{table_id}' does not exist",
-                entity=encounter_id, pointer=f"{pptr}/tableId"))
+            err("LOOT_TABLE_MISSING", f"tableId '{table_id}' does not exist", f"{pptr}/tableId")
         elif not table.value.get("pickOne"):
-            issues.append(_issue(
-                "error", "ENCOUNTER_PIN_TABLE_NOT_PICKONE",
-                f"step {index}: guaranteedDrop.tableId '{table_id}' is not pickOne; "
-                f"an ordinary table rolls every entry independently, so it can yield "
-                f"none or all of them and the pin's count stops meaning anything",
-                entity=encounter_id, pointer=f"{pptr}/tableId"))
+            err("ROOM_PIN_TABLE_NOT_PICKONE",
+                f"tableId '{table_id}' is not pickOne; an ordinary table rolls every entry "
+                f"independently, so it can yield none or all of them and the count stops "
+                f"meaning anything", f"{pptr}/tableId")
         elif not (table.value.get("entries") or []):
-            issues.append(_issue(
-                "error", "ENCOUNTER_PIN_TABLE_EMPTY",
-                f"step {index}: guaranteedDrop.tableId '{table_id}' has no entries; "
-                f"there is nothing for the pin to draw",
-                entity=encounter_id, pointer=f"{pptr}/tableId"))
-
+            err("ROOM_PIN_TABLE_EMPTY", f"tableId '{table_id}' has no entries to draw",
+                f"{pptr}/tableId")
     if count < 1:
-        issues.append(_issue(
-            "error", "ENCOUNTER_PIN_COUNT_INVALID",
-            f"step {index}: guaranteedDrop pins '{item_id or table_id}' with count "
-            f"{count}; a pin that reaches no enemy is never what was meant",
-            entity=encounter_id, pointer=f"{pptr}/count"))
-
-    # 0 is "not authored" and fires every time. Outside (0, 1] is a mistake:
-    # a literal 0 almost certainly means "remove this pin", and reading it as
-    # "always" is the opposite of what was asked.
+        err("ROOM_PIN_COUNT_INVALID",
+            f"pins '{item_id or table_id}' with count {count}; a pin that pays no copy is "
+            f"never what was meant", f"{pptr}/count")
     if chance < 0 or chance > 1:
-        issues.append(_issue(
-            "error", "ENCOUNTER_PIN_CHANCE_INVALID",
-            f"step {index}: guaranteedDrop.chance is {chance}; it must be in (0, 1], "
-            f"or omitted for a pin that always fires. To switch a pin off, delete it",
-            entity=encounter_id, pointer=f"{pptr}/chance"))
+        err("ROOM_PIN_CHANCE_INVALID",
+            f"has chance {chance}; it must be in (0, 1], or omitted for a pin that always "
+            f"fires. To switch a pin off, delete it", f"{pptr}/chance")
+    return issues
 
-    if action.get("viaSpawner"):
+
+def opening_wave_places_a_body(encounter: dict) -> bool:
+    """`EncounterWaves.GuaranteesOpeningBody` (OZX-1380).
+
+    The opening wave is every step before the first one with a condition;
+    its DIRECT launches (not a viaSpawner request, which may be discarded,
+    and not a rail launch, laid on the rail) are the one batch certain to
+    appear. A room can carry guaranteedDrops iff one of them has min ≥ 1.
+    """
+    for step in encounter.get("steps") or []:
+        if (step.get("condition") or {}).get("kind"):
+            break
+        action = step.get("action") or {}
+        if (action.get("verb") == "launch" and not action.get("viaSpawner")
+                and not action.get("railTrainId") and not action.get("railOilTankId")
+                and (action.get("min") or 0) >= 1):
+            return True
+    return False
+
+
+def _room_pin_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
+                     room: dict) -> list[dict]:
+    """`RoomNodeData.guaranteedDrops` (OZX-1380) — what a room owes.
+
+    Paid by the LAST-KILLED body of the room's opening wave, on top of that
+    body's own drops. `EncounterValidator.ValidateRoomPins` runs at RoomReady
+    and throws when the room runs no encounter, or one whose opening wave is
+    not sure to place a body: there is no fallback channel, so nobody would
+    carry the prize — and the prize is usually the floor's key.
+    """
+    pins = room.get("guaranteedDrops") or []
+    if not pins:
+        return []
+    issues: list[dict] = []
+    for i, pin in enumerate(pins):
+        issues.extend(pin_shape_issues(ds, level_id, f"{rid}: guaranteedDrops[{i}]",
+                                       f"{rptr}/guaranteedDrops/{i}", pin or {}))
+    encounter_id = room.get("encounterId")
+    encounter = room.get("inlineEncounter") or (
+        (ds.get("EncounterData", encounter_id) or _NO_DOC).value if encounter_id else None)
+    if not encounter:
+        if encounter_id and ds.get("EncounterData", encounter_id) is None:
+            return issues  # the missing encounter is reported on its own
         issues.append(_issue(
-            "error", "ENCOUNTER_PIN_ON_SPAWNER_CHANNEL",
-            f"step {index}: guaranteedDrop cannot ride a viaSpawner launch. A channel "
-            f"request can be legitimately discarded — the spawner is killed, "
-            f"emitMaxTotal is spent, the room changes — so the pin would be lost in "
-            f"silence, and a pin can be the key the floor is gated on",
-            entity=encounter_id, pointer=pptr))
+            "error", "ROOM_PIN_NO_CARRIER",
+            f"{rid}: owes {len(pins)} guaranteedDrops but runs no encounter; they are paid "
+            f"by the last-killed enemy of the opening wave, and this room has none",
+            entity=level_id, pointer=f"{rptr}/guaranteedDrops"))
+    elif not opening_wave_places_a_body(encounter):
+        issues.append(_issue(
+            "error", "ROOM_PIN_NO_CARRIER",
+            f"{rid}: owes {len(pins)} guaranteedDrops, but encounter "
+            f"'{encounter_id or encounter.get('id') or '(inline)'}' has no opening-wave launch "
+            f"sure to place a body (a direct launch with min >= 1 before the first "
+            f"conditioned step), so nobody carries them",
+            entity=level_id, pointer=f"{rptr}/guaranteedDrops"))
     return issues
 
 
@@ -1377,6 +1415,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                                  f"floor {fi}: enemyPool '{ref}' does not exist",
                                  entity=plan_id,
                                  pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
+    issues.extend(_removed_plan_field_issues(plan_id, fi, fptr, floor))
     issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
@@ -1502,10 +1541,12 @@ def _slot_target_issues(ds: Dataset, plan_id: str, where: str, ptr: str,
     return issues
 
 
-# OZX-650 removed named waves from the encounter system, and the assigner
-# throws on sight rather than trying to resolve one.
-DEAD_BINDING = "boundWaveLastEnemy"
-GUARANTEED_BINDINGS = ("boundEnemyId", DEAD_BINDING, "boundRoomId", "boundStage")
+# OZX-650 removed named waves from the encounter system; OZX-1380 removed
+# the room binding (a guarantee is paid in a room the generator chooses, by
+# the last kill of its opening wave). Neither field is declared any more, so
+# JsonUtility drops them unread and the entry is left with no binding.
+DEAD_BINDINGS = ("boundWaveLastEnemy", "boundRoomId")
+GUARANTEED_BINDINGS = ("boundEnemyId", "boundStage")
 
 
 def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
@@ -1533,9 +1574,6 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
         return []
     lptr = f"{fptr}/floorLootPlan"
     stages = {s.get("stageType") for s in (floor.get("stageTypes") or [])}
-    # Only a hand-authored floor has room ids anyone could bind to; a
-    # procedural floor's are invented at generation and are not authorable.
-    authored_rooms = {r.get("roomId") for r in (floor.get("rooms") or [])}
     issues: list[dict] = []
 
     for pi, entry in enumerate(plan.get("probabilistic") or []):
@@ -1562,21 +1600,24 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
                 f"probability",
                 entity=plan_id, pointer=f"{gptr}/chance"))
 
+        dead = [b for b in DEAD_BINDINGS if entry.get(b)]
+        for b in dead:
+            issues.append(_issue(
+                "error", "LOOT_GUARANTEED_BINDING_DEAD",
+                f"{where} binds with `{b}`, which no longer exists"
+                + (" — the encounter system has had no named waves since OZX-650"
+                   if b == "boundWaveLastEnemy" else
+                   " — OZX-1380 removed it; the generator picks the room") +
+                ". Use boundEnemyId or boundStage",
+                entity=plan_id, pointer=f"{gptr}/{b}"))
         bound = [b for b in GUARANTEED_BINDINGS if entry.get(b)]
-        if len(bound) != 1:
+        if len(bound) != 1 and not (dead and not bound):
             issues.append(_issue(
                 "error", "LOOT_GUARANTEED_BINDING_COUNT",
                 f"{where} must have EXACTLY one binding "
                 f"({' / '.join(GUARANTEED_BINDINGS)}); got {len(bound)}"
                 + (f" ({', '.join(bound)})" if bound else ""),
                 entity=plan_id, pointer=gptr))
-        elif bound[0] == DEAD_BINDING:
-            issues.append(_issue(
-                "error", "LOOT_GUARANTEED_BINDING_DEAD",
-                f"{where} binds with `{DEAD_BINDING}`, which is no longer supported "
-                f"— the encounter system has had no named waves since OZX-650. Use "
-                f"boundEnemyId",
-                entity=plan_id, pointer=f"{gptr}/{DEAD_BINDING}"))
 
         enemy = entry.get("boundEnemyId")
         if enemy and ds.get("EnemyData", enemy) is None:
@@ -1594,12 +1635,6 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
                 f"room can carry it",
                 entity=plan_id, pointer=f"{gptr}/boundStage"))
 
-        room = entry.get("boundRoomId")
-        if room and authored_rooms and room not in authored_rooms:
-            issues.append(_issue(
-                "error", "DATA_REFERENCE_MISSING",
-                f"{where}: boundRoomId '{room}' is not a room on this floor",
-                entity=plan_id, pointer=f"{gptr}/boundRoomId"))
 
     known_categories = ds.taxonomy()
     for ci, entry in enumerate(plan.get("categoryCaps") or []):
@@ -2100,6 +2135,29 @@ def _pool_variant_issues(ds: Dataset, plan_id: str, fi: int,
             is_spawner=bool(entry.get("minionId")
                             and (entry.get("minionsPerSpawner") or 0) > 0)))
     return issues
+
+
+def _removed_plan_field_issues(plan_id: str, fi: int, fptr: str,
+                               floor: dict) -> list[dict]:
+    """Room-clear loot on a plan — gone with the channel (OZX-1381).
+
+    `StageTypePlanData.lootPlanId`, `overflowLootPlanId` and
+    `CavePlanData.lootPlanId` fed the room-clear table, which no longer
+    exists. JsonUtility drops undeclared fields without a word, so each is a
+    line that reads as tuned and does nothing.
+    """
+    found = [(f"{fptr}/stageTypes/{si}/lootPlanId", f"stageTypes[{si}].lootPlanId")
+             for si, st in enumerate(floor.get("stageTypes") or []) if st.get("lootPlanId")]
+    if floor.get("overflowLootPlanId"):
+        found.append((f"{fptr}/overflowLootPlanId", "overflowLootPlanId"))
+    found += [(f"{fptr}/caves/{ci}/lootPlanId", f"caves[{ci}].lootPlanId")
+              for ci, cave in enumerate(floor.get("caves") or []) if (cave or {}).get("lootPlanId")]
+    return [_issue(
+        "error", "LEVEL_FIELD_REMOVED",
+        f"floor {fi}: {name} feeds the room-clear loot channel, which OZX-1381 removed; the "
+        f"field is dropped unread. Room loot comes from floorLootPlan (crates and bodies) and "
+        f"guaranteed / stageMustDrop",
+        entity=plan_id, pointer=pointer) for pointer, name in found]
 
 
 def _rail_train_entry_issues(ds: Dataset, plan_id: str, fi: int,

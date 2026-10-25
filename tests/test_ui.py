@@ -53,18 +53,6 @@ pytestmark = pytest.mark.skipif(
     reason="needs a sibling ozx_base checkout and node/npm")
 
 
-def _stamp_a_pin(api, level):
-    """Give the first wave of the first floor a `guaranteedDrop` (OZX-1041).
-
-    Writes the view the way the assigner would, so the client is exercised on
-    the shape it will actually meet: a pin drawn beside the wave's table, not
-    in place of it.
-    """
-    wave = next(e for r in level["floors"][0]["rooms"] for e in r["enemies"])
-    wave["drop"]["pin"] = api.dataset.wave_pin(
-        {"guaranteedDrop": {"itemId": "key_silver", "count": 1, "chance": 0.07}})
-
-
 @pytest.fixture(scope="module")
 def fixtures(tmp_path_factory):
     """Snapshot the API payloads the page loads at boot."""
@@ -84,7 +72,7 @@ def fixtures(tmp_path_factory):
     def loot_slots(entry):
         rooms = api.level(entry["id"])["floors"][0]["rooms"]
         return sum(len(r["enemies"]) + len(r["cargoLoot"] or [])
-                   + (1 if r["roomClearLoot"] else 0) for r in rooms)
+                   + len(r["guaranteedDrops"]) for r in rooms)
 
     chosen = max((l for l in levels if l["floors"] > 1),
                  key=loot_slots, default=levels[0])
@@ -93,11 +81,6 @@ def fixtures(tmp_path_factory):
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
     (out / "cfg.json").write_text(json.dumps(api.get_config()))
     level = api.level(chosen["id"])
-    # No hand-authored encounter carries a pin — `guaranteedDrop` is written
-    # by the assigner, so it only ever reaches this tool through a generated
-    # level. The page still has to draw one, so one is stamped in here rather
-    # than left to a session capture that may or may not be on this machine.
-    _stamp_a_pin(api, level)
     (out / "lvl.json").write_text(json.dumps(level))
     # A plan too: it is a different document kind with no rooms, and the
     # client has a whole second render path for it.

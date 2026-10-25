@@ -1,4 +1,5 @@
-"""Pinned drops — `guaranteedDrop` on a launch, `guaranteedCargo` on a room.
+"""Pinned drops — a room's `guaranteedDrops`, `guaranteedCargo`, and the
+launch pin they replaced.
 
 OZX-1041 split one string into two fields. `EncounterAction.dropTableIdOverride`
 used to mean both "what this group rolls" and "what is pinned here", and the
@@ -19,6 +20,11 @@ What that leaves for this side:
 The pin object is materialised by JsonUtility whether or not it was authored,
 so "is there a pin" is never `guaranteedDrop != null` — it is "does it name
 something to drop". That is the shape most of these tests are about.
+
+OZX-1380 then moved the pin off the launch onto the ROOM: `guaranteedDrops`,
+paid by the last-killed body of the opening wave, which is the one batch a
+player cannot walk away from. A launch pin is now a removed field; the shape
+rules below are the room's.
 """
 
 import pathlib
@@ -29,7 +35,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ozxlevel.dataset import Dataset  # noqa: E402
-from ozxlevel.validate import validate_encounter, validate_loot  # noqa: E402
+from ozxlevel.validate import validate_encounter, validate_level, validate_loot  # noqa: E402
 
 OZX_BASE = pathlib.Path.home() / "Codes/github.com/warriorguo/ozx_base"
 pytestmark = pytest.mark.skipif(
@@ -99,8 +105,23 @@ def test_an_unauthored_pin_object_is_not_a_pin(ds):
     assert codes(ds, launch(guaranteedDrop={})) == codes(ds, launch())
 
 
+def room_codes(ds, *pins, encounter=None):
+    """Validate chapter_1's key room with `pins` as its guaranteedDrops."""
+    doc = ds.get("LevelData", "chapter_1")
+    room = next(r for f in doc.value["floors"] for r in f["rooms"] if r.get("guaranteedDrops"))
+    before = (list(room["guaranteedDrops"]), room.get("encounterId"))
+    room["guaranteedDrops"] = list(pins)
+    if encounter is not None:
+        room["encounterId"] = encounter
+    try:
+        return [i["code"] for i in validate_level(ds, "chapter_1")
+                if i["code"].startswith(("ROOM_PIN", "LOOT_TABLE"))]
+    finally:
+        room["guaranteedDrops"], room["encounterId"] = before
+
+
 def test_a_count_with_nothing_to_drop_is_an_error(ds):
-    assert "ENCOUNTER_PIN_EMPTY" in codes(ds, launch(guaranteedDrop={"count": 2}))
+    assert "ROOM_PIN_EMPTY" in room_codes(ds, {"count": 2})
 
 
 # ── what a pin resolves to ───────────────────────────────────────────────
@@ -125,8 +146,9 @@ def test_a_table_pin_carries_the_roster_it_draws_from(ds):
     # loot_equipment_f0 is half table-valued itself, so a one-level read would
     # report two of these four and miss the cores and drives entirely.
     assert len(pin["drawsFrom"]) > 4
-    assert "shotgun_makeshift" in pin["drawsFrom"]
-    assert any(i.startswith("core_") for i in pin["drawsFrom"])
+    nested = next(e["tableId"] for e in ds.loot_table_view("loot_equipment_f0")["entries"]
+                  if e["tableId"])
+    assert set(ds.table_items(nested)) <= set(pin["drawsFrom"])
 
 
 def test_an_unauthored_chance_is_always_not_never(ds):
@@ -163,17 +185,27 @@ def test_a_pinned_skill_counts_as_a_skill_on_the_wave(ds):
 # ── the rules, moved forward from EncounterValidator ─────────────────────
 
 
+def test_the_shipped_key_rooms_are_clean(ds):
+    """ch1 / ch2 / the test levels carry key_gold in guaranteedDrops."""
+    for level_id in ("chapter_1", "chapter_2", "level_test", "factory2_test"):
+        assert not [i for i in validate_level(ds, level_id)
+                    if i["code"].startswith("ROOM_PIN")], level_id
+
+
+def test_a_pin_on_a_launch_is_a_removed_field(ds):
+    """OZX-1380: JsonUtility drops it, so the prize would pay nothing."""
+    assert "ENCOUNTER_PIN_REMOVED" in codes(ds, launch(
+        guaranteedDrop={"itemId": "key_silver", "count": 1}))
+
+
 def test_a_pin_naming_both_an_item_and_a_table_is_refused(ds):
-    assert "ENCOUNTER_PIN_AMBIGUOUS" in codes(ds, launch(
-        guaranteedDrop={"itemId": "key_silver", "tableId": "loot_equipment_f0",
-                        "count": 1}))
+    assert "ROOM_PIN_AMBIGUOUS" in room_codes(
+        ds, {"itemId": "key_silver", "tableId": "loot_equipment_f0", "count": 1})
 
 
 def test_a_pin_whose_item_is_really_a_table_is_caught(ds):
     """The failure it prevents: the pin drops nothing, silently."""
-    found = codes(ds, launch(
-        guaranteedDrop={"itemId": "loot_equipment_f0", "count": 1}))
-    assert "ENCOUNTER_PIN_ITEM_MISSING" in found
+    assert "ROOM_PIN_ITEM_MISSING" in room_codes(ds, {"itemId": "loot_equipment_f0", "count": 1})
 
 
 def test_a_pin_may_only_draw_from_a_pickone_table(ds):
@@ -181,29 +213,37 @@ def test_a_pin_may_only_draw_from_a_pickone_table(ds):
     from nothing to everything and the count stops meaning anything."""
     ordinary = next(d.id for d in ds.of_type("LootTableData")
                     if not d.value.get("pickOne") and d.value.get("entries"))
-    assert "ENCOUNTER_PIN_TABLE_NOT_PICKONE" in codes(ds, launch(
-        guaranteedDrop={"tableId": ordinary, "count": 1}))
-    assert "LOOT_TABLE_MISSING" in codes(ds, launch(
-        guaranteedDrop={"tableId": "no_such_table", "count": 1}))
+    assert "ROOM_PIN_TABLE_NOT_PICKONE" in room_codes(ds, {"tableId": ordinary, "count": 1})
+    assert "LOOT_TABLE_MISSING" in room_codes(ds, {"tableId": "no_such_table", "count": 1})
 
 
-def test_a_pin_that_reaches_no_enemy_is_refused(ds):
-    assert "ENCOUNTER_PIN_COUNT_INVALID" in codes(ds, launch(
-        guaranteedDrop={"itemId": "key_silver", "count": 0}))
+def test_a_pin_that_pays_no_copy_is_refused(ds):
+    assert "ROOM_PIN_COUNT_INVALID" in room_codes(ds, {"itemId": "key_silver", "count": 0})
 
 
 def test_a_chance_outside_the_open_unit_range_is_refused(ds):
-    assert "ENCOUNTER_PIN_CHANCE_INVALID" in codes(ds, launch(
-        guaranteedDrop={"itemId": "key_silver", "count": 1, "chance": 1.5}))
-    assert "ENCOUNTER_PIN_CHANCE_INVALID" not in codes(ds, launch(
-        guaranteedDrop={"itemId": "key_silver", "count": 1, "chance": 1.0}))
+    assert "ROOM_PIN_CHANCE_INVALID" in room_codes(
+        ds, {"itemId": "key_silver", "count": 1, "chance": 1.5})
+    assert "ROOM_PIN_CHANCE_INVALID" not in room_codes(
+        ds, {"itemId": "key_silver", "count": 1, "chance": 1.0})
 
 
-def test_a_pin_cannot_ride_the_spawner_channel(ds):
-    """A channel request can be discarded — and the pin can be the floor key."""
-    assert "ENCOUNTER_PIN_ON_SPAWNER_CHANNEL" in codes(ds, launch(
-        enemyId="jammer", viaSpawner="evil_ground_factory",
-        guaranteedDrop={"itemId": "key_silver", "count": 1}))
+def test_a_room_with_no_opening_body_cannot_carry_a_pin(ds):
+    """No fallback channel: the last kill of the opening wave pays, and an
+    encounter whose first step waits on something has no opening wave."""
+    gated = next(d.id for d in ds.of_type("EncounterData")
+                 if (d.value.get("steps") or [{}])[0].get("condition"))
+    assert "ROOM_PIN_NO_CARRIER" in room_codes(
+        ds, {"itemId": "key_silver", "count": 1}, encounter=gated)
+    assert "ROOM_PIN_NO_CARRIER" in room_codes(
+        ds, {"itemId": "key_silver", "count": 1}, encounter="")
+
+
+def test_the_room_view_carries_what_it_owes(ds):
+    rooms = [r for f in ds.level_view("chapter_1")["floors"] for r in f["rooms"]]
+    owed = [p for r in rooms for p in r["guaranteedDrops"]]
+    assert any(p["itemId"] == "key_gold" for p in owed)
+    assert all(p["pointer"].startswith("/floors/") for p in owed)
 
 
 # ── table-valued loot entries (OZX-1047), which a pin's table is full of ──

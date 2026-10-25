@@ -18,7 +18,8 @@
 | 源字段 | 目标 | 必需性 |
 |---|---|---|
 | `RoomNodeData.encounterId` | EncounterData | 可选（但没有它房间不刷怪） |
-| `RoomNodeData.lootPlanId` | LootTableData | 可选 |
+| ~~`RoomNodeData.lootPlanId`~~ | —— | **OZX-1381 删除**（房间清场通道没了，写了被静默丢弃 → `LEVEL_FIELD_REMOVED`） |
+| `RoomNodeData.guaranteedDrops[].itemId` / `.tableId`（OZX-1380） | ItemData / LootTableData（必须 `pickOne`） | 房间欠的奖品，见 §1.6 |
 | `RoomNodeData.bossId` | EnemyData | 可选（**不驱动刷怪**） |
 | `RoomNodeData.templateId` | Tilemap 文件名 | 可选（不填则走匹配） |
 | `RoomNodeData.requiredForExitItemIds[]` | ItemData | 可选 |
@@ -37,14 +38,14 @@
 | `FloorPlanData.enemyPool[].dropTableId` | LootTableData | 可选（可能被楼层表覆盖） |
 | `FloorPlanData.bossId` | EnemyData | 可选 |
 | `FloorPlanData.transitionKeyId` | ItemData | 可选 |
-| `FloorPlanData.stageTypes[].encounterId/lootPlanId` | EncounterData / LootTableData | 可选 |
+| `FloorPlanData.stageTypes[].encounterId` | EncounterData | 可选（`lootPlanId` 已随清场通道删除，OZX-1381） |
 | `floorLootPlan.probabilistic[].itemId` / `guaranteed[].itemId` / `stageMustDrop[].drops[].itemId` | ItemData | 必需 |
 | `floorLootPlan.probabilistic[].tableId` / `guaranteed[].tableId` / `stageMustDrop[].drops[].tableId`（OZX-1109） | LootTableData（`pickOne`） | 与 itemId 二选一 |
 | `floorLootPlan.guaranteed[].boundEnemyId` | EnemyData | 三选一 |
-| `floorLootPlan.guaranteed[].boundRoomId` | 本层 roomId | 三选一 |
+| ~~`floorLootPlan.guaranteed[].boundRoomId`~~ | —— | **OZX-1380 删除**，绑定只剩 `boundEnemyId` / `boundStage` 二选一 |
 | `floorLootPlan.categoryCaps[].category` | ItemTaxonomy 节点 | 必需 |
 | `floorLootPlan.stageWeights[].category` | ItemTaxonomy 节点 | 可选；留空 = 该 stage 的兜底倍率 |
-| `caves[]/stairs[].encounterId`、`lootPlanId` | EncounterData / LootTableData | 可选 |
+| `caves[]/stairs[].encounterId` | EncounterData | 可选（`caves[].lootPlanId` 已删，OZX-1381） |
 
 ### 数据族之间
 
@@ -55,8 +56,7 @@
 | `EncounterAction.railTrainId` / `EnemyPoolEntryData.railTrainId`（OZX-1309 / OZX-1315） | RailTrainData（`GameData/railenemy/`，`cars` 车头在前） |
 | `EncounterAction.railOilTankId`（OZX-1317） | OilTankData（`GameData/oiltank/`，`railConfig.enabled` 为真的那种，出货 `rail_oil_tank`） |
 | `EncounterAction.dropTableId` | LootTableData |
-| `EncounterAction.guaranteedDrop.itemId` | ItemData（**不是 loot table**） |
-| `EncounterAction.guaranteedDrop.tableId` | LootTableData（必须 `pickOne`） |
+| ~~`EncounterAction.guaranteedDrop`~~ | **OZX-1380 删除**，奖品挪到房间的 `guaranteedDrops`（`ENCOUNTER_PIN_REMOVED`） |
 | `RoomNodeData.guaranteedCargo[].itemId` / `.tableId` | ItemData / LootTableData（`[NonSerialized]`） |
 | `LootEntryData.tableId` | LootTableData（必须 `pickOne`） |
 | `EncounterCondition.triggerId`（`touch`） | 房间里 `kind="trigger"` 的 placement |
@@ -108,7 +108,7 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 | `min` / `max` | 数量区间，闭区间随机 | 最常见是 min==max |
 | `eliteCount` | 前 N 只以 elite 出生 | 11 step |
 | `dropTableId` | 这批敌人摇的表（替换 `EnemyData.dropTableId`） | 10 step |
-| `guaranteedDrop` | 钉在这次 launch 上的奖品，见 §1.6 | 手写数据 **0**（生成期注入） |
+| ~~`guaranteedDrop`~~ | OZX-1380 删除，见 §1.6 | —— |
 | `viaSpawner` | 走生产者通道，见 §1.4 | 20 step（6 个 spawner 类型） |
 | `at` | 生成点类别覆盖 | **0** |
 
@@ -130,44 +130,33 @@ pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntrie
 
 **没有**做的（编辑器必须补）：`enemyId` 是否存在、`dropTableId` 是否存在、`guaranteedDrop.itemId` 是不是 item（而不是 loot table）、`guaranteedDrop.tableId` 指的表是否存在、`viaSpawner` 是否可达、`eliteCount > 0` 的敌人是否有 elite 配置、`at` 类别在目标模板里有没有点、`cleared` 之前是否真的有会产生活体的 step。
 
-### 1.6 掉落表与「钉住的奖品」是两个字段（OZX-1041，核对于 `ozx_base@d2c67d1e`）
+### 1.6 掉落表与「欠的奖品」是两个通道（OZX-1041 → OZX-1380，核对于 `ozx_base@5cd9b22e`）
 
-`EncounterAction.dropTableIdOverride` 曾经同时表达两件事——「这批敌人摇哪张表」和「这里钉了什么奖品」——两个写入方互相覆盖。把奖品钉上去意味着替换整批敌人的掉落表，于是**这批里每一只都掉一份**（OZX-1040：一个钥匙房掉四把钥匙），而且携带者失去了本该掉的战利品。现在拆成两个字段：
+`EncounterAction.dropTableIdOverride` 曾经同时表达两件事——「这批敌人摇哪张表」和「这里钉了什么奖品」——两个写入方互相覆盖（OZX-1040：一个钥匙房掉四把钥匙）。OZX-1041 拆成 `dropTableId` 和 launch 上的 `guaranteedDrop`；**OZX-1380 又把奖品从 launch 挪到了房间**：
 
 | 字段 | 回答的问题 | 语义 |
 |---|---|---|
-| `dropTableId` | 这批敌人摇哪张表 | 替换 `EnemyData.dropTableId`；`EventBindings.OnEnemyDied` 的解析链是 `action.dropTableId → EnemyData.dropTableId → item_exp_small` |
-| `guaranteedDrop` | 这里钉了什么 | **额外**支付，不替换；只给这次 launch 的**前 `count` 只**，与 `eliteCount` 提拔前 k 只完全平行 |
+| `EncounterAction.dropTableId` | 这批敌人摇哪张表 | 替换 `EnemyData.dropTableId`；解析链 `action.dropTableId → EnemyData.dropTableId → item_exp_small` |
+| `RoomNodeData.guaranteedDrops[]` | 这间房欠什么 | 由房间**开局波里最后被击杀的那只**（`InitialWaveLastKill`）**额外**支付。开局波 = 第一个带 condition 的 step 之前的所有 step 里的**直放** launch（不含 `viaSpawner`、不含轨道）；这是玩家唯一走不开的一批 |
 
-`guaranteedDrop` 的形状（`EncounterData.cs:99`，`GuaranteedDrop`）：
+形状（`GuaranteedDrop`）：
 
 ```jsonc
-"guaranteedDrop": { "itemId": "key_silver", "count": 1 }          // 一个具名道具
-"guaranteedDrop": { "tableId": "loot_equipment_f0", "count": 1,   // 或从一张 pickOne 表里抽
-                    "chance": 0.07 }
+"guaranteedDrops": [
+  { "itemId": "key_gold", "count": 1 },                              // 一个具名道具
+  { "tableId": "loot_equipment_f0", "count": 1, "chance": 0.07 }     // 或从一张 pickOne 表里抽
+]
 ```
 
-编辑器必须按下面这几条读写，每一条对应的失败都是静默的：
+编辑器的规则（`EncounterValidator.ValidateRoomPins`，RoomReady 时抛）：
 
-- **「有没有钉东西」不是 `guaranteedDrop != null`。** JsonUtility 会把省略掉的 `[Serializable]` 字段实例化出来，所以对象永远非空。**钉住成立当且仅当 `itemId` 或 `tableId` 非空**。
-- `itemId` 与 `tableId` **互斥**；`itemId` 指向 `items/`，`tableId` 指向 `loot_tables/` 且**必须 `pickOne`**（普通表每条独立摇，产出数量从 0 到全部，`count` 就不再有意义——`LootTableDraw.Require`）。
-- `count >= 1`。`chance` 在 `(0, 1]`，**0 = 没写过 = 每次都掉**；要关掉一个 pin 是删掉它，不是把 `chance` 写成 0。
-- **不能与 `viaSpawner` 同用**：通道请求可以被合法丢弃（spawner 被打死、`emitMaxTotal` 用完、换房间），而 pin 可能正是这层的钥匙。
-- **旧名不是别名。** 文件里还写着 `dropTableIdOverride` 时，JsonUtility 静默丢弃未声明字段，这次 launch 会无声地退回敌人自带的表。编辑器把它报成 Error（`ENCOUNTER_DROP_FIELD_RENAMED`）。
+- **「有没有钉东西」不是对象非空。** JsonUtility 会实例化省略的字段，**钉住成立当且仅当 `itemId` 或 `tableId` 非空**（`ROOM_PIN_EMPTY`）。
+- `itemId` 与 `tableId` **互斥**（`ROOM_PIN_AMBIGUOUS`）；`tableId` 必须 `pickOne` 且非空（`ROOM_PIN_TABLE_NOT_PICKONE` / `_EMPTY`）；`count >= 1`；`chance ∈ (0, 1]`，**0 = 没写 = 每次都掉**。
+- **必须有承载者**：房间要跑一个遭遇，且开局波里有一条 `min >= 1` 的直放 launch（`EncounterWaves.GuaranteesOpeningBody`），否则没人付——**没有回退通道**，而欠的通常就是这层的钥匙（`ROOM_PIN_NO_CARRIER`）。release 这类无敌人房因此不能欠东西，它的保底走 `stageMustDrop`（落箱子）。
+- launch 上还写着 `guaranteedDrop` → 被静默丢弃（`ENCOUNTER_PIN_REMOVED`）。旧名 `dropTableIdOverride` 同理（`ENCOUNTER_DROP_FIELD_RENAMED`）。
 
-**钥匙不再是一张表。** `InjectGuaranteedDrops` 过去合成一张单条目表 `loot_story_f{n}_0` 盖到钥匙房最后一个 launch 上，还要靠 `CarveKeyCarrier` 把携带者切成独立的一步——那个补丁已经删除，**钥匙房的 step 列表就是 `PoolSampler` 的原样**。现在钥匙是那一步上的 `guaranteedDrop { transitionKeyId, count: 1 }`。同理 `RoomNodeData.guaranteedCargoTableIds`（表 id 列表）变成了 `guaranteedCargo`（`{itemId|tableId, count, chance}` 列表）。
+出货：ch1 `f0_room_1_4`、ch2 `f0_room_3_1`、`level_test` / `factory2_test` 的 `f0_room_0_0` 用它放 `key_gold`。生成楼层由 assigner 追加（过渡钥匙、`floorLootPlan.guaranteed`）。`RoomNodeData.guaranteedCargo`（`stageMustDrop` 落的箱子）是另一回事，仍在。会话 dump 里旧的 launch pin 照常读取显示。
 
-后果有两个，凡是复算掉落的地方都要跟上：
-
-1. **合成表只剩三族**：`loot_floor_f*`、`loot_floor_f*_{stage}`、`loot_key_f{n}`。所有单条目包装表都没有了——「预览里一堆只有一个条目的合成表」这个噪音源消失了。
-2. **guaranteed 箱子掉得比以前多**：它现在既摇房间的常规表、又额外付 pin；以前它只摇那张单条目包装表，也就是只掉那一个道具。多出来的正是这个房间本来该给的常规 cargo 掉落。
-
-**`LootEntryData.tableId`（OZX-1047）**：loot table 的条目本身也可以指向另一张 `pickOne` 表——权重仍是这条自己的机会，变的是命中后从那张表里抽身份。`loot_equipment_f0` 的四条里有两条是这样。把它当成「缺 `itemId` 的条目」会报出一串假的悬空引用，把它当成 `itemId` 直接读会漏掉整棵子树里的道具（比如一次 pin 能不能掉出技能）。
----
-
-## 2. EnemyData（68 份，`GameData/enemies/`）
-
-EnemyData 有 90+ 字段，绝大多数是 AI 调参，与关卡编排无关。下面只列**关卡作者会碰**的部分；完整字段见 `Assets/Scripts/Game.Contracts/Data/EnemyData.cs`。
 
 ### 2.1 分类字段（picker 的列）
 
@@ -252,11 +241,10 @@ enemy picker 至少显示 `category / role / movementType / attackType / footpri
 1. 敌人死亡：`instance/action override` → `EnemyData.dropTableId` → `item_exp_small` 兜底，三者取第一个命中的**一张**表；elite 额外直接给 `item_exp_large`（相加，不替换）。
    （`EventBindings.cs:103-138`。编辑器已按这一条实现：每个 launch wave 的敌人行
    下面挂一行 `DROPS`，标出最终生效的表、它是哪一级命中的，以及表里的物品；
-   带技能的那一行高亮，因为这是**唯一**能靠打怪拿到技能的通道，而它既不在房间的
-   `lootPlanId` 上、也不在 cargo 上，Loot 栏永远看不到。第 3、4 条的楼层合成与
-   cap 仍未实现。）
-2. 房间清场：`inlineLootPlan` 优先于 `lootPlanId`，与敌人掉落、cargo/oiltank 掉落**相加**。
-3. 楼层通道：floor `probabilistic` 合成的楼层表会覆盖 enemy pool entry 自带的 drop override；`guaranteed.boundEnemyId` 再覆盖第一个匹配的 action；自动过渡钥匙还可能覆盖 peak 房最后一个 action。
+   带技能的那一行高亮，因为这是能靠打怪拿到技能的通道，而它不在 cargo 上，Loot
+   栏看不到。第 3、4 条的楼层合成与 cap 仍未实现。）
+2. ~~房间清场~~：OZX-1381 删除（`lootPlanId` / `inlineLootPlan`），全被 cap 掉时也不再补发 exp+heal。房间自己的那一行现在是 `guaranteedDrops`（开局波最后一杀额外支付）。
+3. 楼层通道：floor `probabilistic` 合成的楼层表会覆盖 enemy pool entry 自带的 drop override，并作为 `floorLootTableId` 给每间房的箱子；`guaranteed` 与过渡钥匙追加到选中房间的 `guaranteedDrops`。
 4. `floorCap` / `categoryCap` 按实际事件顺序消费；全部候选被 cap 掉时仍回退 `item_exp_small`。
 
 带共享 cap 的跨通道期望值**没有可靠闭式解**，只能用固定 seed 的确定性模拟给分布，不要显示伪精确的百分比。
