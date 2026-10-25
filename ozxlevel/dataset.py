@@ -676,7 +676,9 @@ class Dataset:
                         if kind:
                             seen[kind] = seen.get(kind, 0) + 1
         known = ["cargo", "oiltank", "toxicbarrel", "pinballhammer", "prop",
-                 "skill", "device", "trigger", "equipment"]
+                 "skill", "device", "trigger", "equipment",
+                 # OZX-1371: picks its own cells, in left-right pairs.
+                 "groundlaser"]
         for k in known:
             seen.setdefault(k, 0)
         return [{"id": k, "meta": f"placement · used {seen[k]}×",

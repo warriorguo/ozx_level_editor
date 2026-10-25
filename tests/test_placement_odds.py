@@ -70,8 +70,9 @@ def codes(ds, entries):
 def test_the_shipped_plan_authors_them_on_the_floor(ds):
     """Not on a room: a procedural floor has none to author them on."""
     view = ds.plan_view("chapter_3")
+    # Ground lasers roll a chance too since OZX-1377; the pod is the prop.
     pods = [p for f in view["floors"] for p in f["defaultStaticPlacements"]
-            if p["chance"]]
+            if p["chance"] and p["kind"] == "prop"]
     assert len(pods) == 3, "chapter_3 writes the pod on all three floors"
     assert all(p["kind"] == "prop" and p["countMin"] == 2 for p in pods)
     assert all(p["chancePercent"] == 20.0 for p in pods)
@@ -187,3 +188,37 @@ def test_an_oil_tank_is_marked_as_skipping_the_start_room(ds):
         assert by_kind["oiltank"]["skipsStartRoom"] is True
         assert by_kind["cargo"]["skipsStartRoom"] is False
         assert by_kind["prop"]["skipsStartRoom"] is False
+
+
+# ── groundlaser (OZX-1371 / OZX-1373 / OZX-1377) ────────────────────────
+
+
+def laser(**extra):
+    return {"kind": "groundlaser", **extra}
+
+
+def test_the_shipped_lasers_roll_a_chance_and_are_clean(ds):
+    lasers = [p for f in ds.plan_view("chapter_3")["floors"]
+              for p in f["defaultStaticPlacements"] if p["kind"] == "groundlaser"]
+    assert lasers and all(p["chancePercent"] == 30.0 for p in lasers)
+    assert not [c for c in codes(ds, [laser(chance=0.3)])
+                if c.startswith(("ROOM_PLACEMENT", "ROOM_GROUNDLASER"))]
+
+
+@pytest.mark.parametrize("entry", [
+    laser(count=6), laser(countMin=1), laser(countMin=4, count=3), laser(countMin=3, count=3),
+    laser(cells=[{"x": 2, "y": 2}]), laser(footprintCols=2), laser(placement="sidewall"),
+])
+def test_a_laser_out_of_its_rules_is_refused(ds, entry):
+    assert "ROOM_GROUNDLASER_INVALID" in codes(ds, [entry])
+
+
+@pytest.mark.parametrize("entry", [laser(), laser(countMin=2, count=2), laser(countMin=3, count=4)])
+def test_a_laser_range_with_an_even_count_is_fine(ds, entry):
+    assert "ROOM_GROUNDLASER_INVALID" not in codes(ds, [entry])
+
+
+def test_a_toxicbarrel_reads_countmin_as_a_range(ds):
+    """OZX-1226: [countMin, count], uniform, rolled once per entry."""
+    assert "ROOM_PLACEMENT_COUNT_MIN_UNREAD" not in codes(
+        ds, [{"kind": "toxicbarrel", "count": 5, "countMin": 2}])

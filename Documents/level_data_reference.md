@@ -554,6 +554,10 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 ---
 
+**更新（核对于 `ozx_base@5cd9b22e`）**：读 `chance` 的 kind 现在是 `prop` 和 `groundlaser`（OZX-1377，`ChanceHonouringKinds`）；`countMin` 除了 prop 的 `sidewall`，还被两个 kind 当作**数量区间**的下限读：`toxicbarrel`（OZX-1226，`RollRangedCount`，`[countMin, count]` 均匀、每条掷一次）和 `groundlaser`。
+
+**`groundlaser`**（OZX-1371，选点 OZX-1373）：固定 12 格（列 {2, 7} × 下组行 {2, 3, 6} / 上组行 {9, 12, 13}，10×16 房），左右成对，优先玩家进门一侧（上门 → 上组，下门 → 下组，侧门或非门进入 → 下组），两台间距须 > 2 格。只读 `countMin` / `count`（台数，缺省 2 / 4，**必须落在 2–4** 且区间里有偶数——票里写的 2–6 已过时）和 `chance`；写 `cells` / footprint / `placement` 都抛（`GroundLaserPlacementLogic.ResolvePairRange` → `ROOM_GROUNDLASER_INVALID`）。ch3–ch6 每层默认 `chance: 0.3`。
+
 ## 6. plan 如何编译成 level
 
 程序化关卡的作者输入是规则，房间是编译产物。编辑器要展示「输入 → 指定 seed 的结果」，就得复刻这条顺序（`LevelBasePlanAssigner.Apply`，逐楼层）：

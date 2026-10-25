@@ -692,13 +692,21 @@ def _cargo_issues(entity: str, where: str, pi: int, pptr: str, p: dict,
 
 
 # OZX-1057: only these adapters read `chance`; anything else throws rather
-# than silently appearing every time. `countMin` is narrower still — see below.
-CHANCE_HONOURING_KINDS = {"prop"}
-# The side-wall fill is the only path that passes `countMin` through to its
-# anchor chooser (`PropSpawnAdapter` → `SideWallPlacementLogic.ChooseAnchors`).
-# The plain random fill next to it does not, so a floor is read there and then
-# dropped — which is the failure this file exists for.
+# than silently appearing every time (`ChanceHonouringKinds`; groundlaser
+# since OZX-1377). `countMin` is narrower still — see below.
+CHANCE_HONOURING_KINDS = {"prop", "groundlaser"}
+# For a prop, the side-wall fill is the only path that passes `countMin`
+# through to its anchor chooser (`PropSpawnAdapter` →
+# `SideWallPlacementLogic.ChooseAnchors`); the plain random fill next to it
+# does not, so a floor is read there and then dropped. Two kinds read it as
+# the low end of a count RANGE instead: toxicbarrel (OZX-1226,
+# `RollRangedCount`) and groundlaser (OZX-1373, lasers per room).
 COUNTMIN_HONOURING_PLACEMENTS = {"sidewall"}
+COUNTMIN_RANGE_KINDS = {"toxicbarrel", "groundlaser"}
+
+# GroundLaserPlacementLogic: lasers per room, placed in left-right pairs on
+# fixed cells of a 10×16 room.
+GROUNDLASER_MIN, GROUNDLASER_MAX = 2, 4
 
 
 def _placement_count_issues(level_id: str, rid: str, pi: int,
@@ -756,6 +764,8 @@ def _placement_count_issues(level_id: str, rid: str, pi: int,
                 f"{rid}: placement {pi} pins its cells, so countMin is not read — a "
                 f"pinned entry already names exactly what it wants",
                 entity=level_id, pointer=f"{pptr}/countMin"))
+        elif kind in COUNTMIN_RANGE_KINDS:
+            pass
         elif p.get("placement") not in COUNTMIN_HONOURING_PLACEMENTS:
             # Narrower than the field's own documentation, which says "random
             # fill". Verified against PropSpawnAdapter: the plain fill branch
@@ -767,6 +777,44 @@ def _placement_count_issues(level_id: str, rid: str, pi: int,
                 f"anchor chooser, so this one is read and then dropped",
                 entity=level_id, pointer=f"{pptr}/countMin"))
 
+    if kind == "groundlaser":
+        issues.extend(_groundlaser_issues(level_id, rid, pi, pptr, p))
+    return issues
+
+
+def _groundlaser_issues(level_id: str, rid: str, pi: int, pptr: str,
+                        p: dict) -> list[dict]:
+    """`kind: "groundlaser"` (OZX-1371, cells per OZX-1373).
+
+    `GroundLaserPlacementLogic.ResolvePairRange` throws on all of these. The
+    kind picks its own cells — columns {2, 7} × the entry side's rows, in
+    left-right pairs — so `cells`, a footprint or a `placement` rule are
+    errors. `countMin` / `count` are a range of lasers, defaulting to 2 / 4
+    and confined to 2–4, and the range must hold an even number because a
+    laser always has a twin.
+    """
+    issues: list[dict] = []
+
+    def err(message, pointer=pptr):
+        issues.append(_issue("error", "ROOM_GROUNDLASER_INVALID",
+                             f"{rid}: placement {pi} (groundlaser) {message}",
+                             entity=level_id, pointer=pointer))
+
+    if p.get("cells"):
+        err("pins cells; the kind uses its own fixed cells", f"{pptr}/cells")
+    if (p.get("footprintCols") or 1) > 1 or (p.get("footprintRows") or 1) > 1:
+        err("has a footprint; a laser is 1×1")
+    if p.get("placement"):
+        err(f"sets placement '{p['placement']}'; the kind has its own placement rule",
+            f"{pptr}/placement")
+    lo = p.get("countMin") or GROUNDLASER_MIN
+    hi = p.get("count") or GROUNDLASER_MAX
+    if lo < GROUNDLASER_MIN or hi > GROUNDLASER_MAX or lo > hi:
+        err(f"asks for {lo}–{hi} lasers; the range lies within "
+            f"{GROUNDLASER_MIN}–{GROUNDLASER_MAX} with countMin ≤ count")
+    elif (lo + 1) // 2 > hi // 2:
+        err(f"asks for {lo}–{hi} lasers, which holds no even number; lasers come in "
+            f"left-right pairs")
     return issues
 
 
