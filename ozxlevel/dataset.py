@@ -1040,6 +1040,9 @@ class Dataset:
                 # must not render it as an unfilled field.
                 "bossId": boss_id,
                 "hasBoss": bool(boss_id),
+                # OZX-1442: a final area with no boss ends on its last peak
+                # room (BFS order from the entrance) when it ends the run.
+                "endsRunOnClear": bool(raw.get("endsRunOnClear")),
                 "bossMissing": bool(boss_id) and self.get("EnemyData", boss_id) is None,
                 "stageTypes": stages,
                 "stagePortionTotal": round(

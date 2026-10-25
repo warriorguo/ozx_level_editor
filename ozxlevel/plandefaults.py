@@ -224,3 +224,45 @@ def refused_defaults(defaults: dict | None) -> list[tuple[str, str]]:
                     "rooms carry roomIds, so every floor inheriting them would "
                     "declare the same rooms"))
     return out
+
+
+def _f32(x: float) -> float:
+    """Round to IEEE single precision, as the C# `float` arithmetic does."""
+    import struct
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
+def resolve_portions(portions: list, total_rooms: int) -> list[int]:
+    """`PortionResolver.Resolve`: rooms per stage, by largest remainder.
+
+    Floats are kept to single precision step by step, because the C# does
+    its sums in `float`, and the one place this is used — "does the peak
+    stage get a room at the smallest size" — turns on a tie at the
+    remainder. The sort is a stable insertion sort descending by fraction,
+    so an exact tie goes to the earlier stage, as upstream.
+    """
+    n = len(portions)
+    if not n or total_rooms <= 0:
+        return [0] * n
+    total = 0.0
+    for portion in portions:
+        total = _f32(total + _f32(portion or 0))
+    counts = [0] * n
+    if total <= 0:
+        return counts
+    raw = [_f32(_f32(_f32(portion or 0) / total) * total_rooms) for portion in portions]
+    counts = [int(r) for r in raw]
+    remainder = total_rooms - sum(counts)
+    if remainder > 0:
+        order = list(range(n))
+        for i in range(1, n):
+            key = order[i]
+            frac = _f32(raw[key] - counts[key])
+            j = i - 1
+            while j >= 0 and _f32(raw[order[j]] - counts[order[j]]) < frac:
+                order[j + 1] = order[j]
+                j -= 1
+            order[j + 1] = key
+        for r in range(min(remainder, n)):
+            counts[order[r]] += 1
+    return counts

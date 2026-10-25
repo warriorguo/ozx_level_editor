@@ -1205,6 +1205,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     merged = [plandefaults.merge_floor(defaults, raw)
               for raw in doc.value.get("floors") or []]
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
+    issues.extend(_final_area_issues(plan_id, doc.value, merged))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
         for issue in _floor_plan_issues(ds, plan_id, fi, floor,
@@ -1386,6 +1387,71 @@ def _area_link_issues(ds: Dataset, plan_id: str, plan: dict,
             err("LEVEL_AREA_UNREACHABLE",
                 f"floor {f} is joined to nothing reachable from area 0 by areaLinks, so "
                 f"no run can ever enter it", f"/floors/{f}")
+    return issues
+
+
+def _final_area_issues(plan_id: str, plan: dict, merged: list) -> list[dict]:
+    """`endsRunOnClear` on a plan floor, and the boss-less ending (OZX-1442).
+
+    Only the chapter's final area may end the run — the last floor without
+    areaLinks, the one no link leaves with them (`LevelBasePlan.IsFinalArea`);
+    elsewhere the generator throws. A final area with no `bossId` ends on
+    its last peak room in BFS order, so `ValidateFinalPeak` asks that the
+    floor lists a peak stage, that the portions buy at least one peak room
+    at `roomCountMin` (largest remainder, as the generator deals), that the
+    stage fields enemies (an empty room is cleared — and the run won — on
+    entry), and that a peak second wave arrives only on `cleared`, since an
+    `advance` wave can still be waiting at the first calm, which IS the
+    victory. Static floors mark their own final rooms and are skipped.
+    """
+    links = plan.get("areaLinks") or []
+    n = len(merged)
+    issues: list[dict] = []
+    for fi, (floor, source) in enumerate(merged):
+        if not floor.get("endsRunOnClear") or floor.get("generatorType") == "static":
+            continue
+        fptr = f"/floors/{fi}"
+        final = (not any(l.get("fromArea") == fi for l in links)) if links else fi == n - 1
+        if not final:
+            issues.append(_issue(
+                "error", "LEVEL_ENDS_RUN_NOT_FINAL_AREA",
+                f"floor {fi} sets endsRunOnClear, but the chapter continues past it; only the "
+                f"final area may end the run", entity=plan_id, pointer=f"{fptr}/endsRunOnClear"))
+            continue
+        if floor.get("bossId"):
+            continue
+        where = f"floor {fi} ends the run with no bossId, so on its last peak room"
+        stages = floor.get("stageTypes") or []
+        peak = next((s for s in stages if s.get("stageType") == "peak"), None)
+        sptr = plandefaults.field_base(fi, source, "stageTypes") + "/stageTypes"
+        if peak is None:
+            issues.append(_issue(
+                "error", "LEVEL_FINAL_PEAK_INVALID", f"{where} — and it lists no peak stage",
+                entity=plan_id, pointer=sptr))
+            continue
+        counts = plandefaults.resolve_portions([s.get("portion") or 0 for s in stages],
+                                               floor.get("roomCountMin") or 0)
+        if not sum(c for s, c in zip(stages, counts) if s.get("stageType") == "peak"):
+            issues.append(_issue(
+                "error", "LEVEL_FINAL_PEAK_INVALID",
+                f"{where} — but at its smallest size ({floor.get('roomCountMin') or 0} rooms) "
+                f"the portions buy no peak room; raise the peak portion or roomCountMin",
+                entity=plan_id, pointer=sptr))
+        pi = stages.index(peak)
+        if (peak.get("enemyBudgetCut") or 0) >= 1:
+            issues.append(_issue(
+                "error", "LEVEL_FINAL_PEAK_INVALID",
+                f"{where} — but that stage cuts its whole enemy budget, so the final room is "
+                f"cleared, and the run won, on entry",
+                entity=plan_id, pointer=f"{sptr}/{pi}/enemyBudgetCut"))
+        for ti, trigger in enumerate((peak.get("secondWave") or {}).get("triggers") or []):
+            if trigger and trigger.get("kind") != "cleared":
+                issues.append(_issue(
+                    "error", "LEVEL_FINAL_PEAK_INVALID",
+                    f"{where} — but its secondWave.triggers[{ti}] is '{trigger.get('kind')}', "
+                    f"which can still be waiting when the final room first goes calm, and that "
+                    f"calm is the victory; a run-ending peak's second wave arrives on 'cleared'",
+                    entity=plan_id, pointer=f"{sptr}/{pi}/secondWave/triggers/{ti}"))
     return issues
 
 

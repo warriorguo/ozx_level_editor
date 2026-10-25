@@ -1613,7 +1613,9 @@ function renderPlanFloors() {
               ? `L${state.plan.skillDropLevelCap}`
               : `L${state.plan.skillDropLevelCapEffective} (default)`}</strong></div>
           <div><span>boss</span><strong class="${f.hasBoss ? (f.bossMissing ? 'bad' : '') : 'noboss'}">${
-            f.hasBoss ? esc(f.bossId) : 'none — no boss room on this floor'}</strong></div>
+            f.hasBoss ? esc(f.bossId)
+              : f.endsRunOnClear ? 'none — the run ends on its last peak room'
+              : 'none — no boss room on this floor'}</strong></div>
         </div>
         ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
       </div>

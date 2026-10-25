@@ -379,7 +379,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `rooms` | 预定义房间；`generatorType="static"` 时必填，否则 fail-fast | 0 |
 | `overflowStageType/EncounterId/LootPlanId` | 比例分配后剩余房间的兜底。默认 `pressure` / `loot_common` | 0 |
 | `useExitRoom` | true = 合成专用 exit room（单向 Up 门） | 0 |
-| `endsRunOnClear` | 把 `isFinalRoom` 盖到 `bossRoomId` 指的房间；楼层没有 boss 房则抛错 | 0 |
+| `endsRunOnClear` | 本层清完即通关。只有**终点 area** 可以写（无 areaLinks 时是最后一层；有时是没有连接离开的那个，`LevelBasePlan.IsFinalArea`），否则生成期抛（`LEVEL_ENDS_RUN_NOT_FINAL_AREA`）。有 `bossId` → `isFinalRoom` 盖到 boss 房；**没有 `bossId`**（OZX-1442）→ 盖到按 BFS 序的**最后一间 peak 房**（离入口最远，不用 rng）。这时 `ValidateFinalPeak` 要求：列了 peak、peak 在 `roomCountMin` 下按最大余数法至少分到 1 间（`PortionResolver`，编辑器按单精度逐步复刻）、peak 的 `enemyBudgetCut < 1`（空房一进门就通关）、peak 的 `secondWave` 只能 `cleared`（`advance` 可能还在等，而第一次平静就是胜利）→ `LEVEL_FINAL_PEAK_INVALID`。终点房不承接 `guaranteedDrops`、不放传送点。不能从 floorDefaults 继承 | ch3–ch7 各一层 |
 
 **每个会发的 stage 都要有 tilemap**（`LevelPlanValidator.ValidateStageTilemaps`）：area 的库 = 主题的 category（`themes/X` → `X`，没有 tilemap 认领就退回 `normal`；没写 `roomCategory` 的 tilemap 是通配），`stageType` 为 `all` / `none` / 空的模板服务任何 stage。plan 列出的每个 stage、overflow stage（默认 `pressure`）、area 0 的 `start`、有 `bossId` 的 area 的 `boss`，库里一张都没有 → `RoomTilemapQuery` 在玩家进门时抛 → `LEVEL_STAGE_TILEMAP_MISSING`。编辑器维护一份按文件 stat 戳失效的 tilemap 事实索引（`ozxlevel/tilemaps.py` 的 `TilemapIndex`）。
 
