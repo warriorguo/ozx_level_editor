@@ -157,3 +157,77 @@ def pin_door_findings(room: dict, tilemap: dict) -> list[tuple[str, str, str]]:
 
 def _dir(direction: int) -> str:
     return {0: "Up", 1: "Down", 2: "Left", 3: "Right"}.get(direction, str(direction))
+
+
+class TilemapIndex:
+    """Facts about every tilemap in the pool, the ones `LevelPlanValidator` reads.
+
+    `TilemapFacts` upstream: file, `roomCategory` (empty = wildcard),
+    `stageType`, `openDoors`, and whether the ground leaves a cell empty
+    (OZX-1340). TilemapData is replaced wholesale by the room-template sync,
+    so each file's facts are kept against its stat stamp and re-read when it
+    moves; a refresh costs one stat per file.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self._facts: dict = {}
+
+    def facts(self) -> list[dict]:
+        if self.root is None or not self.root.is_dir():
+            return []
+        seen = {}
+        for path in sorted(self.root.glob("*/*.json")):
+            stamp = _file_stamp(path)
+            hit = self._facts.get(path)
+            if hit is None or hit[0] != stamp:
+                hit = (stamp, _read_facts(path))
+            seen[path] = hit
+        self._facts = seen
+        return [f for _, f in seen.values() if f is not None]
+
+
+def _file_stamp(path):
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _read_facts(path) -> dict | None:
+    import json
+    try:
+        t = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    ground = t.get("ground") or []
+    return {"file": path.stem, "folder": path.parent.name,
+            "category": t.get("roomCategory") or "",
+            "stageType": t.get("stageType") or "",
+            "openDoors": t.get("openDoors") or 0,
+            "hasEmptyGround": any((cell or 0) <= 0 for column in ground for cell in column or [])}
+
+
+def for_theme(facts: list[dict], theme_id: str | None) -> list[dict]:
+    """`LevelPlanValidator.TilemapsForTheme`: the library an area draws from.
+
+    The theme names a category (`themes/X` → `X`); a category no tilemap
+    claims falls back to `normal`; an uncategorised tilemap is a wildcard.
+    """
+    category = (theme_id or "normal").rsplit("/", 1)[-1] if theme_id else "normal"
+    if not any(f["category"] == category for f in facts):
+        category = "normal"
+    return [f for f in facts if not f["category"] or f["category"] == category]
+
+
+def matches_stage(tilemap_stage: str, query: str) -> bool:
+    """`RoomTilemapQuery.MatchesStageType`: all / none / empty serve any stage."""
+    if not query:
+        return True
+    if not tilemap_stage or tilemap_stage in ("all", "none"):
+        return True
+    return tilemap_stage == query
+
+
+ALL_DOORS = 15

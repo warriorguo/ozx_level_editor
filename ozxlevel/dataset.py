@@ -132,6 +132,7 @@ class Dataset:
         ds.root = None
         ds.game_data = None
         ds.tilemap_data = None
+        ds.tilemaps = tilemaps.TilemapIndex(None)
         ds.docs = {}
         ds.problems = [{
             "severity": "info",
@@ -147,6 +148,7 @@ class Dataset:
         self.root = pathlib.Path(project_root).expanduser().resolve()
         self.game_data = self.root / "Assets/StreamingAssets/GameData"
         self.tilemap_data = self.root / "Assets/StreamingAssets/TilemapData"
+        self.tilemaps = tilemaps.TilemapIndex(self.tilemap_data)
         self.docs: dict[tuple[str, str], Document] = {}
         self.problems: list[dict] = []
         # Bumped whenever the indexed set changes, so a client holding derived

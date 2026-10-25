@@ -1335,6 +1335,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_tile_part_issues(ds, plan_id, fi, fptr, floor))
 
     issues.extend(_stage_decoration_issues(ds, plan_id, fi, fptr, floor))
+
+    issues.extend(_stage_tilemap_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
 
@@ -2171,6 +2173,75 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 f"the minion's own cap and charged to enemiesPerRoom, so it is "
                 f"truncated every time — the room gets at most {minion_cap}",
                 entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
+    return issues
+
+
+DEFAULT_OVERFLOW_STAGE = "pressure"   # LevelBasePlanAssigner.DefaultOverflowStageType
+
+
+def _stage_tilemap_issues(ds: Dataset, plan_id: str, fi: int,
+                          fptr: str, floor: dict) -> list[dict]:
+    """Every stage an area deals has to have a tilemap to draw.
+
+    `LevelPlanValidator.ValidateStageTilemaps`: a stage with no tilemap in
+    the area's library is not an imbalance — `RoomTilemapQuery` throws the
+    moment the player walks into such a room, naming the room and not the
+    plan line. The generator also deals three stages the plan need not list:
+    the overflow stage, `start` on area 0, and `boss` when the area names a
+    boss — "exactly how a chapter shipped with no boss tilemap at all".
+
+    `ValidateFullGroundTilemaps` (OZX-1340) on top: an area with
+    `requireFullGround` draws only templates with no empty ground cell and
+    falls back to a full-ground SUPERSET when its exact mask has none. A
+    full-ground four-door template covers every mask, so one per dealt stage
+    is what keeps any room from coming up empty.
+
+    Static floors write their rooms by hand and are skipped, as upstream.
+    """
+    if floor.get("generatorType") == "static":
+        return []
+    library = tilemaps.for_theme(ds.tilemaps.facts(), floor.get("themeId"))
+    if not library and not ds.tilemaps.facts():
+        return []
+    theme = floor.get("themeId")
+    needed: list[tuple[str, str, str]] = [
+        (s.get("stageType"), f"{fptr}/stageTypes/{si}", f"stageTypes[{si}] asks for")
+        for si, s in enumerate(floor.get("stageTypes") or []) if s.get("stageType")]
+    overflow = floor.get("overflowStageType") or DEFAULT_OVERFLOW_STAGE
+    needed.append((overflow, f"{fptr}/overflowStageType", "falls back to overflow stage"))
+    if fi == 0:
+        needed.append(("start", fptr, "starts the run, so it deals"))
+    if floor.get("bossId"):
+        needed.append(("boss", f"{fptr}/bossId", "names a boss, so it deals"))
+
+    issues: list[dict] = []
+    offered = sorted({t["stageType"] or "any" for t in library})
+    done: set = set()
+    for stage, pointer, what in needed:
+        if stage in done:
+            continue
+        done.add(stage)
+        if not any(tilemaps.matches_stage(t["stageType"], stage) for t in library):
+            issues.append(_issue(
+                "error", "LEVEL_STAGE_TILEMAP_MISSING",
+                f"floor {fi} {what} stage '{stage}', but theme '{theme}' has no tilemap for "
+                f"it (it supplies: {', '.join(offered) or 'nothing'}); every such room throws "
+                f"out of RoomTilemapQuery on entry",
+                entity=plan_id, pointer=pointer))
+
+    if floor.get("requireFullGround"):
+        missing = [stage for stage in dict.fromkeys(s for s, _, _ in needed)
+                   if not any(tilemaps.matches_stage(t["stageType"], stage)
+                              and not t["hasEmptyGround"]
+                              and t["openDoors"] == tilemaps.ALL_DOORS for t in library)]
+        if missing:
+            issues.append(_issue(
+                "error", "LEVEL_FULL_GROUND_TILEMAP_MISSING",
+                f"floor {fi} sets requireFullGround, but theme '{theme}' has no full-ground "
+                f"four-door tilemap for stage(s) {', '.join(missing)}. A room whose exact mask "
+                f"has no full-ground template falls back to a full-ground superset, and only "
+                f"the four-door one covers every mask",
+                entity=plan_id, pointer=f"{fptr}/requireFullGround"))
     return issues
 
 

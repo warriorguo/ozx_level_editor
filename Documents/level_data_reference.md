@@ -364,6 +364,8 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
 | `stageDecorations` | `[{ stageType, decorations: [{ decalCategory, count }] }]`（OZX-1291）：生成期按房间最终的 `stageType`，把该条的 `decorations` 拷到 `decorations` 为空的非 cave 生成房上（start / boss 也算）。缺 `stageType` 或同一 stage 写两次 `AssignStageDecorations` 抛（`LEVEL_STAGE_DECORATION_UNSCOPED` / `_DUPLICATE`）；每条贴花与手摆的同规则，按楼层 effective `themeId` 判能不能画（§4.6）。数组整体替换 | ch3 / ch4（floorDefaults） |
 | `spawnerMinionsPerRoom` | int（OZX-1219）：spawner 产线的独立额度，按房共享。0 = OZX-1064 的规则（产线占 `enemiesPerRoom`、受 minion 条目 `maxPerRoom` 约束）；> 0 = 产线只花这份额度，`enemiesPerRoom` 只数直接放置、minion 的 `maxPerRoom` 只管直接放置，每座 spawner 取 `minionsPerSpawner`、被剩余额度截断、一只都给不出就不放这座。可从 floorDefaults 继承。`LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` 据此改判：有额度时比的是额度，不是 minion 的 cap | 8（ch5–7） |
+| `elevation` | int（OZX-1338）：area 的高度——地面 0、basement −1、楼上 +1。楼梯朝向**只**看两端高度（目标更高 = UpStairs 1×3，更低 = DownStairs 1×1），与 area 下标无关；两端同高抛。**永不继承**（写进 floorDefaults 抛）。LevelData 的 `FloorData.elevation` 同义，`ValidateStairLinks` 用它 | ch4–ch6 |
+| `requireFullGround` | bool（OZX-1340）：本 area 每间房只抽 ground 无空格的模板，精确门型没有时回退到满地图的超集（最坏四门 TBRL）。所以**每个会发的 stage 都要有一张满地图四门模板**（`ValidateFullGroundTilemaps` → `LEVEL_FULL_GROUND_TILEMAP_MISSING`）。bool：楼层能打开不能关掉 | ch6 的两个 battlefield area |
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |
@@ -374,6 +376,8 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `overflowStageType/EncounterId/LootPlanId` | 比例分配后剩余房间的兜底。默认 `pressure` / `loot_common` | 0 |
 | `useExitRoom` | true = 合成专用 exit room（单向 Up 门） | 0 |
 | `endsRunOnClear` | 把 `isFinalRoom` 盖到 `bossRoomId` 指的房间；楼层没有 boss 房则抛错 | 0 |
+
+**每个会发的 stage 都要有 tilemap**（`LevelPlanValidator.ValidateStageTilemaps`）：area 的库 = 主题的 category（`themes/X` → `X`，没有 tilemap 认领就退回 `normal`；没写 `roomCategory` 的 tilemap 是通配），`stageType` 为 `all` / `none` / 空的模板服务任何 stage。plan 列出的每个 stage、overflow stage（默认 `pressure`）、area 0 的 `start`、有 `bossId` 的 area 的 `boss`，库里一张都没有 → `RoomTilemapQuery` 在玩家进门时抛 → `LEVEL_STAGE_TILEMAP_MISSING`。编辑器维护一份按文件 stat 戳失效的 tilemap 事实索引（`ozxlevel/tilemaps.py` 的 `TilemapIndex`）。
 
 ### 5.2 StageTypePlanData
 
