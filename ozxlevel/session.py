@@ -131,15 +131,12 @@ def reachability(document: dict) -> list[dict]:
             if rid:
                 rooms[rid] = (fi, room)
 
-    # Floors are not joined by doors. `stairLinks` carries the cross-floor
-    # edges — `{caveId, roomIdA, roomIdB, targetFloor}`, each direction
-    # declared as its own entry — and a walk that followed only `doors` never
-    # leaves floor 0, marking every later floor unreachable while the game
-    # plays through fine.
-    #
-    # Older captures did it the other way round (a door straight to the next
-    # floor's start, stairLinks null), so both have to work: the door walk
-    # below still crosses those, and these edges are additional.
+    # Areas are joined by an ordinary twin pair of doors (OZX-1117), which
+    # the door walk below crosses like any other. Captures from before it
+    # joined them with `stairLinks` instead — `{caveId, roomIdA, roomIdB,
+    # targetFloor}`, each direction its own entry — and a walk that followed
+    # only doors would never leave area 0 there. Stairs also still drill into
+    # caves and basements, so these edges stay as well.
     stairs: dict[str, list[str]] = {}
     for floor in floors:
         for link in floor.get("stairLinks") or []:

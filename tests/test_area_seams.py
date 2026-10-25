@@ -147,3 +147,36 @@ def test_a_locked_run_exit_warns(ds, level):
 def test_a_run_exit_in_a_final_room_is_never_reached(ds, level):
     room(level, FINAL)["isFinalRoom"] = True
     assert found(ds, "LEVEL_DOOR_EXIT_WITH_FINAL_ROOM")
+
+
+# ── OZX-1117: the generator's seams, and the lock that never goes on one ──
+
+
+def test_a_locked_seam_traps_whoever_walks_back(ds, level):
+    up = next(d for d in room(level, EXIT)["doors"] if d["toRoomId"] == ENTRY)
+    up.update(locked=True, keyId="key_silver")
+    bad = found(ds, "LEVEL_SEAM_DOOR_LOCKED")
+    assert bad and bad[0]["severity"] == "warning"
+
+
+def test_a_lock_inside_the_area_is_the_shipped_shape(ds):
+    """chapter_2 gates its exit with key_silver on a door INSIDE area 0."""
+    assert not found(ds, "LEVEL_SEAM_DOOR_LOCKED")
+
+
+def test_a_generated_level_joined_by_doors_walks_across_areas():
+    """What `genlevel` writes now: no stairLinks, one twin pair per seam."""
+    from ozxlevel.session import reachability
+
+    def r(rid, *doors):
+        return {"roomId": rid, "doors": [dict(d) for d in doors]}
+
+    doc = {"floors": [
+        {"startRoomId": "a", "stairLinks": [], "rooms": [
+            r("a", {"direction": 0, "toRoomId": "b", "toDoorId": 1}),
+            r("b", {"direction": 1, "toRoomId": "a", "toDoorId": 0},
+                   {"direction": 0, "toRoomId": "c", "toDoorId": 1})]},
+        {"startRoomId": "c", "stairLinks": [], "rooms": [
+            r("c", {"direction": 1, "toRoomId": "b", "toDoorId": 0})]},
+    ]}
+    assert all(x["reachable"] for x in reachability(doc))

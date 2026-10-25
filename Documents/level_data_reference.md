@@ -89,7 +89,7 @@ LevelData
 | `caveLinks` | CaveLinkData[] | 洞穴通道（同层） | 1 |
 | `stairLinks` | CaveLinkData[] | 楼梯——OZX-1116 起只用于往房间里钻的 basement / cave 垂直支线（规则见 §7.1）；**area 之间不再用它** | 4 |
 | `exitRoomId` | string | 专用出口房，只有一扇 Up 门通往下一层 start | 0（生成器写） |
-| `topRoomIds` | string[] | 朝向上一层的顶边房间，供 `ConnectFloors` 选跨层连接源 | 0（生成器写） |
+| `topRoomIds` | string[] | 朝向上一个 area 的顶边房间，供 `ConnectFloors` 选接缝门的出口房 | 0（生成器写） |
 | `topMiddleRoomId` | string | `topRoomIds` 的首选中点（tree 的居中分支） | 0（生成器写） |
 
 最后三个字段是生成器产物。编辑器可以显示，但不应引导手写。
@@ -141,6 +141,8 @@ LevelData
 3. **只有 area 0 可以有 `stageType: "start"`**——后续 area 的入口房是走进来的；而且 `start` 在 tilemap 库里只有 mask 1 的模板，回程门让它变成 mask 5，`RoomTilemapQuery` 直接抛 → `LEVEL_START_STAGE_NOT_FIRST_AREA`（Error）。改成 teaching / building。
 
 接缝门的方向只决定小地图把下一个 area 画在哪一侧；同 area 门的几何自洽规则不约束它。
+
+**程序化关卡也一样**（OZX-1117）：`LevelBuilder.ConnectFloors` 不再写 stairLinks，而是在出口房（`SelectCrossFloorSource`）和下一个 area 的 `startRoomId` 之间写一对 Up/Down 孪生门；生成结果里一条 stairLinks 都没有。每个接缝恰好一扇门，「本 area 从哪出去」= 指向本 area 之外、且不挂在本 area `startRoomId` 上的那扇门（`ExitStairRoomId`）。钥匙锁的是 area **内部**通往门房的门，**接缝门永不上锁**——钥匙用掉就没了，锁住唯一出口会把走回来的玩家关在里面；手写关卡锁了接缝报 `LEVEL_SEAM_DOOR_LOCKED`（Warning）。会话 dump 的可达性两种形状都走（旧 dump 仍有 stairLinks）。
 
 **`exitsRun` 门**（`DoorLinkData.exitsRun`，第一、二章已用）：不通向任何房间，走出去即通关。不是图上的边（`LeadsToRoom` 为 false），不查目标、孪生、可达。规则：不能再写 `toRoomId`（上游 fail-fast → `LEVEL_DOOR_EXIT_HAS_TARGET`）；不该上锁（闸门本就要清房才开 → `LEVEL_DOOR_EXIT_LOCKED`）；与 `isFinalRoom` 二选一（后者清房即通关，闸门成装饰 → `LEVEL_DOOR_EXIT_WITH_FINAL_ROOM`）。
 

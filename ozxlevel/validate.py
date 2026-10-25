@@ -246,6 +246,20 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                         fix={"op": "set", "path": f"{dptr}/toDoorId",
                              "value": twin_dir, "label": "Arrive at the twin"}))
 
+                # The generator never locks a seam (OZX-1117), and the reason
+                # holds for a hand-written one: a key is consumed when spent,
+                # so locking the one edge out of an area shuts a player who
+                # walked back in out of the rest of the run. The gate belongs
+                # on a door INSIDE the area, as chapter_2 does with key_silver.
+                if t_fi != fi and door.get("locked"):
+                    issues.append(_issue(
+                        "warning", "LEVEL_SEAM_DOOR_LOCKED",
+                        f"{rid}: the seam door into area {t_fi} ('{target}') is "
+                        f"locked. A spent key is gone, so a player who comes back "
+                        f"through it cannot leave again; lock a door inside area "
+                        f"{fi} on the way to this room instead",
+                        entity=level_id, pointer=f"{dptr}/locked"))
+
                 if door.get("locked") and not door.get("keyId"):
                     issues.append(_issue("warning", "LEVEL_DOOR_LOCKED_NO_KEY",
                                          f"{rid}: door {di} is locked but names no keyId",
