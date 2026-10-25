@@ -2141,7 +2141,47 @@ def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
     if doc is None:
         return [_issue("error", "DATA_REFERENCE_MISSING",
                        f"enemy '{enemy_id}' not found")]
-    v = doc.value
+    return _wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
+
+
+# The smallest single room: 16×10 cells, a cell one world unit, so its
+# half-extents are (8, 5) — `EncounterActionExecutor` passes
+# `Template.width/height * 0.5`.
+ROOM_HALF_EXTENT_MIN = 5.0
+
+
+def _wall_clearance_issues(enemy_id: str, v: dict) -> list[dict]:
+    """`spawnMinWallDistance` / `wallRepelDistance` (OZX-1263), world units.
+
+    0 / omitted is off, which is every enemy but broodwing. Placement admits
+    only a spot this far from every room edge (`LaunchPlacement` →
+    `RoomWallClearance.IsClear`) and clamps jitter into the inner rect,
+    which THROWS when the room has none (`ClampInside`). A clearance at or
+    past the smallest room's half-extent therefore leaves no spot there at
+    all: every directly placed body is dropped like "no clear spot", and a
+    jittered one throws. A larger composite room could still fit it, so this
+    is a warning; a negative distance is an error.
+    """
+    issues: list[dict] = []
+    for field in ("spawnMinWallDistance", "wallRepelDistance"):
+        value = v.get(field) or 0
+        if value < 0:
+            issues.append(_issue(
+                "error", "ENEMY_WALL_DISTANCE_NEGATIVE",
+                f"{field} is {value:g}; it is a distance in world units, 0 for off",
+                entity=enemy_id, pointer=f"/{field}"))
+    clearance = v.get("spawnMinWallDistance") or 0
+    if clearance >= ROOM_HALF_EXTENT_MIN:
+        issues.append(_issue(
+            "warning", "ENEMY_WALL_CLEARANCE_UNPLACEABLE",
+            f"spawnMinWallDistance {clearance:g} reaches the middle of a standard 16×10 "
+            f"room (half-height {ROOM_HALF_EXTENT_MIN:g}), so no spot there is that far from "
+            f"every wall: each directly placed body is dropped, and a jittered one throws",
+            entity=enemy_id, pointer="/spawnMinWallDistance"))
+    return issues
+
+
+def _hatch_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
     single = v.get("hatchEnemyId") or None
     pool = [x for x in (v.get("hatchPool") or [])] if v.get("hatchPool") else []
     # An enemy that names neither is not an egg, and saying so about the other

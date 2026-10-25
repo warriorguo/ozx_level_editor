@@ -861,6 +861,11 @@ class Dataset:
                 # each body is is drawn at placement time.
                 "variantIds": [v for v in (action.get("variantIds") or [])],
                 "cluster": _cluster_brief(action),
+                # OZX-1263: placement keeps these bodies this far off every
+                # room edge, so they can come out short where the room is
+                # small — the row is where that gets explained.
+                "wallClearance": ((enemy.value.get("spawnMinWallDistance") or 0)
+                                  if enemy else 0),
                 "stepIndex": index,
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),

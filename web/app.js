@@ -669,7 +669,9 @@ function renderRooms() {
               <button data-delta="-1" title="Decrease count">−</button>
               <input type="number" min="0" max="999" value="${e.count}" aria-label="${esc(e.id)} count" />
               <button data-delta="1" title="Increase count">+</button>
-            </span>${groupLine(e)}${hatchLine(e)}${dropLine(e.drop)}</div>`;
+            </span>${groupLine(e)}${hatchLine(e)}${e.wallClearance > 0
+              ? `<span class="group-line" title="OZX-1263: placed only where every room edge is at least this far away; with no such spot the body is dropped">
+                   <span class="drop-tag">walls</span>keeps ${e.wallClearance} off every edge</span>` : ''}${dropLine(e.drop)}</div>`;
         }).join('')
       : `<div class="inline-empty">${room.encounterId
             ? 'Encounter has no launch steps'

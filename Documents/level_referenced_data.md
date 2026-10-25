@@ -189,6 +189,7 @@ EnemyData 有 90+ 字段，绝大多数是 AI 调参，与关卡编排无关。�
 | `hatchPool` / `hatchCountMin/Max` / `hatchSpreadRadius` | 孵化池与一窝的大小，见 §2.4 | 1 |
 | `spawnConfig.enemyIds[]` | 该敌人能轮转生产的类型 | **0 份数据使用** |
 | `projectileId` / `beamId` | 远程弹道；`beamId` 非空时 `projectileId` 被忽略 | — |
+| `spawnMinWallDistance` / `wallRepelDistance` | OZX-1263，世界单位（1 格 = 1），0 = 关。前者：直放（`LaunchPlacement`）只收离房间矩形每条边 ≥ 该值的点，jitter 夹回内矩形——房间里没有这样的内矩形时 `RoomWallClearance.ClampInside` **抛**；后者：活着时离墙更近就主动飞开。负值报错（`ENEMY_WALL_DISTANCE_NEGATIVE`）；≥ 5 时标准 16×10 房一个合格点都没有，直放的身体全被丢（`ENEMY_WALL_CLEARANCE_UNPLACEABLE`，Warning，大复合房仍可能放得下） | 1（broodwing 3 / 2） |
 
 `role` 是这份数据里最重要的一个字段：它同时决定敌人放在哪层生成点、以及 encounter 不写 `at` 时的默认落点。改 `role` 等于改所有引用该敌人的 encounter 的落点。
 
