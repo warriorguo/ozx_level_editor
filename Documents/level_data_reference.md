@@ -112,6 +112,7 @@ LevelData
 | `lootPlanId` | string | 清场掉落表 | 8 |
 | `hasTeleportSpot` | bool | 传送点 | 5 |
 | `requiredForExitItemIds` | string[] | 未拾取这些 item 则门不开（对照本房实际掉落匹配） | 2 |
+| `exitBlockedTip` | string | `requiredForExitItemIds` 还在地上、出口拒绝放行时 HUD 横幅显示的一行（OZX-1168，规则同 `lockedTip`，见 §4.4） | 2 |
 | `isFinalRoom` | bool | 清场即通关（`SessionVictoryEvent`） | 2 |
 | `roomCols` / `roomRows` | int | 复合房尺寸，0 = 1×1 | 1 |
 | `roomShape` | string | `bridge` / `platform` / null | **0** |
@@ -166,6 +167,8 @@ LevelData
 | `toDoorId` | enum→int | **对面那扇门的朝向**（不是索引、不是 id） |
 | `locked` | bool | 锁门 |
 | `keyId` | string | 开锁所需 item id |
+| `lockedTip` | string | 这扇门因缺 `keyId` 拒绝玩家时 HUD 横幅显示的一行（OZX-1168），见下 |
+| `exitsRun` | bool | 走出去即通关，不通向任何房间（见 §3.4） |
 
 `DoorDirection` 的整数编码：**`0 = Up`、`1 = Down`、`2 = Left`、`3 = Right`**。
 
@@ -174,6 +177,15 @@ LevelData
 实际用量：162 条门记录、3 条锁门。其中 53 条 `direction` 与 51 条 `toDoorId` 的值是**显式写出的 `0`**（= `Up`），另有 4 条门省略了 `toDoorId`。
 
 **`0` 是一个合法方向，不是「没填」**——这是整份数据里最容易被工具写坏的字段。任何「值等于默认就不输出」的 writer 都会把 53 扇向上的门变成 4 扇省略门加 49 处语义漂移；判断一扇门有没有 author `direction`，只能看 DOM 里键在不在，不能看 typed 值是不是 0。
+
+**HUD tip（`lockedTip` / `exitBlockedTip`，OZX-1168，核对于 `ozx_base@5cd9b22e` 的 `RoomTips`）**：省略 = 不显示（程序化章节全是省略）。规则：
+
+- **≤ 25 字符**（`RoomTips.MaxTipLength`，860px 横幅里一行 56pt 粗体）。超长**抛**，不截断——半句话告诉玩家去找哪把钥匙比不说更糟 → `LEVEL_TIP_TOO_LONG`（Error）。编辑器输入框直接限长。
+- **写了但空白**会被上游出货数据守卫拒（`RoomTipShippedDataTests.NoAuthoredTip_IsBlank`）；不要提示就**不写这个键** → `LEVEL_TIP_BLANK`（Error，fix 是删键）。编辑器清空即删键，绝不写空串。
+- 只用**拉丁字符**：`Play-Bold` / `Aldrich-Regular` 没有 CJK 字形 → `LEVEL_TIP_GLYPH_MISSING`（Warning，不抛，只是画成方块）。
+- 写在永远不会拒人的地方等于死字：`lockedTip` 所在的门没 `locked`+`keyId`、`exitBlockedTip` 所在的房没有 `requiredForExitItemIds` → `LEVEL_TIP_NEVER_SHOWN`（Warning）。
+
+写入走 patcher 的 `put`（键在就 `set`，不在就 `add` 进对象、沿用该对象的内联/多行风格），清空走 `remove`，一加一删逐字节还原。
 
 ### 4.5 StaticPlacementEntryData
 

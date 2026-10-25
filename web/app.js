@@ -773,6 +773,25 @@ function renderRooms() {
       return `<button class="door ${open ? 'open' : ''}" data-door="${dir}" title="${esc(title)}">${dir}</button>`;
     }).join('');
 
+    // OZX-1168: the banner a refused player sees. Offered only where it can
+    // show — a door locked with a key, a room with required pickups — or
+    // where one is already written, so a stray tip can still be cleared.
+    const tipInput = (label, pointer, value, why) => `<label class="tip-field" title="${esc(why)}">
+        <span>${esc(label)}</span>
+        <input type="text" maxlength="${TIP_MAX_LENGTH}" spellcheck="false"
+               data-tip-path="${esc(pointer)}" data-tip-current="${esc(value ?? '')}"
+               value="${esc(value ?? '')}" placeholder="no tip">
+      </label>`;
+    const tips = [
+      ...room.doors.filter((d) => (d.locked && d.keyId) || d.lockedTip != null).map((d) =>
+        tipInput(`${d.dir} locked`, `${d.pointer}/lockedTip`, d.lockedTip,
+          `Shown when this door refuses a player without ${d.keyId || 'its key'}`)),
+      ...((room.requiredForExitItemIds || []).length || room.exitBlockedTip != null
+        ? [tipInput('exit blocked', `${room.pointer}/exitBlockedTip`, room.exitBlockedTip,
+            `Shown when the exit refuses a player who left ${(room.requiredForExitItemIds || []).join(', ') || 'a required pickup'} on the floor`)]
+        : []),
+    ].join('');
+
     const issueChips = roomIssues.map((i) =>
       `<span class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</span>`).join('');
 
@@ -802,6 +821,7 @@ function renderRooms() {
         <div class="room-bottom">
           <div><span class="micro-label">Open doors</span><div class="door-row">${doors}</div></div>
         </div>
+        ${tips ? `<div class="room-tips"><span class="micro-label">HUD tips</span>${tips}</div>` : ''}
         ${issueChips ? `<div class="room-issues">${issueChips}</div>` : ''}
       </section>
       <section class="${colCls('decorations')} decoration-content" data-kind="decorations">
@@ -999,6 +1019,15 @@ function wireRoomCards() {
         await toggleDoor(roomIndex, button.dataset.door,
                          !button.classList.contains('open'));
       }));
+
+    card.querySelectorAll('[data-tip-path]').forEach((input) => {
+      input.addEventListener('click', (event) => event.stopPropagation());
+      input.addEventListener('change', async () => {
+        state.selectedRoomIndex = roomIndex;
+        const current = input.dataset.tipCurrent;
+        await setTip(input.dataset.tipPath, current === '' ? null : current, input.value);
+      });
+    });
 
     card.querySelectorAll('[data-field]').forEach((select) => {
       select.addEventListener('click', (event) => event.stopPropagation());
@@ -1613,6 +1642,9 @@ async function applyPlanEdits(edits, message) {
   }
 }
 
+// RoomTips.MaxTipLength — one line of the HUD banner.
+const TIP_MAX_LENGTH = 25;
+
 const codeOf = (id) => {
   const parts = String(id || '').replace(/-/g, '_').split('_').filter(Boolean);
   if (!parts.length) return '??';
@@ -1687,13 +1719,34 @@ async function setRoomField(roomIndex, field, value) {
     return;
   }
   if (room[field] === value) return;
-  if (room[field] == null) {
-    showToast(`${room.roomId} has no ${field} key yet — add it in the JSON first`);
+  // `put` sets the key if it is on disk and adds it if not — the projection
+  // cannot tell an explicit null from an omitted key, the file can.
+  await applyEdits('LevelData', state.levelId,
+    [{ op: 'put', path: `${room.pointer}/${field}`, value }], `${field} = ${value}`);
+}
+
+/** A HUD tip (OZX-1168): written when given text, removed when cleared.
+ *
+ *  Blank is never written — the field is optional, so the way to show no
+ *  tip is no key, and the shipped-data guard refuses a present-but-empty
+ *  one. Over-length is refused here rather than sent: RoomTips throws on it
+ *  at runtime instead of truncating.
+ */
+async function setTip(pointer, current, raw) {
+  const value = raw.trim();
+  if (value.length > TIP_MAX_LENGTH) {
+    showToast(`A tip is at most ${TIP_MAX_LENGTH} characters — this is ${value.length}`);
     await reloadLevel();
     return;
   }
+  if (!value) {
+    if (current == null) return;
+    await applyEdits('LevelData', state.levelId, [{ op: 'remove', path: pointer }], 'tip removed');
+    return;
+  }
+  if (value === current) return;
   await applyEdits('LevelData', state.levelId,
-    [{ op: 'set', path: `${room.pointer}/${field}`, value }], `${field} = ${value}`);
+    [{ op: 'put', path: pointer, value }], `tip → ${value}`);
 }
 
 async function toggleDoor(roomIndex, direction, open) {

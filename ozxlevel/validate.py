@@ -113,6 +113,13 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     entity=level_id, pointer=f"{rptr}/steamTrain"))
 
             issues.extend(_pinned_rail_issues(ds, level_id, rid, rptr, room))
+            if "exitBlockedTip" in room:
+                issues.extend(_tip_issues(
+                    level_id, f"{rid}: exitBlockedTip", f"{rptr}/exitBlockedTip",
+                    room["exitBlockedTip"],
+                    shown=bool(room.get("requiredForExitItemIds")),
+                    never_shown="the room has no requiredForExitItemIds, so its "
+                                "exit never refuses anyone"))
 
             # Non-cave rooms MUST declare staticPlacements. Every spawn adapter
             # calls RequireDeclared and throws on null — an empty array is the
@@ -208,6 +215,13 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          entity=level_id, pointer=dptr))
                 seen_dirs[direction] = di
 
+                if "lockedTip" in door:
+                    issues.extend(_tip_issues(
+                        level_id, f"{rid}: door {di} lockedTip", f"{dptr}/lockedTip",
+                        door["lockedTip"],
+                        shown=bool(door.get("locked") and door.get("keyId")),
+                        never_shown="the door is not locked with a keyId, so it "
+                                    "never refuses anyone for want of a key"))
                 if door.get("exitsRun"):
                     issues.extend(_run_exit_issues(level_id, rid, di, dptr, door, room))
                     continue
@@ -298,6 +312,51 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: not reachable from start room '{start}'",
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
+    return issues
+
+
+# RoomTips.MaxTipLength: one line of 56pt bold in an 860px banner.
+TIP_MAX_LENGTH = 25
+
+
+def _tip_issues(level_id: str, where: str, pointer: str, tip,
+                *, shown: bool, never_shown: str) -> list[dict]:
+    """A HUD tip — `DoorLinkData.lockedTip` / `RoomNodeData.exitBlockedTip`.
+
+    OZX-1168's banner tells a player why a door will not let them through.
+    `RoomTips.Validated` THROWS on a tip over 25 characters rather than
+    cutting it, because half a sentence naming which key to find is worse
+    than none; the shipped-data guard refuses a tip that is present but
+    blank, because the way to say nothing is to leave the key out. The game
+    fonts (Play-Bold / Aldrich-Regular) carry no CJK glyphs, so anything past
+    Latin draws as missing boxes — a warning, since nothing throws.
+    """
+    text = tip if isinstance(tip, str) else ""
+    if not text.strip():
+        return [_issue(
+            "error", "LEVEL_TIP_BLANK",
+            f"{where} is present but blank; omit the field to show no tip",
+            entity=level_id, pointer=pointer,
+            fix={"op": "remove", "path": pointer, "label": "Remove the empty tip"})]
+    issues: list[dict] = []
+    if len(text) > TIP_MAX_LENGTH:
+        issues.append(_issue(
+            "error", "LEVEL_TIP_TOO_LONG",
+            f"{where} is {len(text)} characters, over the {TIP_MAX_LENGTH}-character "
+            f"banner: \"{text}\". RoomTips throws rather than truncating",
+            entity=level_id, pointer=pointer))
+    foreign = sorted({c for c in text if ord(c) > 0x24F or not c.isprintable()})
+    if foreign:
+        issues.append(_issue(
+            "warning", "LEVEL_TIP_GLYPH_MISSING",
+            f"{where} uses {''.join(foreign)!r}, which the banner fonts cannot draw; "
+            f"write it in Latin characters",
+            entity=level_id, pointer=pointer))
+    if not shown:
+        issues.append(_issue(
+            "warning", "LEVEL_TIP_NEVER_SHOWN",
+            f"{where} is written, but {never_shown}",
+            entity=level_id, pointer=pointer))
     return issues
 
 

@@ -219,3 +219,57 @@ def test_appended_door_matches_surrounding_inline_style():
         "value": {"direction": 3, "toRoomId": "b", "toDoorId": 2, "locked": False},
     }])
     assert '{ "direction": 3, "toRoomId": "b", "toDoorId": 2, "locked": false }' in out
+
+
+# ── add: a member that is not there yet (OLE-34) ─────────────────────────
+# An optional field has no node to `set` until it is written, and writing
+# it as an empty default to have one puts a key on disk the runtime reads
+# as absent — the shape every tip guard upstream refuses.
+
+
+def test_add_to_an_inline_object_stays_inline():
+    text = '{ "doors": [{ "direction": 0, "toRoomId": "b", "locked": true }] }'
+    out = jsonspan.patch(jsonspan.parse(text), [
+        {"op": "add", "path": "/doors/0/lockedTip", "value": "GO FIND THE KEY"}])
+    assert out == ('{ "doors": [{ "direction": 0, "toRoomId": "b", "locked": true, '
+                   '"lockedTip": "GO FIND THE KEY" }] }')
+
+
+def test_add_to_a_multiline_object_matches_indent():
+    text = '{\n  "rooms": [\n    {\n      "roomId": "a",\n      "doors": []\n    }\n  ]\n}\n'
+    out = jsonspan.patch(jsonspan.parse(text), [
+        {"op": "add", "path": "/rooms/0/exitBlockedTip", "value": "PICK IT UP"}])
+    assert out == ('{\n  "rooms": [\n    {\n      "roomId": "a",\n      "doors": [],\n'
+                   '      "exitBlockedTip": "PICK IT UP"\n    }\n  ]\n}\n')
+
+
+def test_add_keeps_crlf():
+    text = '{\r\n    "a": 1\r\n}'
+    out = jsonspan.patch(jsonspan.parse(text), [{"op": "add", "path": "/b", "value": 2}])
+    assert out == '{\r\n    "a": 1,\r\n    "b": 2\r\n}'
+
+
+def test_add_into_an_empty_object_pads_it():
+    out = jsonspan.patch(jsonspan.parse('{ "x": {} }'),
+                         [{"op": "add", "path": "/x/k", "value": True}])
+    assert out == '{ "x": { "k": true } }'
+
+
+def test_add_refuses_a_key_that_exists():
+    with pytest.raises(jsonspan.JsonSpanError):
+        jsonspan.patch(jsonspan.parse('{ "a": 1 }'), [{"op": "add", "path": "/a", "value": 2}])
+
+
+def test_add_then_remove_is_byte_identical():
+    text = '{\n  "a": { "x": 1 },\n  "b": 2\n}\n'
+    added = jsonspan.patch(jsonspan.parse(text),
+                           [{"op": "add", "path": "/a/tip", "value": "HI"}])
+    back = jsonspan.patch(jsonspan.parse(added), [{"op": "remove", "path": "/a/tip"}])
+    assert back == text
+
+
+def test_put_sets_a_present_key_and_adds_an_absent_one():
+    doc = jsonspan.parse('{ "a": null, "b": 1 }')
+    out = jsonspan.patch(doc, [{"op": "put", "path": "/a", "value": "x"},
+                               {"op": "put", "path": "/c", "value": 2}])
+    assert out == '{ "a": "x", "b": 1, "c": 2 }'

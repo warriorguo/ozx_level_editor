@@ -206,6 +206,12 @@ def patch(doc: ParsedDoc, edits: list[dict]) -> str:
       member, taking one adjacent separator with it.
     - ``{"op": "append", "path": arrayPtr, "value": v}`` — append to an array,
       copying the whitespace style of the element before it.
+    - ``{"op": "add", "path": objPtr/key, "value": v}`` — add a member that is
+      not there yet, after the object's last one and in its style (inline or
+      one per line). Refuses a key that exists: that is ``set``.
+    - ``{"op": "put", "path": objPtr/key, "value": v}`` — ``set`` if the key
+      is there, ``add`` if not. For a client that only sees the projection,
+      where an explicit null and an omitted key look the same.
 
     Edits are applied from the end of the file backwards so that spans
     recorded against the original text stay valid throughout.
@@ -221,6 +227,14 @@ def patch(doc: ParsedDoc, edits: list[dict]) -> str:
             ops.append(_removal(doc, path))
         elif op == "append":
             ops.append(_append(doc, path, edit["value"]))
+        elif op == "add":
+            ops.append(_add(doc, path, edit["value"]))
+        elif op == "put":
+            if path in doc.spans:
+                start, end = doc.span(path)
+                ops.append((start, end, _render(edit["value"])))
+            else:
+                ops.append(_add(doc, path, edit["value"]))
         else:
             raise JsonSpanError(f"unknown op {op!r}")
 
@@ -323,3 +337,40 @@ def _inline_sep(doc: ParsedDoc, array_ptr: str) -> str:
     a_end = doc.span(f"{array_ptr}/0")[1]
     b_start = doc.span(f"{array_ptr}/1")[0]
     return doc.text[a_end:b_start]
+
+
+def _add(doc: ParsedDoc, path: str, value: Any) -> tuple[int, int, str]:
+    """Insert a new object member after the last one, matching its style.
+
+    An optional field that is omitted has no node to ``set``, and writing it
+    as a default to have one would put a key on disk that the runtime reads
+    as absent anyway — which is the one thing the data's own conventions ask
+    an editor not to do. So an absent field is added when it is first given a
+    value, and removed again when it is cleared.
+    """
+    obj_ptr, _, token = path.rpartition("/")
+    key = token.replace("~1", "/").replace("~0", "~")
+    existing = _resolve(doc.value, obj_ptr)
+    if not isinstance(existing, dict):
+        raise JsonSpanError(f"{obj_ptr!r} is not an object")
+    if key in existing:
+        raise JsonSpanError(f"{path!r} already exists; use set")
+    member = f"{json.dumps(key, ensure_ascii=False)}: {_render(value)}"
+    start, end = doc.span(obj_ptr)
+    text = doc.text
+    if not existing:
+        return (start + 1, end - 1, f" {member} ")
+
+    last_ptr = f"{obj_ptr}/{escape_token(list(existing)[-1])}"
+    last_start, last_end = doc.span(last_ptr)
+    between = text[last_end:end - 1]
+    if "\n" in between:
+        # One member per line: copy the indentation of the last one's key.
+        key_start = text.rfind('"', 0, text.rfind(":", 0, last_start) + 1)
+        key_start = text.rfind('"', 0, key_start)
+        line_start = text.rfind("\n", 0, key_start) + 1
+        indent = text[line_start:key_start]
+        if indent.strip():
+            indent = ""
+        return (last_end, last_end, "," + doc.newline + indent + member)
+    return (last_end, last_end, ", " + member)

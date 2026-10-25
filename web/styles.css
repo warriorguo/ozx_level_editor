@@ -1157,3 +1157,11 @@ button { color: inherit; }
 }
 /* the loot row gains an icon column */
 .loot-item { grid-template-columns: auto minmax(0,1fr) auto auto; }
+
+/* OZX-1168: HUD tips — one short line each, so the field is as narrow as
+   the 25 characters it may hold. */
+.room-tips { display: grid; gap: 4px; margin-top: 8px; }
+.tip-field { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 7px; align-items: center; }
+.tip-field > span { color: var(--dim); font-size: 8px; letter-spacing: .11em; text-transform: uppercase; }
+.tip-field input { width: 100%; max-width: 26ch; height: 24px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: #111613; font-size: 10px; outline: none; }
+.tip-field input:focus { border-color: var(--cyan); }

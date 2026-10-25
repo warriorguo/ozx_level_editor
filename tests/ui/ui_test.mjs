@@ -311,6 +311,43 @@ check('and says where a click will land',
   await settle();
 }
 
+// ── HUD tips (OZX-1168) ──────────────────────────────────────────────────
+// A tip is offered only where it can show, written when given text and
+// removed when cleared — never written blank, never past 25 characters.
+{
+  const fields = qa('[data-tip-path]');
+  const authored = level.floors[0].rooms.flatMap((r) =>
+    r.doors.filter((d) => d.lockedTip).map((d) => d.lockedTip)
+      .concat(r.exitBlockedTip ? [r.exitBlockedTip] : []));
+  check('every authored tip is in a field', authored.every((t) => fields.some((f) => f.value === t)),
+        `${authored.length} authored, ${fields.length} fields`);
+  const lockable = level.floors[0].rooms.reduce((n, r) =>
+    n + r.doors.filter((d) => (d.locked && d.keyId) || d.lockedTip != null).length
+      + ((r.requiredForExitItemIds || []).length || r.exitBlockedTip != null ? 1 : 0), 0);
+  check('a tip is offered exactly where it can show', fields.length === lockable,
+        `${fields.length} of ${lockable}`);
+  const field = fields.find((f) => f.value);
+  if (field) {
+    const change = async (value) => {
+      field.value = value;
+      field.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await settle();
+    };
+    let before = posted.length;
+    await change('GO FIND IT');
+    check('editing a tip writes it with put', posted[before]?.body.edits[0].op === 'put'
+          && posted[before]?.body.edits[0].path === field.dataset.tipPath,
+          JSON.stringify(posted[before]?.body.edits[0]));
+    before = posted.length;
+    await change('THIS ONE IS FAR TOO LONG TO FIT');
+    check('an over-length tip is refused before it is sent', posted.length === before);
+    before = posted.length;
+    await change('   ');
+    check('clearing a tip removes the key rather than writing blank',
+          posted[before]?.body.edits[0].op === 'remove', posted[before]?.body.edits[0].op);
+  }
+}
+
 // ── a switch must not leave a slot armed in another room ─────────────────
 // The selection is (roomIndex, kind, index) against the CURRENT floor, so
 // carrying it across a switch re-aims it at whatever room now sits at that

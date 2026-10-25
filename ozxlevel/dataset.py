@@ -1134,6 +1134,8 @@ class Dataset:
                     # this room; requireRail makes it draw a tilemap with track
                     # so a cart can ride through.
                     "railCart": bool(room.get("railCart")),
+                    "exitBlockedTip": room.get("exitBlockedTip"),
+                    "requiredForExitItemIds": list(room.get("requiredForExitItemIds") or []),
                     "requireRail": bool(room.get("requireRail")),
                     "themeId": (room.get("appearance") or {}).get("backgroundImage"),
                     "doors": [
@@ -1146,6 +1148,10 @@ class Dataset:
                          "exitsRun": bool(d.get("exitsRun")),
                          "locked": bool(d.get("locked")),
                          "keyId": d.get("keyId"),
+                         # OZX-1168: the banner a player sees when this door
+                         # refuses them for want of its key. None = absent,
+                         # which is the only way to say "no tip".
+                         "lockedTip": d.get("lockedTip"),
                          "pointer": f"{base}/doors/{i}"}
                         for i, d in enumerate(doors)
                     ],
