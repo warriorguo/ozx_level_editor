@@ -1103,7 +1103,8 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
-        for issue in _floor_plan_issues(ds, plan_id, fi, floor):
+        for issue in _floor_plan_issues(ds, plan_id, fi, floor,
+                                        bool(doc.value.get("waivePoolCoverage"))):
             pointer = plandefaults.reroute(issue["pointer"], fi, source)
             if pointer == issue["pointer"]:
                 issues.append(issue)
@@ -1292,7 +1293,7 @@ def _area_category(theme_id: str | None) -> str:
 
 
 def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
-                       floor: dict) -> list[dict]:
+                       floor: dict, waive_coverage: bool = False) -> list[dict]:
     """One merged floor. Pointers are written as if every field were the
     floor's own; `validate_plan` reroutes the inherited ones."""
     issues: list[dict] = []
@@ -1310,7 +1311,11 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
 
     stages = {s.get("stageType") for s in (floor.get("stageTypes") or [])}
     # New enemy types are only ever introduced in teaching/building rooms.
-    if stages and not (stages & {"teaching", "building"}):
+    # Part of upstream's pool coverage (`ValidatePoolCoverage`), so it holds
+    # only where there is a pool to cover and a generator to deal stages,
+    # and `waivePoolCoverage` (OZX-1366, test plans) switches it off.
+    if (stages and not (stages & {"teaching", "building"}) and floor.get("enemyPool")
+            and floor.get("generatorType") != "static" and not waive_coverage):
         issues.append(_issue(
             "error", "LEVEL_STAGE_INTRO_MISSING",
             f"floor {fi}: no teaching or building stage slice, so no room can "

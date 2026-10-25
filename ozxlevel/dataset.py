@@ -1116,6 +1116,9 @@ class Dataset:
             "skillDropLevelCap": cap,
             "skillDropLevelCapDeclared": bool(cap),
             "skillDropLevelCapEffective": cap or SKILL_DROP_LEVEL_CAP_DEFAULT,
+            # OZX-1366: test plans only — skips the "one run sees the whole
+            # pool" checks, so a plan that sets it says nothing about coverage.
+            "waivePoolCoverage": bool(doc.value.get("waivePoolCoverage")),
             "floors": floors,
             # OZX-1185: how the areas join. Empty = the implicit i → i+1 chain
             # of seam doors, keyed by each floor's transitionKeyId.

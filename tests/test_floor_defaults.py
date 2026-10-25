@@ -202,3 +202,23 @@ def test_a_plan_without_defaults_is_unchanged(ds):
     view = ds.plan_view("level_10")
     assert view["floorDefaults"]["declared"] is False
     assert all(not f["inherited"] for f in view["floors"])
+
+
+# ── OZX-1366: waivePoolCoverage ──────────────────────────────────────────
+
+
+@needs_data
+def test_a_waived_plan_needs_no_introducing_slice(ds, plan):
+    plan["floors"][0]["stageTypes"] = [{"stageType": "peak", "portion": 1}]
+    assert "LEVEL_STAGE_INTRO_MISSING" in [i["code"] for i in validate_plan(ds, "chapter_3")]
+    plan["waivePoolCoverage"] = True
+    assert "LEVEL_STAGE_INTRO_MISSING" not in [i["code"] for i in validate_plan(ds, "chapter_3")]
+    assert ds.plan_view("chapter_3")["waivePoolCoverage"] is True
+
+
+@needs_data
+def test_a_floor_with_no_pool_has_nothing_to_introduce(ds, plan):
+    plan["floors"][0]["stageTypes"] = [{"stageType": "peak", "portion": 1}]
+    plan["floors"][0]["enemyPool"] = []
+    plan["floorDefaults"].pop("enemyPool", None)
+    assert "LEVEL_STAGE_INTRO_MISSING" not in [i["code"] for i in validate_plan(ds, "chapter_3")]

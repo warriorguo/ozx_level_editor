@@ -290,6 +290,8 @@ LevelBasePlanData
       └ bossId / transitionKeyId / overflow* / useExitRoom / endsRunOnClear
 ```
 
+顶层的 `waivePoolCoverage`（OZX-1366，bool，只给测试 plan 用）：为 true 时 plan 校验跳过「一局见全池子」的覆盖规则（每层要有引入房、引入容量够），编辑器的 `LEVEL_STAGE_INTRO_MISSING` 同样跳过。同票的另一半是生成算法：没有出口的楼层（终点 area 且无 boss）不再要求主干 ≥ 2 间，start + 1 间合法——那由 genlevel 体现（OLE-1）。
+
 顶层还有一个 `skillDropLevelCap`（OZX-1069，int，与 `id` / `floorDefaults` / `floors` 同级）：**某技能到这个等级，本章就不再掉落该技能**；0 / 省略 = 默认 5。
 
 它**不是等级钳制**。`UpgradeSkill` 没改，等级天花板仍是 `SkillData.maxLevel`；cap 只决定还能不能被**发出来**，封四条通道（普通掉落 / 箱子 / 遭遇 pin / 技能平台），**按技能封**，同一张表里其它技能不受影响。字段说明不要写成「技能等级上限」。
