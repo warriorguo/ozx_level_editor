@@ -813,6 +813,7 @@ function renderRooms() {
               `<span class="chip key" title="This room yields ${esc(k)}">${esc(k)}</span>`).join('')}
             ${room.railCart ? '<span class="chip" title="OZX-1164: a rail cart is parked in this room">cart</span>' : ''}
             ${room.requireRail ? '<span class="chip" title="OZX-1164: this room must draw a tilemap with track, so a cart can ride through">rail</span>' : ''}
+            ${room.requireFullGround ? '<span class="chip" title="OZX-1265: this room only draws tilemaps whose ground has no empty cell; none for its door mask is a throw">full ground</span>' : ''}
             ${room.reachable === false
               ? '<span class="chip stuck" title="No route here from the start room without a key that is itself unreachable">unreachable</span>'
               : ''}

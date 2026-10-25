@@ -1170,6 +1170,8 @@ class Dataset:
                     "exitBlockedTip": room.get("exitBlockedTip"),
                     "requiredForExitItemIds": list(room.get("requiredForExitItemIds") or []),
                     "requireRail": bool(room.get("requireRail")),
+                    # OZX-1265: draw only templates with no empty ground cell.
+                    "requireFullGround": bool(room.get("requireFullGround")),
                     "themeId": (room.get("appearance") or {}).get("backgroundImage"),
                     "doors": [
                         {"index": i,

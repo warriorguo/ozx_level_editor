@@ -119,6 +119,7 @@ LevelData
 | `bossId` | string | 楼层 boss 敌人 id | **0** |
 | `seed` | int | 渲染种子，0 = 由 roomId 派生 | **0** |
 | `railCart` | bool | 这间房自带一台可乘坐的轨道矿车（OZX-1159 前叫 `steamTrain`）；房间没有 rail 层却开启 = fail-fast。旧名 JsonUtility 静默丢弃 → `LEVEL_ROOM_FIELD_RENAMED` | 1 |
+| `requireFullGround` | bool | 这间房只抽 ground 层没有空格的 tilemap（OZX-1265）。**硬过滤**，门掩码下一张都没有就抛。复合房（`roomCols/Rows > 1`）设了它——或所在 area 设了 `FloorData.requireFullGround`（OZX-1340）——`RoomLoadManager` 直接抛（复合拼接没有这层过滤）→ `ROOM_FULL_GROUND_COMPOSITE`；钉了 `templateId` 时它不起作用 → `ROOM_FULL_GROUND_PINNED`（Warning） | 1 |
 | `requireRail` | bool | 这间房必须抽到带 rail 图层的 tilemap，好让矿车骑过去（OZX-1164）。程序化关卡由 `AssignRail` 逐房标；手写可自填。和 `railCart` 是两件事：一间房放车，每间房铺轨 | 2 |
 
 **钉了 `templateId` 的房间跳过 rail 过滤**（`RoomTilemapSelector` / `RoomLoadManager` 按文件名直接取，不走 `RoomTilemapQuery`）。所以钉的图没有 rail 时：`railCart` → `RailCartSpawnAdapter` 抛（`LEVEL_ROOM_RAIL_MISSING`，Error）；`requireRail` → 矿车骑到这间就停（同码，Warning）。按文件名查的是**整个池子**，同名图在多个目录里（`all_start_5_01` 在 normal/ 无 rail、test/ 有 rail）时结果取决于加载顺序，编辑器只在所有同名副本结论一致时才下判断。

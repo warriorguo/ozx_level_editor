@@ -116,6 +116,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     entity=level_id, pointer=f"{rptr}/steamTrain"))
 
             issues.extend(_pinned_rail_issues(ds, level_id, rid, rptr, room))
+            issues.extend(_full_ground_issues(level_id, rid, rptr, room,
+                                              bool(floor.get("requireFullGround"))))
             issues.extend(_pinned_door_issues(ds, level_id, rid, rptr, room))
             issues.extend(_decal_issues(ds, level_id, rid, rptr, room,
                                         floor.get("themeId")))
@@ -535,6 +537,41 @@ def _pinned_door_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
     return [_issue("error", code, f"{rid}: pinned '{template}' {message}",
                    entity=level_id, pointer=f"{rptr}{suffix}")
             for code, suffix, message in common]
+
+
+def _full_ground_issues(level_id: str, rid: str, rptr: str, room: dict,
+                        area_wide: bool) -> list[dict]:
+    """`requireFullGround` (OZX-1265 per room, OZX-1340 per area).
+
+    A HARD filter in `RoomTilemapQuery`: only templates whose ground layer
+    has no empty cell, and none for the door mask is a throw. Two shapes
+    the query never sees:
+
+    - a composite room (`roomCols/roomRows` > 1) is stitched by
+      `CompositeRoomBuilder`, which has no full-ground filter, so
+      `RoomLoadManager` throws on one that asks — its own flag or its
+      area's;
+    - a pinned `templateId` skips the query, so the flag does nothing.
+    """
+    own = bool(room.get("requireFullGround"))
+    if not (own or area_wide):
+        return []
+    composite = (room.get("roomCols") or 1) > 1 or (room.get("roomRows") or 1) > 1
+    if composite and room.get("roomCategory") != "cave" and not room.get("templateId"):
+        return [_issue(
+            "error", "ROOM_FULL_GROUND_COMPOSITE",
+            f"{rid}: requires full ground ({'its own requireFullGround' if own else 'its area does'}) "
+            f"but is a {room.get('roomCols') or 1}x{room.get('roomRows') or 1} composite room; "
+            f"the composite builder has no full-ground filter and RoomLoadManager throws",
+            entity=level_id,
+            pointer=f"{rptr}/requireFullGround" if own else f"{rptr}/roomCols")]
+    if own and room.get("templateId"):
+        return [_issue(
+            "warning", "ROOM_FULL_GROUND_PINNED",
+            f"{rid}: requireFullGround does nothing on a pinned templateId "
+            f"('{room['templateId']}') — the pin skips the template query it filters",
+            entity=level_id, pointer=f"{rptr}/requireFullGround")]
+    return []
 
 
 def _pinned_rail_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
