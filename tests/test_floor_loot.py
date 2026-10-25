@@ -322,14 +322,9 @@ def test_a_guarantee_bound_to_a_fighting_stage_is_fine(ds, loot):
     assert "LOOT_GUARANTEED_STAGE_NO_ENEMIES" not in codes(ds)
 
 
-def test_tuning_the_probabilistic_share_of_a_stage_with_no_enemies_warns(ds, loot):
+def test_tuning_a_stage_with_no_enemies_is_live(ds, loot):
+    """Its crates still roll the stage-scaled table — `floorLootTableId` is
+    stamped on every room and `CargoSpawnAdapter` reads it — so a release
+    weight is real tuning, not a dead line."""
     loot.setdefault("stageWeights", []).append({"stageType": "release", "weight": 2})
-    found = [i for i in validate_plan(ds, PLAN)
-             if i["code"] == "LOOT_STAGE_WEIGHT_NO_ENEMIES"]
-    assert found and found[0]["severity"] == "warning"
-
-
-def test_zeroing_a_stage_with_no_enemies_says_nothing(ds, loot):
-    """weight 0 agrees with what happens anyway."""
-    loot.setdefault("stageWeights", []).append({"stageType": "release", "weight": 0})
-    assert "LOOT_STAGE_WEIGHT_NO_ENEMIES" not in codes(ds)
+    assert not [c for c in codes(ds) if "NO_ENEMIES" in c]

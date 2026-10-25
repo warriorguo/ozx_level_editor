@@ -323,7 +323,7 @@ LevelBasePlanData
 | `stageMustDrop[].drops[].itemId` | 同 probabilistic |
 | `stageMustDrop[].drops[].tableId` | 同 guaranteed：二选一、`pickOne` 且非空，生成期抛（OZX-1109） |
 
-**无敌人的 stage 只有 `stageMustDrop` 一条投放通道**（OZX-1109）。`enemyBudgetCut: 1` 的 stage 一个 launch 都没有，而另两条通道都挂在 launch 上：`guaranteed.boundStage` 指向它会被 `ResolveStageRoom` 抛（`LevelBasePlanAssigner.cs`，「a stage with no fight pays its guarantees through stageMustDrop」）——编辑器报 `LOOT_GUARANTEED_STAGE_NO_ENEMIES`（Error）；`probabilistic` 合成的表盖在 encounter action 的 `dropTableId` 上，那些房间里静默为零，`probabilistic` 本身没有按 stage 的行可指，所以只能在作者给该 stage 写了非零 `stageWeights` 时报 `LOOT_STAGE_WEIGHT_NO_ENEMIES`（Warning）。`stageMustDrop` 落的是箱子不是尸体，所以它还活着。
+**无敌人的 stage 的保底只能走 `stageMustDrop`**（OZX-1109）。`enemyBudgetCut: 1` 的 stage 一个 launch 都没有，而 guaranteed 挂在 launch 上：`guaranteed.boundStage` 指向它会被 `ResolveStageRoom` 抛（`LevelBasePlanAssigner.cs`，「a stage with no fight pays its guarantees through stageMustDrop」）——编辑器报 `LOOT_GUARANTEED_STAGE_NO_ENEMIES`（Error）。`probabilistic` **没有**死：stage 缩放后的表作为 `floorLootTableId` 盖在**每一间**房上（`LevelBasePlanAssigner` 的 OZX-473/477 段），`CargoSpawnAdapter.cs:121` 用它摇房里的箱子——死的只是尸体那一半，所以 release 的 `stageWeights` 是在调箱子，不报。`stageMustDrop` 落的是箱子不是尸体，所以它是 guaranteed 的替代。
 
 `stageMustDrop[].drops[].chance` 的 0 = 必出是刻意的：`MustDropItemData` 是 `[Serializable]` 子配置，`JsonUtility` 把省略的 float 读成 0，「省略 = 必出」只能这么表达；「永不掉」无法表达也是刻意的——删条目即可。区间外 `LOOT_MUST_DROP_CHANCE_INVALID`，空 `stageType` 上游抛，报 `LOOT_MUST_DROP_UNSCOPED`。
 

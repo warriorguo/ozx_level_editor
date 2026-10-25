@@ -824,30 +824,24 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
 
 def _no_fight_stage_issues(plan_id: str, fi: int, fptr: str, floor: dict,
                            plan: dict) -> list[dict]:
-    """A stage with no enemies can only be paid through `stageMustDrop` (OZX-1109).
+    """A guarantee bound to a stage with no enemies cannot be paid (OZX-1109).
 
     `enemyBudgetCut: 1` (OZX-1089) makes the generator skip the stage's rooms,
-    so not one launch exists there — and the other two channels both ride a
-    launch:
+    so not one launch exists there, and a `guaranteed` entry with
+    `boundStage` is a pin on the stage's last-killed opening enemy —
+    `ResolveStageRoom` throws when there is none. `stageMustDrop` lands a
+    crate instead of a body, which is why it is the channel that works.
 
-    - a `guaranteed` entry with `boundStage` on it is a pin on the stage's
-      last-killed opening enemy, and `ResolveStageRoom` throws when the stage
-      has none. Error, because generation would;
-    - `probabilistic` is synthesised into the table stamped on each encounter
-      action's `dropTableId`, so in those rooms it pays exactly nothing — no
-      throw, just zero, which is the harder one to find. There is no
-      per-stage line in `probabilistic` to point at, so the tell is a
-      `stageWeights` entry tuning that stage's share: the author is
-      expecting a drop that cannot happen.
-
-    `stageMustDrop` lands a crate instead of a body, which is why it is the
-    one channel that still works.
+    `probabilistic` is NOT dead there, whatever the ticket feared: the
+    stage's scaled table is stamped as `floorLootTableId` on every room, and
+    `CargoSpawnAdapter` rolls a room's crates from it. Only the body half of
+    it goes quiet, so a release `stageWeights` entry is live tuning of the
+    crates and is not a finding.
     """
     dry = {s.get("stageType") for s in (floor.get("stageTypes") or [])
            if s.get("stageType") and (s.get("enemyBudgetCut") or 0) >= 1}
     if not dry:
         return []
-    lptr = f"{fptr}/floorLootPlan"
     issues: list[dict] = []
     for gi, entry in enumerate(plan.get("guaranteed") or []):
         stage = entry.get("boundStage")
@@ -859,17 +853,8 @@ def _no_fight_stage_issues(plan_id: str, fi: int, fptr: str, floor: dict,
                 f"A guaranteed entry is paid by the stage's last-killed opening "
                 f"enemy and there is none, so generation throws. A stage with no "
                 f"fight pays through stageMustDrop, which lands a crate",
-                entity=plan_id, pointer=f"{lptr}/guaranteed/{gi}/boundStage"))
-    for wi, entry in enumerate(plan.get("stageWeights") or []):
-        stage = entry.get("stageType")
-        if stage in dry and entry.get("weight", 0) != 0:
-            issues.append(_issue(
-                "warning", "LOOT_STAGE_WEIGHT_NO_ENEMIES",
-                f"floor {fi}: stageWeights[{wi}] tunes the probabilistic share of "
-                f"stage '{stage}', which has no enemies (enemyBudgetCut 1). "
-                f"Probabilistic loot drops off encounter actions, so that stage "
-                f"gets none of it whatever the weight; use stageMustDrop",
-                entity=plan_id, pointer=f"{lptr}/stageWeights/{wi}"))
+                entity=plan_id,
+                pointer=f"{fptr}/floorLootPlan/guaranteed/{gi}/boundStage"))
     return issues
 
 
