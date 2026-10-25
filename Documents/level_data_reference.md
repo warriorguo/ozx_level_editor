@@ -235,6 +235,10 @@ LevelData
 
 实际用量集中在 `decalCategory + count`（123/124），其余都是零星使用。
 
+**`decalCategory` 的取值是封闭集合**（`DecalSurface.StampCategory` 的 case，未知即抛 → `ROOM_DECAL_CATEGORY_UNKNOWN`）：`ground_crack`、`ground_utility_by_edge`、`edge_crack`、`floor_static_2x2`、`ground_blood`，以及 BattleField 的 `ground_crater` / `ground_scrub` / `ground_gravel` / `ground_rubble`（OZX-1268，自由撒）和 `ground_stones_by_edge`（OZX-1274，按离墙距离撒）。`abandoned_cable` 在 factory 配置里有，但**不可编写**（电缆挂在设备周围，没有 count）。
+
+**写得出 ≠ 画得出**：类目查的是房间所在楼层 `themeId` 的 `stainConfig`（`HasCategory` / `TryGetCategory`），没有就**什么都不画**，不会拿别的图顶替。所以 BattleField 那五个写在 factory 楼层上是死字 → `ROOM_DECAL_CATEGORY_NOT_IN_THEME`（Warning）。编辑器从主题资源的 `stainConfig` 读这份清单（`ThemeIndex.decal_categories`），不是硬编码「BattleField 专属」。出货里 `level_test` / `factory2_test` 的 `f0_room_1_0`（上游 README 称之为 BattleField 样例房）就落在 factory / factory2 楼层上，那 103 张贴花实际一张都不画。
+
 ### 4.7 RoomAppearanceData
 
 该房相对楼层主题的差异，字段全部「空 = 用主题默认」：

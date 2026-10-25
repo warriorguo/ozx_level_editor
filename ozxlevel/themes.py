@@ -35,6 +35,14 @@ import re
 _REF = re.compile(r"guid:\s*([0-9a-f]{32})")
 
 
+def _stamp(path: pathlib.Path):
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _guid_in(text: str, field: str) -> str | None:
     """The guid of a single-reference field, e.g. `tileTheme: {…}`."""
     for line in text.splitlines():
@@ -77,10 +85,30 @@ class ThemeIndex:
         # Reuse the sprite index purely for its guid<->path and ResourcesDB
         # tables; nothing here is a sprite.
         self.sprites = sprites
-        self._cache: dict[str, dict] = {}
+        # key -> (result, {asset path: stat stamp}). The assets live in the
+        # Unity tree, outside GameData, so `Dataset.refresh` never sees them
+        # change; each entry carries the stamps of the files it was read
+        # from and is recomputed when any of them moves.
+        self._cache: dict[str, tuple] = {}
+        self._reading: dict | None = None
 
     def invalidate(self) -> None:
         self._cache.clear()
+
+    def _cached(self, key: str):
+        hit = self._cache.get(key)
+        if hit is None:
+            return None
+        result, stamps = hit
+        if any(_stamp(path) != stamp for path, stamp in stamps.items()):
+            del self._cache[key]
+            return None
+        return result
+
+    def _store(self, key: str, result: dict) -> dict:
+        self._cache[key] = (result, self._reading or {})
+        self._reading = None
+        return result
 
     def _read(self, guid: str | None) -> str | None:
         if not guid:
@@ -88,6 +116,8 @@ class ThemeIndex:
         path = self.sprites.path_for(guid)
         if path is None or not path.is_file():
             return None
+        if self._reading is not None:
+            self._reading[path] = _stamp(path)
         try:
             return path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -108,9 +138,11 @@ class ThemeIndex:
         Unity checkout turns every name into a validation error.
         """
         key = theme_id or ""
-        if key in self._cache:
-            return self._cache[key]
+        cached = self._cached(key)
+        if cached is not None:
+            return cached
 
+        self._reading = {}
         result = {"found": False, "pool": [], "named": [], "all": []}
         theme_text = self._read(self.sprites.guid_for_key(key)) if key else None
         tile_text = self._read(_guid_in(theme_text, "tileTheme")) if theme_text else None
@@ -122,5 +154,69 @@ class ThemeIndex:
                                  if g) if n]
             result = {"found": True, "pool": pool, "named": named,
                       "all": pool + [n for n in named if n not in pool]}
-        self._cache[key] = result
-        return result
+        return self._store(key, result)
+
+    def decal_categories(self, theme_id: str | None) -> dict:
+        """The decal categories `theme_id`'s `stainConfig` can draw.
+
+        `RoomNodeData.decorations[].decalCategory` names a category, and the
+        room theme decides what it looks like — `DecalSurface` asks
+        `stainConfig.HasCategory` / `TryGetCategory` and draws NOTHING when
+        the theme has no such category (no fallback sprite, on purpose). The
+        BattleField props (OZX-1268 / OZX-1274) are only in
+        `BattleFieldDecalConfig`, so the same name is a decoration on one
+        floor and dead text on the next.
+
+        Returns ``{"found": bool, "names": [...]}``; a category with an empty
+        sprite list is left out, since `TryGetCategory` skips it.
+        """
+        key = f"decals:{theme_id or ''}"
+        cached = self._cached(key)
+        if cached is not None:
+            return cached
+        self._reading = {}
+        result = {"found": False, "names": []}
+        theme_text = self._read(self.sprites.guid_for_key(theme_id)) if theme_id else None
+        config = self._read(_guid_in(theme_text, "stainConfig")) if theme_text else None
+        if config is not None:
+            result = {"found": True, "names": _category_names(config)}
+        return self._store(key, result)
+
+
+def _category_names(text: str) -> list[str]:
+    """`categories:` entries of a DecalStampConfig that carry sprites.
+
+    Each entry is a `  - name: X` line followed by its fields at a deeper
+    indent; `sprites: []` (inline empty) or a `sprites:` key with no `- `
+    lines under it is an entry `TryGetCategory` will not return.
+    """
+    names: list[str] = []
+    current = None
+    has_sprites = False
+    in_sprites = False
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("categories:"):
+            in_block = True
+            continue
+        if not in_block:
+            continue
+        if line.startswith("  - name:"):
+            if current and has_sprites:
+                names.append(current)
+            current = stripped.split(":", 1)[1].strip()
+            has_sprites = in_sprites = False
+            continue
+        if not line.startswith("    ") and not line.startswith("  - "):
+            break
+        if stripped.startswith("sprites:"):
+            in_sprites = stripped != "sprites: []" and stripped.endswith(":")
+            continue
+        if in_sprites and stripped.startswith("- "):
+            has_sprites = True
+        elif not stripped.startswith("- "):
+            in_sprites = False
+    if current and has_sprites:
+        names.append(current)
+    return names

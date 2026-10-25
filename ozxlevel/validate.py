@@ -117,6 +117,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
 
             issues.extend(_pinned_rail_issues(ds, level_id, rid, rptr, room))
             issues.extend(_pinned_door_issues(ds, level_id, rid, rptr, room))
+            issues.extend(_decal_issues(ds, level_id, rid, rptr, room,
+                                        floor.get("themeId")))
             if "exitBlockedTip" in room:
                 issues.extend(_tip_issues(
                     level_id, f"{rid}: exitBlockedTip", f"{rptr}/exitBlockedTip",
@@ -440,6 +442,60 @@ def _tip_issues(level_id: str, where: str, pointer: str, tip,
             "warning", "LEVEL_TIP_NEVER_SHOWN",
             f"{where} is written, but {never_shown}",
             entity=level_id, pointer=pointer))
+    return issues
+
+
+# `DecalSurface.StampCategory`'s cases — anything else throws. The last five
+# are the BattleField props (OZX-1268, OZX-1274). `abandoned_cable` exists in
+# the factory config but is deliberately NOT authorable: cables hang off the
+# room's devices and take no count (OZX-962).
+DECAL_CATEGORIES = ("ground_crack", "ground_utility_by_edge", "edge_crack",
+                    "floor_static_2x2", "ground_blood", "ground_crater",
+                    "ground_scrub", "ground_gravel", "ground_rubble",
+                    "ground_stones_by_edge")
+
+
+def decal_category_issues(ds: Dataset, entity: str, where: str, pointer: str,
+                          category: str, theme_id: str | None) -> list[dict]:
+    """One `decalCategory`: a known name, and one this theme can draw.
+
+    The level says how much, the room theme says what it looks like. An
+    unknown name throws when the room is dressed; a known name the theme's
+    `stainConfig` lacks draws nothing, with no fallback sprite — which is
+    the only outcome of writing a BattleField prop on a factory floor.
+    """
+    if category not in DECAL_CATEGORIES:
+        why = (" — cables are placed around the room's devices, not authored"
+               if category == "abandoned_cable" else "")
+        return [_issue(
+            "error", "ROOM_DECAL_CATEGORY_UNKNOWN",
+            f"{where} names decal category '{category}'{why}; DecalSurface throws on "
+            f"anything but {', '.join(DECAL_CATEGORIES)}",
+            entity=entity, pointer=pointer)]
+    drawable = ds.themes.decal_categories(theme_id)
+    if drawable["found"] and category not in drawable["names"]:
+        return [_issue(
+            "warning", "ROOM_DECAL_CATEGORY_NOT_IN_THEME",
+            f"{where} scatters '{category}', which theme '{theme_id}' has no sprites for, "
+            f"so nothing is drawn",
+            entity=entity, pointer=pointer)]
+    return []
+
+
+def _decal_issues(ds: Dataset, level_id: str, rid: str, rptr: str, room: dict,
+                  theme_id: str | None) -> list[dict]:
+    """`decorations[].decalCategory` (OZX-967), with the room's theme.
+
+    The theme is the floor's (`RoomServiceAdapter.ThemeIdForRoom`); a room
+    has no theme of its own.
+    """
+    issues: list[dict] = []
+    for di, deco in enumerate(room.get("decorations") or []):
+        category = (deco or {}).get("decalCategory")
+        if category:
+            issues.extend(decal_category_issues(
+                ds, level_id, f"{rid}: decoration {di}",
+                f"{rptr}/decorations/{di}/decalCategory", category, theme_id))
     return issues
 
 
