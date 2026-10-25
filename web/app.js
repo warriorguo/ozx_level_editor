@@ -786,6 +786,8 @@ function renderRooms() {
           <div class="room-actions">
             ${(room.dropsKeys || []).map((k) =>
               `<span class="chip key" title="This room yields ${esc(k)}">${esc(k)}</span>`).join('')}
+            ${room.railCart ? '<span class="chip" title="OZX-1164: a rail cart is parked in this room">cart</span>' : ''}
+            ${room.requireRail ? '<span class="chip" title="OZX-1164: this room must draw a tilemap with track, so a cart can ride through">rail</span>' : ''}
             ${room.reachable === false
               ? '<span class="chip stuck" title="No route here from the start room without a key that is itself unreachable">unreachable</span>'
               : ''}
@@ -1515,6 +1517,9 @@ function renderPlanFloors() {
           <div><span>rooms</span><strong class="${inheritedMark(f, 'roomCountMin') || inheritedMark(f, 'roomCountMax')}">${f.roomCountMin ?? '?'}–${f.roomCountMax ?? '?'}</strong></div>
           <div><span>enemies/room</span><strong class="${inheritedMark(f, 'enemiesPerRoom')}">${f.enemiesPerRoom ?? '—'}</strong></div>
           <div><span>key</span><strong class="${inheritedMark(f, 'transitionKeyId')}">${esc(f.transitionKeyId || '—')}</strong></div>
+          <div><span>rail</span><strong class="${f.railCart ? inheritedMark(f, 'railCart') : 'noboss'}"
+            title="OZX-1164: every room draws a tilemap with track, and the start room gets a cart. A floor can switch it on over the chapter, never off.">${
+            f.railCart ? 'on — every room, cart at start' : 'off'}</strong></div>
           <div><span>skill cap</span><strong class="${state.plan.skillDropLevelCapDeclared ? '' : 'noboss'}"
             title="OZX-1069: a skill stops DROPPING at this level. Not a level clamp — maxLevel still rules.">${
             state.plan.skillDropLevelCapDeclared

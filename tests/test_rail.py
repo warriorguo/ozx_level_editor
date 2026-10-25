@@ -54,3 +54,67 @@ def test_the_old_name_is_refused_not_read(ds, level):
 
 def test_the_new_name_is_not_a_finding(ds):
     assert not found(ds, "LEVEL_ROOM_FIELD_RENAMED")
+
+
+# ── OZX-1164: requireRail, and a pin that skips the rail filter ──────────
+
+
+def pin(level, template, **flags):
+    room = first_room(level)
+    room.update(templateId=template, **flags)
+    room.pop("roomCategory", None)
+    return room
+
+
+def test_a_cart_parked_on_a_pin_without_track_is_an_error(ds, level):
+    """`all_start_1_02` exists once and has no rail; the adapter throws."""
+    assert ds.pinned_template_rail("all_start_1_02") is False
+    pin(level, "all_start_1_02", railCart=True)
+    bad = found(ds, "LEVEL_ROOM_RAIL_MISSING")
+    assert bad and bad[0]["severity"] == "error"
+
+
+def test_track_required_on_a_pin_without_it_warns(ds, level):
+    """A pin skips RoomTilemapQuery's rail filter; the ride just ends."""
+    pin(level, "all_start_1_02", requireRail=True)
+    bad = found(ds, "LEVEL_ROOM_RAIL_MISSING")
+    assert bad and bad[0]["severity"] == "warning"
+
+
+def test_a_pin_with_track_is_fine(ds, level):
+    assert ds.pinned_template_rail("all_teaching_5_05") is True
+    pin(level, "all_teaching_5_05", railCart=True, requireRail=True)
+    assert not found(ds, "LEVEL_ROOM_RAIL_MISSING")
+
+
+def test_a_name_in_two_pools_that_disagree_is_not_judged(ds, level):
+    """The pool is searched by file name and both copies are in it — which
+    one a pin gets is load order, so neither answer can be claimed."""
+    assert ds.pinned_template_rail("all_teaching_15_04") is None
+    pin(level, "all_teaching_15_04", railCart=True)
+    assert not found(ds, "LEVEL_ROOM_RAIL_MISSING")
+
+
+def test_the_floor_switch_reaches_the_plan_view(ds):
+    """chapter_5 runs its two basement areas on rail."""
+    floors = ds.plan_view("chapter_5")["floors"]
+    assert [f["railCart"] for f in floors] == [False, False, True, True]
+
+
+def test_a_chapter_wide_rail_switch_cannot_be_turned_off_by_a_floor(ds):
+    doc = ds.get("LevelBasePlanData", "chapter_5")
+    defaults = doc.value["floorDefaults"]
+    defaults["railCart"] = True
+    doc.value["floors"][0]["railCart"] = False
+    try:
+        floors = ds.plan_view("chapter_5")["floors"]
+        assert all(f["railCart"] for f in floors)
+        assert "railCart" in floors[0]["inherited"]
+    finally:
+        defaults.pop("railCart")
+        doc.value["floors"][0].pop("railCart")
+
+
+def test_the_room_flags_reach_the_level_view(ds):
+    rooms = [r for f in ds.level_view("level_test")["floors"] for r in f["rooms"]]
+    assert any(r["requireRail"] for r in rooms)

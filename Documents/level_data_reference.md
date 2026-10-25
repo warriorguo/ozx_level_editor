@@ -118,6 +118,9 @@ LevelData
 | `bossId` | string | 楼层 boss 敌人 id | **0** |
 | `seed` | int | 渲染种子，0 = 由 roomId 派生 | **0** |
 | `railCart` | bool | 这间房自带一台可乘坐的轨道矿车（OZX-1159 前叫 `steamTrain`）；房间没有 rail 层却开启 = fail-fast。旧名 JsonUtility 静默丢弃 → `LEVEL_ROOM_FIELD_RENAMED` | 1 |
+| `requireRail` | bool | 这间房必须抽到带 rail 图层的 tilemap，好让矿车骑过去（OZX-1164）。程序化关卡由 `AssignRail` 逐房标；手写可自填。和 `railCart` 是两件事：一间房放车，每间房铺轨 | 2 |
+
+**钉了 `templateId` 的房间跳过 rail 过滤**（`RoomTilemapSelector` / `RoomLoadManager` 按文件名直接取，不走 `RoomTilemapQuery`）。所以钉的图没有 rail 时：`railCart` → `RailCartSpawnAdapter` 抛（`LEVEL_ROOM_RAIL_MISSING`，Error）；`requireRail` → 矿车骑到这间就停（同码，Warning）。按文件名查的是**整个池子**，同名图在多个目录里（`all_start_5_01` 在 normal/ 无 rail、test/ 有 rail）时结果取决于加载顺序，编辑器只在所有同名副本结论一致时才下判断。
 
 两个反直觉点：
 
@@ -306,6 +309,7 @@ LevelBasePlanData
 | `floorLootPlan` | 楼层掉落方案，见 §5.3 | 12 |
 | `transitionKeyId` | 过渡钥匙 item id；编译期自动绑到 peak/跨层流程并插锁门 | 10 |
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
+| `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |
 | `caves` | `{linkType, encounterId, lootPlanId}` | 1 |

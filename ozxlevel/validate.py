@@ -112,6 +112,8 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     f"name is ignored without a word, so this room gets no cart",
                     entity=level_id, pointer=f"{rptr}/steamTrain"))
 
+            issues.extend(_pinned_rail_issues(ds, level_id, rid, rptr, room))
+
             # Non-cave rooms MUST declare staticPlacements. Every spawn adapter
             # calls RequireDeclared and throws on null — an empty array is the
             # way to say "this room places nothing".
@@ -297,6 +299,44 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
     return issues
+
+
+def _pinned_rail_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
+                        room: dict) -> list[dict]:
+    """A pinned template has to carry the track the room asks for (OZX-1164).
+
+    A pinned `templateId` is taken as is: `RoomTilemapSelector` and
+    `RoomLoadManager` never run it through `RoomTilemapQuery`, so the rail
+    filter `requireRail` normally applies is skipped. The two flags then
+    fail differently:
+
+    - `railCart` (a cart parked here) throws in `RailCartSpawnAdapter` when
+      the room has no traceable rail — an error;
+    - `requireRail` (track for a cart riding through) is only a request to
+      the filter, so the ride simply ends at this room — a warning, and the
+      one nobody sees until they ride into it.
+
+    Caves are skipped, as the adapter skips them.
+    """
+    template = room.get("templateId")
+    if not template or room.get("roomCategory") == "cave":
+        return []
+    if not (room.get("railCart") or room.get("requireRail")):
+        return []
+    if ds.pinned_template_rail(template) is not False:
+        return []
+    if room.get("railCart"):
+        return [_issue(
+            "error", "LEVEL_ROOM_RAIL_MISSING",
+            f"{rid}: railCart parks a cart here, but the pinned template "
+            f"'{template}' has no rail layer; RailCartSpawnAdapter throws",
+            entity=level_id, pointer=f"{rptr}/templateId")]
+    return [_issue(
+        "warning", "LEVEL_ROOM_RAIL_MISSING",
+        f"{rid}: requireRail asks for track, but the pinned template "
+        f"'{template}' has none. A pin skips the rail filter, so a cart that "
+        f"rides in stops here",
+        entity=level_id, pointer=f"{rptr}/templateId")]
 
 
 def _run_exit_issues(level_id: str, rid: str, di: int, dptr: str,
