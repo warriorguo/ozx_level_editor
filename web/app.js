@@ -532,6 +532,27 @@ function skillOptions(selected) {
   return opts.join('');
 }
 
+/** Options for a cargo entry's crate picker (OZX-1468).
+ *
+ *  "" is the ordinary choice — the field omitted, a random look per crate
+ *  (the default crate when pinned). Every CargoData can be named; naming is
+ *  the only way an `authoredOnly` one (cargo_premium) appears. An authored
+ *  id with no CargoData stays selectable, marked, so the picker never
+ *  misreports the current value.
+ */
+function cargoOptions(selected) {
+  const catalog = state.boot.cargoCatalog || [];
+  const opts = [`<option value="" ${selected ? '' : 'selected'}>ordinary look</option>`];
+  for (const c of catalog) {
+    opts.push(`<option value="${esc(c.id)}" ${c.id === selected ? 'selected' : ''}
+      >${esc(c.id)}${c.authoredOnly ? ' (named only)' : ''}</option>`);
+  }
+  if (selected && !catalog.some((c) => c.id === selected)) {
+    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)} (no CargoData)</option>`);
+  }
+  return opts.join('');
+}
+
 /** What one wave drops when it dies.
  *
  *  Shown on the enemy row rather than in the Loot column because that is
@@ -724,7 +745,7 @@ function renderRooms() {
                     ? `${p.skillId} — no SkillData with this id`
                     : [skill.displayName, skill.skillType].filter(Boolean).join(' · '))
                 : 'no skillId — the spawn adapter throws')
-            : [p.itemId, p.lootTableId, p.mountedEnemyId]
+            : [p.cargoId, p.itemId, p.lootTableId, p.mountedEnemyId]
                 .filter(Boolean).join(' · ')
                 || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
           const broken = isSkill && (!p.skillId || skill.missing
@@ -743,7 +764,13 @@ function renderRooms() {
                        title="The active skill this platform offers, refilled on touch"
                        ${p.skillIdDeclared ? '' : 'disabled'}
                        >${skillOptions(p.skillId)}</select>`
-            : '';
+            : p.kind === 'cargo'
+              ? `<select class="inline-select cargo-picker"
+                         data-cargo-target="${esc(p.pointer)}/cargoId"
+                         data-cargo-current="${esc(p.cargoId || '')}"
+                         title="OZX-1468: the crate every box of this entry is — omit for a random ordinary look"
+                         >${cargoOptions(p.cargoId)}</select>`
+              : '';
           return `<div class="content-entry${isSkill ? ' skill-entry' : ''}${broken ? ' missing' : ''}${odds ? ' odds-carrier' : ''}${slotCls('statics', i)}" data-slot="statics" data-slot-index="${i}">
             ${glyph(isSkill ? skill.sprite : source.sprite, source.code, broken ? 'missing' : '')}
             <span><strong>${esc(p.kind)}</strong><small>${esc(detail)}</small></span>
@@ -1201,6 +1228,15 @@ function wireRoomCards() {
       select.addEventListener('change', async (event) => {
         state.selectedRoomIndex = roomIndex;
         await setSkillId(event.target.dataset.skillTarget, event.target.value);
+      });
+    });
+
+    card.querySelectorAll('.cargo-picker').forEach((select) => {
+      select.addEventListener('click', (event) => event.stopPropagation());
+      select.addEventListener('change', async (event) => {
+        state.selectedRoomIndex = roomIndex;
+        const { cargoTarget, cargoCurrent } = event.target.dataset;
+        await setCargoId(cargoTarget, cargoCurrent, event.target.value);
       });
     });
 
@@ -1680,7 +1716,7 @@ function renderPlanFloors() {
     const placements = f.defaultStaticPlacements.length
       ? f.defaultStaticPlacements.map((p) => {
           const odds = oddsLine(p);
-          const what = [p.prefabKey, p.placement].filter(Boolean).join(' · ');
+          const what = [p.prefabKey, p.cargoId, p.placement].filter(Boolean).join(' · ');
           return `<div class="content-entry${odds ? ' odds-carrier' : ''}">
             <span class="content-glyph">${esc(codeOf(p.kind))}</span>
             <span><strong>${esc(p.kind || '?')}</strong><small>${
@@ -2036,6 +2072,17 @@ async function setSkillId(pointer, skillId) {
   if (pointerValue(pointer) === skillId) return;
   await applyEdits('LevelData', state.levelId,
     [{ op: 'set', path: pointer, value: skillId }], `skill → ${skillId}`);
+}
+
+/** OZX-1468: name a crate, or go back to the ordinary look by omitting the
+ *  field — an empty string would be "named", and match no CargoData. */
+async function setCargoId(pointer, current, cargoId) {
+  if ((current || '') === cargoId) return;
+  const edit = cargoId
+    ? { op: 'put', path: pointer, value: cargoId }
+    : { op: 'remove', path: pointer };
+  await applyEdits('LevelData', state.levelId, [edit],
+    cargoId ? `crate → ${cargoId}` : 'crate → ordinary look');
 }
 
 /** Read the value a JSON pointer currently holds in the loaded level view. */

@@ -212,6 +212,7 @@ LevelData
 | `kind` | `cargo`/`oiltank`/`toxicbarrel`/`pinballhammer`/`prop`/`skill`/`device`/`trigger`/`equipment`，未知 kind fail-fast。注意 `LevelData.cs` 里那段注释的清单**漏了 `toxicbarrel`**（`ToxicBarrelSpawnAdapter` 确实认它）——kind 的权威来源是各 adapter，不是契约注释 | 39 |
 | `count` | random 模式数量 | 36 |
 | `lootTableId` | 仅 `cargo`：指定该箱子的掉落表 | 27 |
+| `cargoId` | 仅 `cargo`（OZX-1468，核对于 `ozx_base@099372c6`）：该条目放的**所有**箱子用哪份 `CargoData`（`GameData/cargo/`），pinned / count 两种模式都认（`Game.Contracts/Data/LevelData.cs:517`）。省略 = 原行为（count 模式每箱随机普通外观，pinned 用默认箱）。点名是 `authoredOnly` 箱子（`cargo_premium`）出现的**唯一**途径。写在别的 kind 上抛（`AuthoredStaticPlacementsLogic.cs:43` `ValidateCargoIds`），id 不存在抛（`CargoVariantLogic.cs:35` `ResolveNamed`）。编辑器：`ROOM_PLACEMENT_CARGO_ID_MISPLACED` / `DATA_REFERENCE_MISSING`，房间卡片上 cargo 条目有箱子下拉 | 0 |
 | `skillId` | 仅 `skill`：必填，**主动**技能 id（OZX-1400 起平台是可反复充能的主动技能站，之前发被动） | 4 |
 | `charges` | 仅 `skill`：必填 int > 0，触碰平台获得 / 充满的使用次数（OZX-1400）；`buffDurationSeconds` 已无意义 | 4 |
 | `footprintCols/Rows` | 占地覆盖，0 = kind 默认（oiltank/skill 2×2，device 2×3，其余 1×1）。只有 oiltank/skill/device 支持非默认 | 3 |

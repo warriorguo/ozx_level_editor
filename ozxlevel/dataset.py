@@ -577,6 +577,17 @@ class Dataset:
             "sprite": self.sprites.sprite_for_resource_key(icon_key),
         }
 
+    def cargo_catalog(self) -> list[dict]:
+        """Every CargoData a cargo entry may name in `cargoId` (OZX-1468).
+
+        All of them are nameable — naming is the only way an `authoredOnly`
+        crate appears at all — so the flag is shown, not filtered on.
+        """
+        return [{"id": d.id,
+                 "displayName": d.value.get("displayName") or d.id,
+                 "authoredOnly": bool(d.value.get("authoredOnly"))}
+                for d in self.of_type("CargoData")]
+
     def skill_catalog(self) -> list[dict]:
         """Skills a SkillPlatform may grant — active, with a loadable icon.
 
@@ -1126,6 +1137,7 @@ class Dataset:
                 "defaultStaticPlacements": [
                     {"index": pi, "kind": p.get("kind"),
                      "prefabKey": p.get("prefabKey"),
+                     "cargoId": p.get("cargoId"),
                      "count": p.get("count") or 0,
                      "countMin": p.get("countMin") or 0,
                      "countMinReading": countmin_reading(p),
@@ -1294,6 +1306,9 @@ class Dataset:
                          # platform renders as an anonymous "skill".
                          "skillId": p.get("skillId"),
                          "skillIdDeclared": "skillId" in p,
+                         # OZX-1468: the crate a cargo entry places; None is
+                         # the ordinary look.
+                         "cargoId": p.get("cargoId"),
                          # OZX-1400: uses granted or refilled per touch.
                          "charges": p.get("charges") or 0,
                          "skill": (self.skill_brief(p.get("skillId"))

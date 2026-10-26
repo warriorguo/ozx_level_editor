@@ -89,3 +89,44 @@ def test_a_plan_crate_needs_probabilistic_loot_or_its_own_table(ds, plan):
     floor["floorLootPlan"].pop("probabilisticPresets", None)
     assert "ROOM_CARGO_LOOT_SOURCE_MISSING" in [
         i["code"] for i in validate_plan(ds, "chapter_3")]
+
+
+# ── OZX-1468: cargoId names the crate (OLE-60) ───────────────────────────
+
+PREMIUM = {"kind": "cargo", "cargoId": "cargo_premium",
+           "lootTableId": "loot_cargo_premium", "count": 1}
+
+
+def test_a_named_crate_is_fine(ds, level):
+    room(level).setdefault("staticPlacements", []).append(dict(PREMIUM))
+    found = codes(ds)
+    assert "ROOM_PLACEMENT_CARGO_ID_MISPLACED" not in found
+    assert not [i for i in validate_level(ds, "chapter_1") if i["pointer"].endswith("/cargoId")]
+
+
+def test_a_crate_no_cargo_data_has_throws(ds, level):
+    room(level).setdefault("staticPlacements", []).append(dict(PREMIUM, cargoId="cargo_nope"))
+    found = [i for i in validate_level(ds, "chapter_1") if i["pointer"].endswith("/cargoId")]
+    assert [i["code"] for i in found] == ["DATA_REFERENCE_MISSING"]
+
+
+def test_cargo_id_on_another_kind_throws(ds, level):
+    room(level).setdefault("staticPlacements", []).append(
+        {"kind": "oiltank", "count": 1, "cargoId": "cargo_premium"})
+    assert "ROOM_PLACEMENT_CARGO_ID_MISPLACED" in codes(ds)
+
+
+def test_a_plan_default_is_checked_the_same_way(ds, plan):
+    plan["floors"][0]["defaultStaticPlacements"].append(
+        {"kind": "prop", "prefabKey": "prefab/groundbomb", "count": 1, "cargoId": "cargo_premium"})
+    assert "ROOM_PLACEMENT_CARGO_ID_MISPLACED" in [i["code"] for i in validate_plan(ds, "chapter_3")]
+
+
+def test_the_view_and_the_catalog_carry_it(ds, level):
+    room(level).setdefault("staticPlacements", []).append(dict(PREMIUM))
+    view = ds.level_view("chapter_1")
+    placed = view["floors"][0]["rooms"][1]["staticPlacements"][-1]
+    assert placed["cargoId"] == "cargo_premium"
+    catalog = {c["id"]: c for c in ds.cargo_catalog()}
+    assert catalog["cargo_premium"]["authoredOnly"] is True
+    assert catalog["cargo_box_2"]["authoredOnly"] is False

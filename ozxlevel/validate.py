@@ -183,6 +183,7 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                 issues.extend(_placement_count_issues(level_id, rid, pi, pptr, p))
                 issues.extend(_cargo_issues(level_id, rid, pi, pptr, p,
                                             bool(room.get("floorLootTableId"))))
+                issues.extend(_cargo_id_issues(ds, level_id, rid, pi, pptr, p))
 
                 # SkillPlatformSpawnAdapter throws on both of these when the
                 # room spawns, so an unfinished skill platform takes the whole
@@ -681,6 +682,33 @@ def _run_exit_issues(level_id: str, rid: str, di: int, dptr: str,
             f"one",
             entity=level_id, pointer=dptr))
     return issues
+
+
+def _cargo_id_issues(ds: Dataset, entity: str, where: str, pi: int, pptr: str,
+                     p: dict) -> list[dict]:
+    """`cargoId` (OZX-1468): the CargoData every crate of a cargo entry uses.
+
+    Omitted is the ordinary choice. Named, it is the only way an
+    `authoredOnly` crate (cargo_premium) appears. Both failures throw when
+    the room spawns: on any other kind (`AuthoredStaticPlacementsLogic.
+    ValidateCargoIds`), and an id no CargoData has
+    (`CargoVariantLogic.ResolveNamed`).
+    """
+    cargo_id = p.get("cargoId")
+    if not cargo_id:
+        return []
+    if p.get("kind") != "cargo":
+        return [_issue(
+            "error", "ROOM_PLACEMENT_CARGO_ID_MISPLACED",
+            f"{where}: placement {pi} sets cargoId '{cargo_id}' on kind "
+            f"'{p.get('kind')}'; only kind 'cargo' reads it, and the room throws on spawn",
+            entity=entity, pointer=f"{pptr}/cargoId")]
+    if ds.get("CargoData", cargo_id) is None:
+        return [_issue(
+            "error", "DATA_REFERENCE_MISSING",
+            f"{where}: placement {pi} cargoId '{cargo_id}' does not exist (GameData/cargo/)",
+            entity=entity, pointer=f"{pptr}/cargoId")]
+    return []
 
 
 def _cargo_issues(entity: str, where: str, pi: int, pptr: str, p: dict,
@@ -1583,6 +1611,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
         issues.extend(_placement_count_issues(
             plan_id, f"floor {fi}", pi, pptr, p))
         issues.extend(_cargo_issues(plan_id, f"floor {fi}", pi, pptr, p, has_floor_table))
+        issues.extend(_cargo_id_issues(ds, plan_id, f"floor {fi}", pi, pptr, p))
     boss = floor.get("bossId")
     if boss and ds.get("EnemyData", boss) is None:
         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
