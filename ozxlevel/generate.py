@@ -186,4 +186,6 @@ def summarize(doc: dict) -> dict:
         })
     return {"masterSeed": doc.get("masterSeed"), "floors": floors,
             "rooms": sum(f["rooms"] for f in floors),
-            "teleports": sum(f["teleports"] for f in floors)}
+            "teleports": sum(f["teleports"] for f in floors),
+            # OZX-1483: the dead ends StoryRoomPlanner hangs off the layout.
+            "storyRooms": sum(f["stages"].get("story", 0) for f in floors)}

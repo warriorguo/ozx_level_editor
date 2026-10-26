@@ -306,6 +306,22 @@ LevelBasePlanData
 1. **负数** —— `LevelPlanValidator` 抛。**没有「不设上限」的写法**：想让它让路就写个高过所有 `maxLevel` 的数。0 是「没写」，读成默认 5。
 2. **cap 高于本章能掉的技能的 `maxLevel` 时等于没写** —— 这条最容易困惑，值得提示。判据：本章 `floors[].floorLootPlan.probabilistic` 里 `ItemData.type == "skill"` 的条目，逐个解析成它装的那份 `SkillData`（`ApplySkill` 交给 `AddPassive` 的是 **item 自己的 id**，`refId` 只是创作期的回退），取 `maxLevel`。
 
+### 5.0s storyRooms（OZX-1483，核对于 `ozx_base@8499bb17`）
+
+plan 顶层（与 `areaLinks` 同级，**按整局**而不是按 area）可选的 `storyRooms: { countMin, countMax, charges, activeSkillIds }`（`LevelBasePlanData.cs:50`）。生成后 `StoryRoomPlanner.Apply` 在侧楼梯之后、传送点之前（`LevelBuilder.cs:140`）挂上 `[countMin, countMax]` 间单门 dead end：`stageType: "story"`，无遭遇，`staticPlacements` 只有一条 `{ kind: "skill", skillId, charges, count: 1 }`；tree area 挂枝末、cycle area 挂包围盒四角，选两两最近跳数最大的一组；技能从 `activeSkillIds` 无放回抽。**省略整块 = 没有 story 房，且不消耗 rng**。JsonUtility 不会留 null，所以是否声明看 `countMax > 0`（`IsDeclared`）。这一趟属于生成器，编辑器的预览照旧走 genlevel（OLE-1），不在 Python 里复刻；genlevel 旧于 `StoryRoomPlanner.cs` 时预览会标 stale。
+
+| issue code | 规则 |
+|---|---|
+| `LEVEL_STORY_ROOMS_UNDECLARED` | `countMax` 为 0 但别的字段写了 —— `StoryRoomRules.cs:23` 抛 |
+| `LEVEL_STORY_ROOMS_COUNT_INVALID` | 需要 `1 ≤ countMin ≤ countMax` |
+| `LEVEL_STORY_ROOMS_NO_CHARGES` | `charges ≤ 0` |
+| `LEVEL_STORY_ROOMS_TOO_FEW_SKILLS` | `activeSkillIds` 少于 `countMax` 个（无放回抽） |
+| `LEVEL_STORY_ROOMS_SKILL_EMPTY` / `_DUPLICATE` | 空 id / 重复 id |
+| `DATA_REFERENCE_MISSING` / `ROOM_PLACEMENT_SKILL_NOT_ACTIVE` / `ROOM_PLACEMENT_SKILL_NO_ICON` | 平台走 `SkillPlatformSpawnAdapter`，所以每个 id 要是有可加载图标的 active 技能；`Game.Level` 看不到技能数据，这条上游在运行时拒，编辑器提前查 |
+| `LEVEL_STORY_TILEMAP_MISSING` | 每个生成 area（非 `static`）的 theme 对四个单门 mask 都要有 `story` tilemap（精确或超集，镜像展开后的池子）—— `LevelPlanValidator.cs:446` `ValidateStoryTilemaps` |
+
+编辑器在 plan 视图里给一张「Story rooms」卡：可加 / 删整块（默认 2–3 间、3 charges），改三个数字，逐个加减技能（append / remove，不重写数组）。样本对比表在声明了 story 房时多一列 story 房数。
+
 ### 5.00 areaLinks（OZX-1185 / OZX-1186，核对于 `ozx_base@5cd9b22e` 的 `AreaLinkPlan.Build`）
 
 plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind, keyId?, stairRoomsMin?, stairRoomsMax? }]`，声明 area 怎么连。**不写 = 老行为**：i → i+1 的接缝门链，钥匙来自各楼层的 `transitionKeyId`。

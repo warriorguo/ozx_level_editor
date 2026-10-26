@@ -590,6 +590,26 @@ class Dataset:
                  "authoredOnly": bool(d.value.get("authoredOnly"))}
                 for d in self.of_type("CargoData")]
 
+    def _story_rooms_view(self, block) -> dict:
+        """OZX-1483: the run's skill-platform story rooms, hung off the layout
+        after generation. `declared` is whether the block exists in the file
+        (the span writer needs a node to patch); `active` is whether it does
+        anything — JsonUtility never leaves it null, so upstream reads
+        absence off `countMax`."""
+        if not isinstance(block, dict):
+            return {"declared": False, "active": False, "pointer": "/storyRooms"}
+        return {
+            "declared": True,
+            "active": (block.get("countMax") or 0) > 0,
+            "pointer": "/storyRooms",
+            "countMin": block.get("countMin") or 0,
+            "countMax": block.get("countMax") or 0,
+            "charges": block.get("charges") or 0,
+            "skillsDeclared": "activeSkillIds" in block,
+            "skills": [{"id": sid, **self.skill_brief(sid)}
+                       for sid in block.get("activeSkillIds") or []],
+        }
+
     def skill_catalog(self) -> list[dict]:
         """Skills a SkillPlatform may grant — active, with a loadable icon.
 
@@ -1191,6 +1211,7 @@ class Dataset:
             # OZX-1366: test plans only — skips the "one run sees the whole
             # pool" checks, so a plan that sets it says nothing about coverage.
             "waivePoolCoverage": bool(doc.value.get("waivePoolCoverage")),
+            "storyRooms": self._story_rooms_view(doc.value.get("storyRooms")),
             "floors": floors,
             # OZX-1185: how the areas join. Empty = the implicit i → i+1 chain
             # of seam doors, keyed by each floor's transitionKeyId.

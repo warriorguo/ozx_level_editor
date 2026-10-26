@@ -210,36 +210,12 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                              f"{rid}: placement {pi} is kind 'skill' with no "
                                              f"skillId; the spawn adapter throws",
                                              entity=level_id, pointer=f"{pptr}/skillId"))
-                    elif skill is not None and skill.value.get("type") != "active":
-                        # OZX-1400: the platform became a rechargeable station
-                        # for a positive (active) skill; it used to grant a
-                        # passive, and now throws on one.
-                        issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NOT_ACTIVE",
-                                             f"{rid}: placement {pi} grants '{p['skillId']}', which "
-                                             f"is type '{skill.value.get('type')}'; a SkillPlatform "
-                                             f"only offers active skills (OZX-1400)",
-                                             entity=level_id, pointer=f"{pptr}/skillId"))
                     elif skill is not None:
-                        # The platform draws the skill's level-1 icon in its
-                        # centre, and ResolveIcon throws twice over: once when
-                        # iconKeys is empty, and again when the key it names
-                        # will not load. Both are legal SkillData and illegal
-                        # on a platform, so both are caught here.
-                        icon = (skill.value.get("iconKeys") or [None])[0]
-                        why = None
-                        if not icon:
-                            why = ("has no iconKeys; a SkillPlatform needs an icon to "
-                                   "display and throws without one")
-                        elif ds.sprites.guid_for_key(icon) is None:
-                            # Verbatim, because ResourcesAssetService does no
-                            # `@`-suffix fallback — a key that resolves only
-                            # by dropping the suffix still throws in game.
-                            why = (f"names icon '{icon}', which is not in ResourcesDB; "
-                                   f"the platform cannot load it and throws")
-                        if why:
-                            issues.append(_issue("error", "ROOM_PLACEMENT_SKILL_NO_ICON",
+                        problem = _platform_skill_problem(ds, skill)
+                        if problem:
+                            issues.append(_issue("error", problem[0],
                                                  f"{rid}: placement {pi} grants "
-                                                 f"'{p['skillId']}', which {why}",
+                                                 f"'{p['skillId']}', {problem[1]}",
                                                  entity=level_id, pointer=f"{pptr}/skillId"))
 
             # ── doors ────────────────────────────────────────────────────
@@ -1230,6 +1206,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
               for raw in doc.value.get("floors") or []]
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
     issues.extend(_final_area_issues(plan_id, doc.value, merged))
+    issues.extend(_story_room_issues(ds, plan_id, doc.value, merged))
     arrival = _arrival_order(doc.value.get("areaLinks") or [], len(merged))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
@@ -1251,6 +1228,125 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
         issue["message"] += (
             f" (inherited from floorDefaults by floor"
             f"{'s' if len(floors) > 1 else ''} {', '.join(map(str, floors))})")
+    return issues
+
+
+def _platform_skill_problem(ds: Dataset, skill) -> tuple | None:
+    """Why SkillPlatformSpawnAdapter would throw on this SkillData, or None.
+
+    (code, "which …") — the clause reads after "grants '<id>', ". Shared by
+    authored platforms and the story rooms a plan hangs off its layout
+    (OZX-1483), which place theirs through the same adapter.
+    """
+    if skill.value.get("type") != "active":
+        # OZX-1400: the platform became a rechargeable station for a
+        # positive (active) skill; it used to grant a passive, and now
+        # throws on one.
+        return ("ROOM_PLACEMENT_SKILL_NOT_ACTIVE",
+                f"which is type '{skill.value.get('type')}'; a SkillPlatform only "
+                f"offers active skills (OZX-1400)")
+    # The platform draws the skill's level-1 icon in its centre, and
+    # ResolveIcon throws twice over: once when iconKeys is empty, and again
+    # when the key it names will not load. Both are legal SkillData and
+    # illegal on a platform, so both are caught here.
+    icon = (skill.value.get("iconKeys") or [None])[0]
+    if not icon:
+        return ("ROOM_PLACEMENT_SKILL_NO_ICON",
+                "which has no iconKeys; a SkillPlatform needs an icon to display "
+                "and throws without one")
+    if ds.sprites.guid_for_key(icon) is None:
+        # Verbatim, because ResourcesAssetService does no `@`-suffix
+        # fallback — a key that resolves only by dropping the suffix still
+        # throws in game.
+        return ("ROOM_PLACEMENT_SKILL_NO_ICON",
+                f"which names icon '{icon}', which is not in ResourcesDB; the "
+                f"platform cannot load it and throws")
+    return None
+
+
+def _story_room_issues(ds: Dataset, plan_id: str, plan: dict,
+                       merged: list) -> list[dict]:
+    """`LevelBasePlanData.storyRooms` (OZX-1483).
+
+    `StoryRoomRules.Validate` rule for rule — `LevelBasePlan.FromData` and
+    `LevelPlanValidator` both throw on these — then what that assembly
+    cannot see: each id is placed by SkillPlatformSpawnAdapter, so it has
+    to be an active skill with a loadable icon. And `ValidateStoryTilemaps`:
+    a story room is a one-door dead end hung off any free side, so every
+    generated area's theme needs a `story` tilemap for each single-door
+    mask, exactly or by a superset, in the mirror-expanded pool.
+    """
+    block = plan.get("storyRooms")
+    if not isinstance(block, dict):
+        return []
+    issues: list[dict] = []
+
+    def err(code, message, pointer="/storyRooms"):
+        issues.append(_issue("error", code, message, entity=plan_id, pointer=pointer))
+
+    lo, hi = block.get("countMin") or 0, block.get("countMax") or 0
+    charges = block.get("charges") or 0
+    ids = block.get("activeSkillIds") or []
+    if hi <= 0:
+        # JsonUtility never leaves the block null; countMax is what declares it.
+        if lo or charges or ids:
+            err("LEVEL_STORY_ROOMS_UNDECLARED",
+                f"storyRooms is filled in but countMax is {hi}; countMax is what "
+                f"declares story rooms, so the generator throws. Omit the block for none",
+                "/storyRooms/countMax")
+        return issues
+    if lo < 1 or lo > hi:
+        err("LEVEL_STORY_ROOMS_COUNT_INVALID",
+            f"storyRooms has countMin {lo} / countMax {hi}; need 1 ≤ countMin ≤ countMax",
+            "/storyRooms/countMin")
+    if charges <= 0:
+        err("LEVEL_STORY_ROOMS_NO_CHARGES",
+            f"storyRooms has charges {charges}; each platform needs at least 1",
+            "/storyRooms/charges")
+    if len(ids) < hi:
+        err("LEVEL_STORY_ROOMS_TOO_FEW_SKILLS",
+            f"storyRooms lists {len(ids)} activeSkillIds but countMax is {hi}. Skills "
+            f"are drawn without replacement, so a run with countMax rooms needs at "
+            f"least that many", "/storyRooms/activeSkillIds")
+    seen: set = set()
+    for i, sid in enumerate(ids):
+        ptr = f"/storyRooms/activeSkillIds/{i}"
+        if not sid:
+            err("LEVEL_STORY_ROOMS_SKILL_EMPTY", f"storyRooms activeSkillIds[{i}] is empty", ptr)
+            continue
+        if sid in seen:
+            err("LEVEL_STORY_ROOMS_SKILL_DUPLICATE",
+                f"storyRooms lists '{sid}' twice in activeSkillIds; a duplicate would let "
+                f"one run offer the same skill twice", ptr)
+            continue
+        seen.add(sid)
+        skill = ds.get("SkillData", sid)
+        if skill is None:
+            err("DATA_REFERENCE_MISSING",
+                f"storyRooms activeSkillIds[{i}] '{sid}' is not a SkillData", ptr)
+            continue
+        problem = _platform_skill_problem(ds, skill)
+        if problem:
+            err(problem[0], f"a story room's platform grants '{sid}', {problem[1]}", ptr)
+
+    facts = ds.tilemaps.facts()
+    if not facts:
+        return issues
+    for fi, (floor, source) in enumerate(merged):
+        if floor.get("generatorType") == "static":
+            continue
+        library = tilemaps.for_theme(facts, floor.get("themeId"))
+        missing = [f"{side} ({mask})" for mask, side in
+                   ((1, "top"), (2, "right"), (4, "bottom"), (8, "left"))
+                   if not any(tilemaps.matches_stage(t["stageType"], "story")
+                              and (t["openDoors"] & mask) == mask for t in library)]
+        if missing:
+            err("LEVEL_STORY_TILEMAP_MISSING",
+                f"storyRooms is declared, but floor {fi}'s theme "
+                f"'{floor.get('themeId')}' has no 'story' tilemap with a door on: "
+                f"{', '.join(missing)}. A story room hung off that side would throw "
+                f"out of RoomTilemapQuery on entry",
+                plandefaults.reroute(f"/floors/{fi}/themeId", fi, source))
     return issues
 
 
