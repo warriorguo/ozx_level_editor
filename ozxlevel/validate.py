@@ -14,7 +14,7 @@ import math
 
 from . import plandefaults, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
-                      Dataset, _stage_budget, countmin_reading)
+                      Dataset, _stage_budget, banned_stages, countmin_reading)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
@@ -180,6 +180,19 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                              entity=level_id,
                                              pointer=f"{pptr}/{name}"))
 
+                # LevelValidator.ValidateStaticPlacementPolicy throws on load.
+                # Floor-wide defaults are filtered silently instead; only a
+                # room that names the entry itself can be wrong about it.
+                if stage in banned_stages(p):
+                    what = (f"{p.get('kind')} ({p['prefabKey']})" if p.get("prefabKey")
+                            else p.get("kind"))
+                    issues.append(_issue(
+                        "error", "ROOM_PLACEMENT_STAGE_BANNED",
+                        f"{rid}: placement {pi} is a '{what}' in a '{stage}' room, which "
+                        f"StaticPlacementPolicy keeps out of that stage (the start room is "
+                        f"where the player spawns; a release room is the breather after a "
+                        f"peak) — the level refuses to load. Put it in another room",
+                        entity=level_id, pointer=pptr))
                 issues.extend(_placement_count_issues(level_id, rid, pi, pptr, p))
                 issues.extend(_cargo_issues(level_id, rid, pi, pptr, p,
                                             bool(room.get("floorLootTableId"))))

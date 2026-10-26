@@ -193,23 +193,88 @@ def test_a_room_placement_is_checked_the_same_way(ds):
         room["staticPlacements"] = before
 
 
-# ── the one room-level exception (OZX-1057 / OLE-17) ─────────────────────
+# ── what a stage of room may hold (StaticPlacementPolicy; OLE-17 / OLE-63) ─
 
 
-def test_an_oil_tank_is_marked_as_skipping_the_start_room(ds):
+BOMB = {"kind": "prop", "prefabKey": "prefab/groundbomb", "count": 5}
+
+
+def test_the_floor_defaults_are_marked_with_the_stages_they_skip(ds):
     """`defaultStaticPlacements` applies to a whole floor and never names a
-    room, so the exception cannot be authored — it lives in
-    `StaticPlacementPolicy` and is invisible in the JSON. The start room is
-    the one room the player does not choose to enter (at launch and after
-    every death) and an oil tank is a chain-reaction hazard that damages
-    them, so a view that drew it on every room would draw one that is not
-    there."""
+    room, so the exceptions cannot be authored — they live in
+    `StaticPlacementPolicy` and are invisible in the JSON. The start room,
+    where the player spawns, takes no blast hazard (OZX-1057 / OZX-1225) and
+    no floor trap; a release room takes no floor trap (OZX-1486). A view that
+    drew them on every room would draw ones that are not there."""
     view = ds.plan_view("chapter_3")
     for floor in view["floors"]:
         by_kind = {p["kind"]: p for p in floor["defaultStaticPlacements"]}
-        assert by_kind["oiltank"]["skipsStartRoom"] is True
-        assert by_kind["cargo"]["skipsStartRoom"] is False
-        assert by_kind["prop"]["skipsStartRoom"] is False
+        assert by_kind["oiltank"]["skipsStages"] == ["start"]
+        assert by_kind["toxicbarrel"]["skipsStages"] == ["start"]
+        assert by_kind["groundlaser"]["skipsStages"] == ["start", "release"]
+        assert by_kind["cargo"]["skipsStages"] == []
+        assert by_kind["prop"]["skipsStages"] == []   # the pod, not a bomb
+
+
+def test_a_ground_bomb_is_known_by_its_prefab(ds, floor):
+    floor["defaultStaticPlacements"] = [BOMB, POD]
+    placements = ds.plan_view("chapter_3")["floors"][0]["defaultStaticPlacements"]
+    assert [p["skipsStages"] for p in placements] == [["start", "release"], []]
+
+
+def test_a_floor_default_in_a_banned_stage_is_no_finding(ds, floor):
+    """Filtered silently by LevelBasePlanAssigner: it names no room, so it
+    cannot be a mistake about one."""
+    assert "ROOM_PLACEMENT_STAGE_BANNED" not in codes(ds, [BOMB, {"kind": "groundlaser"}])
+
+
+@pytest.fixture
+def chapter_1_room(ds):
+    """chapter_1 floor 0 room 1 (a teaching room), restored after each test."""
+    room = ds.get("LevelData", "chapter_1").value["floors"][0]["rooms"][1]
+    before = copy.deepcopy(room)
+    yield room
+    room.clear()
+    room.update(before)
+
+
+def stage_findings(ds):
+    return [i for i in validate_level(ds, "chapter_1")
+            if i["code"] == "ROOM_PLACEMENT_STAGE_BANNED"]
+
+
+@pytest.mark.parametrize("stage,entry,banned", [
+    ("start", {"kind": "oiltank", "count": 1}, True),
+    ("start", {"kind": "toxicbarrel", "count": 1}, True),
+    ("start", {"kind": "groundlaser"}, True),
+    ("start", BOMB, True),
+    ("release", {"kind": "groundlaser"}, True),
+    ("release", BOMB, True),
+    ("release", {"kind": "oiltank", "count": 1}, False),
+    ("release", {"kind": "toxicbarrel", "count": 1}, False),
+    ("start", POD, False),
+    ("start", {"kind": "cargo", "count": 2}, False),
+    ("peak", {"kind": "groundlaser"}, False),
+    ("teaching", BOMB, False),
+])
+def test_a_room_declaring_a_banned_placement_is_refused(ds, chapter_1_room,
+                                                        stage, entry, banned):
+    """LevelValidator.ValidateStaticPlacementPolicy throws on load, so an
+    explicit room entry is an error, pointed at the entry."""
+    chapter_1_room["stageType"] = stage
+    chapter_1_room["staticPlacements"] = [{"kind": "cargo", "count": 2}, entry]
+    found = stage_findings(ds)
+    if banned:
+        assert [i["pointer"] for i in found] == ["/floors/0/rooms/1/staticPlacements/1"]
+        assert stage in found[0]["message"]
+    else:
+        assert not found
+
+
+def test_the_shipped_levels_declare_nothing_banned(ds):
+    for level_id in ds.ids_of("LevelData"):
+        assert not [i for i in validate_level(ds, level_id)
+                    if i["code"] == "ROOM_PLACEMENT_STAGE_BANNED"], level_id
 
 
 # ── groundlaser (OZX-1371 / OZX-1373 / OZX-1377) ────────────────────────

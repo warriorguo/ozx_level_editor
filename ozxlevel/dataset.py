@@ -33,9 +33,23 @@ DIRECTION_TWIN = {0: 1, 1: 0, 2: 3, 3: 2}
 FALLBACK_DROP_ITEM = "item_exp_small"
 ELITE_BONUS_DROP_ITEM = "item_exp_large"
 
-# StaticPlacementPolicy.OilTankKind — the one placement kind a generated room
-# can be refused on the strength of which room it is.
-OIL_TANK_KIND = "oiltank"
+# StaticPlacementPolicy (OZX-1057 / OZX-1225 / OZX-1486): what may stand in
+# which stage of room. The start room — where the player spawns, at launch and
+# after every death — takes no blast hazard and no floor trap; a release room,
+# the breather after a peak, takes no floor trap. A ground bomb is a generic
+# `prop`; its prefab is what makes it one.
+BLAST_HAZARD_KINDS = ("oiltank", "toxicbarrel")
+GROUND_LASER_KIND = "groundlaser"
+GROUND_BOMB_PREFAB = "prefab/groundbomb"
+
+
+def banned_stages(p: dict) -> list[str]:
+    """The stageTypes `StaticPlacementPolicy.IsBanned` keeps this entry out of."""
+    if p.get("kind") == GROUND_LASER_KIND or p.get("prefabKey") == GROUND_BOMB_PREFAB:
+        return ["start", "release"]
+    if p.get("kind") in BLAST_HAZARD_KINDS:
+        return ["start"]
+    return []
 # Kinds whose prefab is not registered as `prefab/<kind>` in ResourcesDB.
 KIND_PREFAB = {"skill": "skillplatform", "upgrade": "upgradeplatform"}
 
@@ -1170,14 +1184,11 @@ class Dataset:
                      "chancePercent": round((p.get("chance") or 1) * 100, 1),
                      "placement": p.get("placement"),
                      "pinned": bool(p.get("cells")),
-                     # OZX-1057: the one room-level exception. The start room
-                     # is the only one the player does not choose to enter —
-                     # they materialise in it at launch and after every death
-                     # — and an oil tank is a chain-reaction hazard that
-                     # damages them. The rule lives in code because the
-                     # authoring handle cannot express it: this list applies
-                     # to a whole floor and never names a room.
-                     "skipsStartRoom": p.get("kind") == OIL_TANK_KIND,
+                     # StaticPlacementPolicy.Filter drops these from the
+                     # rooms of the named stages. The rule lives in code
+                     # because the authoring handle cannot express it: this
+                     # list applies to a whole floor and never names a room.
+                     "skipsStages": banned_stages(p),
                      "pointer": f"{at('defaultStaticPlacements')}"
                                 f"/defaultStaticPlacements/{pi}"}
                     for pi, p in enumerate(

@@ -644,7 +644,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - **`countMin` 写在不读它的 kind 上**（cargo / oiltank 等；prop、toxicbarrel、groundlaser 都读）：读了就丢，摆放照旧（OZX-1057；OZX-1465 起墙外 prop 也读，见 §5.6）。
 - **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
 - **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。
-- **`defaultStaticPlacements` 里的 `oiltank` 不会下发给 start room**：规则在 `StaticPlacementPolicy` 里，JSON 上完全看不出来，所以照着 JSON 画预览会在出生房画出一个游戏里不存在的油罐（OZX-1057）。
+- **`defaultStaticPlacements` 有几样不会下发给 start / release 房**：规则在 `StaticPlacementPolicy.IsBanned`（`StaticPlacementPolicy.cs:39`，核对于 `ozx_base@ed32c54f`）里，按房间的 `stageType` 判断，JSON 上完全看不出来，所以照着 JSON 画预览会画出游戏里不存在的东西。start 房不放 `oiltank`、`toxicbarrel`（OZX-1057 / OZX-1225）与地面陷阱；release 房只不放地面陷阱，油罐、毒桶照放（OZX-1486）。地面陷阱是 `groundlaser` 与地雷——地雷是通用 `kind=prop` 条目，只靠 `prefabKey == "prefab/groundbomb"` 认出（`StaticPlacementPolicy.cs:31`、`:50`），同为 prop 的 biocultivationpod 不受影响。楼层默认由 `LevelBasePlanAssigner.cs:1094` 的 `Filter` 静默滤掉；而 `LevelData` 房间**自己**声明的同类条目会让 `LevelValidator.ValidateStaticPlacementPolicy`（`LevelValidator.cs:26`）在加载时抛异常——编辑器报 `ROOM_PLACEMENT_STAGE_BANNED`。
 - **`floorLootPlan.probabilistic[].itemId` / `stageMustDrop[].drops[].itemId` 悬空**：合成表照常建起来，只是那一条永远掉不出东西（见 §5.3）。
 - **`floorLootPlan.categoryCaps[].category` 不是 taxonomy 节点**：cap 匹配不到任何道具，等于没写；这里至今没有 fail-fast。
 - **跨 area 的接缝门缺了回程门**：单向门，过去回不来（OZX-1116 之前跨 area 的门本身就是死路，现在它是合法的接缝，只是要成对）。
