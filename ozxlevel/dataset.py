@@ -36,6 +36,8 @@ ELITE_BONUS_DROP_ITEM = "item_exp_large"
 # StaticPlacementPolicy.OilTankKind — the one placement kind a generated room
 # can be refused on the strength of which room it is.
 OIL_TANK_KIND = "oiltank"
+# Kinds whose prefab is not registered as `prefab/<kind>` in ResourcesDB.
+KIND_PREFAB = {"skill": "skillplatform", "upgrade": "upgradeplatform"}
 
 # ISkillService.DefaultDropLevelCap — what `skillDropLevelCap` resolves to
 # when a plan leaves it at 0. There is no "no cap" value; a plan that wants
@@ -716,12 +718,15 @@ class Dataset:
         known = ["cargo", "oiltank", "toxicbarrel", "pinballhammer", "prop",
                  "skill", "device", "trigger", "equipment",
                  # OZX-1371: picks its own cells, in left-right pairs.
-                 "groundlaser"]
+                 "groundlaser",
+                 # OZX-1472: the equipment upgrade platform, 2×2, no fields.
+                 "upgrade"]
         for k in known:
             seen.setdefault(k, 0)
         return [{"id": k, "meta": f"placement · used {seen[k]}×",
                  "code": _code(k), "uses": seen[k],
-                 "sprite": self.sprites.sprite_for_prefab_key(f"prefab/{k}")}
+                 "sprite": self.sprites.sprite_for_prefab_key(
+                     f"prefab/{KIND_PREFAB.get(k, k)}")}
                 for k in sorted(seen, key=lambda k: (-seen[k], k))]
 
     def wave_pin(self, action: dict, tables: dict | None = None) -> dict | None:

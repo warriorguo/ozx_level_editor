@@ -139,8 +139,7 @@ def pin_door_findings(room: dict, tilemap: dict) -> list[tuple[str, str, str]]:
     for pi, entry in enumerate(room.get("staticPlacements") or []):
         if not entry or not entry.get("cells") or entry.get("kind") in ("trigger", "equipment"):
             continue
-        cols = entry.get("footprintCols") or 1
-        rows = entry.get("footprintRows") or 1
+        cols, rows = placement_footprint(entry)
         for anchor in entry["cells"]:
             hit = next(((anchor.get("x", 0) + dx, anchor.get("y", 0) + dy)
                         for dx in range(cols) for dy in range(rows)
@@ -153,6 +152,22 @@ def pin_door_findings(room: dict, tilemap: dict) -> list[tuple[str, str, str]]:
                             f"pinned cells skip DoorClearance, so it seals the door"))
                 break
     return out
+
+
+# The kinds whose adapter defaults to a 2×2 block when `footprintCols` /
+# `footprintRows` are 0 or omitted (StaticPlacementEntryData, LevelData.cs);
+# every other kind is 1×1. The oil tank is always 2×2 and reads neither field
+# (OilTankPlacementLogic.FootprintCols/Rows).
+TWO_BY_TWO_KINDS = ("oiltank", "skill", "upgrade", "device")
+
+
+def placement_footprint(entry: dict) -> tuple:
+    """(cols, rows) one anchor of this placement covers."""
+    kind = entry.get("kind")
+    if kind == "oiltank":
+        return 2, 2
+    default = 2 if kind in TWO_BY_TWO_KINDS else 1
+    return (entry.get("footprintCols") or default, entry.get("footprintRows") or default)
 
 
 def _dir(direction: int) -> str:

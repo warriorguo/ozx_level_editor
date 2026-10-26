@@ -102,6 +102,18 @@ def test_a_pinned_prop_in_a_doorway_seals_it():
     assert codes(r, template()) == ["LEVEL_PIN_PLACEMENT_IN_DOORWAY"]
 
 
+@pytest.mark.parametrize("kind", ["skill", "upgrade", "device", "oiltank"])
+def test_a_two_by_two_kind_seals_a_doorway_with_no_footprint_authored(kind):
+    """These adapters default to a 2×2 block; (4,14) covers the Top door (5,15)."""
+    r = room(UP, DOWN, staticPlacements=[{"kind": kind, "cells": [{"x": 4, "y": 14}]}])
+    assert codes(r, template()) == ["LEVEL_PIN_PLACEMENT_IN_DOORWAY"]
+
+
+def test_a_one_by_one_kind_beside_a_doorway_leaves_it_open():
+    r = room(UP, DOWN, staticPlacements=[{"kind": "cargo", "cells": [{"x": 4, "y": 14}]}])
+    assert codes(r, template()) == []
+
+
 def test_a_trigger_in_a_doorway_is_walked_over():
     r = room(UP, DOWN, staticPlacements=[{"kind": "trigger", "cells": [{"x": 5, "y": 15}]}])
     assert codes(r, template()) == []

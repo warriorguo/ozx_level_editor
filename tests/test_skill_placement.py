@@ -51,8 +51,9 @@ def skill_placements(ds):
 
 
 def test_the_data_still_has_skill_platforms(ds):
-    """Guards the rest of this file from passing vacuously."""
-    assert len(skill_placements(ds)) >= 4
+    """Guards the rest of this file from passing vacuously. OZX-1472 swapped
+    level_test's two platforms for an upgrade platform; two remain."""
+    assert len(skill_placements(ds)) >= 2
 
 
 def test_skill_placements_carry_their_skill_id(ds):
@@ -142,6 +143,11 @@ def test_the_catalog_is_narrower_than_the_skill_list(ds):
 # ── validation ───────────────────────────────────────────────────────────
 
 
+# A level that still ships a skill platform to mutate; OZX-1472 took
+# level_test's away.
+PLATFORM_LEVEL = "factory2_test"
+
+
 def codes_for(ds, level_id):
     return [i["code"] for i in validate_level(ds, level_id)]
 
@@ -172,9 +178,9 @@ def test_an_unloadable_icon_is_an_error(ds, monkeypatch):
         and (d.value.get("iconKeys") or [None])[0]
         and ds.sprites.guid_for_key(d.value["iconKeys"][0]) is None)
 
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "skillId", unloadable)
-    messages = [i["message"] for i in validate_level(ds, "level_test")
+    messages = [i["message"] for i in validate_level(ds, PLATFORM_LEVEL)
                 if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
     assert any(unloadable in m and "ResourcesDB" in m for m in messages), messages
 
@@ -184,9 +190,9 @@ def test_a_skill_with_no_icon_is_an_error(ds, monkeypatch):
     iconless = next(d.id for d in ds.of_type("SkillData")
                     if d.value.get("type") == "active"
                     and not (d.value.get("iconKeys") or []))
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "skillId", iconless)
-    messages = [i["message"] for i in validate_level(ds, "level_test")
+    messages = [i["message"] for i in validate_level(ds, PLATFORM_LEVEL)
                 if i["code"] == "ROOM_PLACEMENT_SKILL_NO_ICON"]
     assert any(iconless in m and "iconKeys" in m for m in messages), messages
 
@@ -221,7 +227,7 @@ def test_whatever_is_authored_today_is_reported_consistently(ds):
 
 def test_healthy_skill_placements_raise_nothing(ds):
     """chapter_1's platform grants a passive skill that has an icon."""
-    assert not [c for c in codes_for(ds, "level_test") if c.startswith("ROOM_PLACEMENT_SKILL")]
+    assert not [c for c in codes_for(ds, PLATFORM_LEVEL) if c.startswith("ROOM_PLACEMENT_SKILL")]
 
 
 def test_every_reported_skill_issue_is_an_error(ds):
@@ -234,9 +240,9 @@ def test_every_reported_skill_issue_is_an_error(ds):
 
 def test_an_unknown_skill_id_is_a_reference_error(ds, monkeypatch):
     """skillId joins the other cross-references the validator resolves."""
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "skillId", "no_such_skill")
-    issues = [i for i in validate_level(ds, "level_test")
+    issues = [i for i in validate_level(ds, PLATFORM_LEVEL)
               if i["code"] == "DATA_REFERENCE_MISSING" and "skillId" in i["pointer"]]
     assert len(issues) == 1
     assert "no_such_skill" in issues[0]["message"]
@@ -244,35 +250,35 @@ def test_an_unknown_skill_id_is_a_reference_error(ds, monkeypatch):
 
 def test_a_missing_skill_id_is_an_error(ds, monkeypatch):
     """The state the editor creates when you add a skill from the library."""
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "skillId", "")
-    assert "ROOM_PLACEMENT_SKILL_MISSING" in codes_for(ds, "level_test")
+    assert "ROOM_PLACEMENT_SKILL_MISSING" in codes_for(ds, PLATFORM_LEVEL)
 
 
 def test_a_passive_skill_on_a_platform_is_an_error(ds, monkeypatch):
     """OZX-1400: a SkillPlatform offers active skills only; a passive throws."""
     passive = next(d.id for d in ds.of_type("SkillData")
                    if d.value.get("type") == "passive")
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "skillId", passive)
-    assert "ROOM_PLACEMENT_SKILL_NOT_ACTIVE" in codes_for(ds, "level_test")
+    assert "ROOM_PLACEMENT_SKILL_NOT_ACTIVE" in codes_for(ds, PLATFORM_LEVEL)
 
 
 @pytest.mark.parametrize("charges", [None, 0, -1])
 def test_a_platform_without_charges_throws(ds, monkeypatch, charges):
     """OZX-1400: touching the platform grants or refills `charges` uses."""
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     if charges is None:
         monkeypatch.delitem(placement, "charges")
     else:
         monkeypatch.setitem(placement, "charges", charges)
-    assert "ROOM_PLACEMENT_SKILL_NO_CHARGES" in codes_for(ds, "level_test")
+    assert "ROOM_PLACEMENT_SKILL_NO_CHARGES" in codes_for(ds, PLATFORM_LEVEL)
 
 
 def test_the_old_buff_duration_is_unread(ds, monkeypatch):
-    placement = a_skill_placement(ds, "level_test")
+    placement = a_skill_placement(ds, PLATFORM_LEVEL)
     monkeypatch.setitem(placement, "buffDurationSeconds", 10)
-    assert "ROOM_PLACEMENT_FIELD_UNREAD" in codes_for(ds, "level_test")
+    assert "ROOM_PLACEMENT_FIELD_UNREAD" in codes_for(ds, PLATFORM_LEVEL)
 
 
 # ── the other channel: skills as loot ────────────────────────────────────
