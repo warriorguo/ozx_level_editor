@@ -18,7 +18,9 @@ that way unless there is a strong reason not to.
   `PortionResolver`; every plan check runs on merged floors and reroutes findings to the
   node that holds the value.
 - `ozxlevel/tilemaps.py` — TilemapData facts (stat-stamped, never trusted to stay put: the
-  room-template sync replaces it) and the pinned-template door rules.
+  room-template sync replaces it) and the pinned-template door rules. The pool is the
+  mirror-expanded one `RoomTilemapQuery.LoadPool` draws from (OZX-1467: four orientations
+  per file unless `noMirror`); a pinned `templateId` still names the authored file only.
 - `ozxlevel/generate.py` — procedural previews via ozx_base's own headless `genlevel`
   (OLE-1); never reimplement the generator in Python. It finds `dotnet` off PATH too,
   because the app wrapper's environment has no Homebrew, and flags a build older than

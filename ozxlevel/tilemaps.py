@@ -159,6 +159,51 @@ def _dir(direction: int) -> str:
     return {0: "Up", 1: "Down", 2: "Left", 3: "Right"}.get(direction, str(direction))
 
 
+# OZX-1467: the orientations every authored template also enters the pool
+# as, unless it sets `noMirror`. All four keep the grid size, which is why a
+# quarter turn is not among them. `RoomTilemapData.Mirrored` names a mirror
+# `<file>@<orientation>`.
+MIRROR_ORIENTATIONS = ("FlipX", "FlipY", "Rotate180")
+
+
+def mirror_doors(mask: int, orientation: str) -> int:
+    """`RoomTilemapData.MirrorDoors`: the sides that trade places swap bits.
+
+    Doors sit at the edge midpoints, so a flip carries each onto the opposite
+    side's door position. FlipX swaps Left/Right, FlipY Top/Bottom, Rotate180
+    both; bits above the four sides are kept as they are.
+    """
+    flip_x = orientation in ("FlipX", "Rotate180")
+    flip_y = orientation in ("FlipY", "Rotate180")
+    top, right, bottom, left = (bool(mask & 1), bool(mask & 2),
+                                bool(mask & 4), bool(mask & 8))
+    if flip_x:
+        left, right = right, left
+    if flip_y:
+        top, bottom = bottom, top
+    return ((mask & ~0xF) | (1 if top else 0) | (2 if right else 0)
+            | (4 if bottom else 0) | (8 if left else 0))
+
+
+def expand(fact: dict) -> list[dict]:
+    """`RoomTilemapQuery.LoadPool` for one file: it, then its three mirrors.
+
+    Always all three, even when a symmetric layout makes some identical —
+    that keeps every template at the same share of the draw. Everything but
+    the door mask is the same in every orientation (a flip moves cells, it
+    neither adds nor removes ground, soft edge or rail), so a mirror is the
+    authored fact with its mask remapped. `family` is the authored file:
+    neighbour dedup and the chapter assignment compare that, not the entry.
+    """
+    authored = dict(fact, orientation="Authored", family=fact["file"])
+    if fact.get("noMirror"):
+        return [authored]
+    return [authored] + [
+        dict(fact, file=f"{fact['file']}@{o}", orientation=o, family=fact["file"],
+             openDoors=mirror_doors(fact["openDoors"], o))
+        for o in MIRROR_ORIENTATIONS]
+
+
 class TilemapIndex:
     """Facts about every tilemap in the pool, the ones `LevelPlanValidator` reads.
 
@@ -167,6 +212,12 @@ class TilemapIndex:
     (OZX-1340). TilemapData is replaced wholesale by the room-template sync,
     so each file's facts are kept against its stat stamp and re-read when it
     moves; a refresh costs one stat per file.
+
+    The pool is the EXPANDED one (OZX-1467): each file not marked `noMirror`
+    is four entries, as `RoomTilemapQuery.LoadPool` loads it for the runtime
+    draw and for the TilemapFacts the plan validator reads. A pinned
+    `templateId` still names only the authored file — see
+    `Dataset.pinned_templates`, which reads files, not this pool.
     """
 
     def __init__(self, root):
@@ -181,10 +232,11 @@ class TilemapIndex:
             stamp = _file_stamp(path)
             hit = self._facts.get(path)
             if hit is None or hit[0] != stamp:
-                hit = (stamp, _read_facts(path))
+                read = _read_facts(path)
+                hit = (stamp, expand(read) if read is not None else None)
             seen[path] = hit
         self._facts = seen
-        return [f for _, f in seen.values() if f is not None]
+        return [f for _, entries in seen.values() if entries for f in entries]
 
 
 def _file_stamp(path):
@@ -204,9 +256,16 @@ def _read_facts(path) -> dict | None:
     ground = t.get("ground") or []
     return {"file": path.stem, "folder": path.parent.name,
             "category": t.get("roomCategory") or "",
+            "shape": t.get("roomShape") or "",
             "stageType": t.get("stageType") or "",
             "openDoors": t.get("openDoors") or 0,
-            "hasEmptyGround": any((cell or 0) <= 0 for column in ground for cell in column or [])}
+            "noMirror": bool(t.get("noMirror")),
+            # `HasEmptyGround`: a missing ground layer is a room with no floor.
+            "hasEmptyGround": (not ground) or any(
+                not column or any((cell or 0) <= 0 for cell in column) for column in ground),
+            "hasSoftEdge": any((cell or 0) > 0 for column in t.get("softEdge") or []
+                               for cell in column or []),
+            "hasRail": has_rail(t)}
 
 
 def for_theme(facts: list[dict], theme_id: str | None) -> list[dict]:
@@ -231,3 +290,46 @@ def matches_stage(tilemap_stage: str, query: str) -> bool:
 
 
 ALL_DOORS = 15
+
+
+def candidates(facts: list[dict], stage_type: str, open_doors: int, *,
+               room_shape: str | None = None, room_category: str | None = None,
+               exclude_soft_edge: bool = False, require_rail: bool = False,
+               require_full_ground: bool = False) -> list[dict]:
+    """`RoomTilemapQuery.Candidates`: every tilemap a room may draw.
+
+    The hard filters (category — basement is folder-scoped —, shape, stage,
+    soft edge, full ground, rail), then the exact door-mask matches if there
+    are any, else the superset ones. Rail alone falls back to the unfiltered
+    set when it is what emptied the list (OZX-1164). An empty result is
+    where upstream throws. Run over the expanded pool, so a mirror answers a
+    mask its authored file does not (OZX-1467).
+    """
+    def category_ok(t):
+        if room_category == "basement" and t["folder"] != "basement":
+            return False
+        return not room_category or not t["category"] or t["category"] == room_category
+
+    def shape_ok(t):
+        return not room_shape or t.get("shape") in ("", "all") or t.get("shape") == room_shape
+
+    pool, rail_rejected = [], 0
+    for t in facts:
+        if not (category_ok(t) and shape_ok(t) and matches_stage(t["stageType"], stage_type)):
+            continue
+        if exclude_soft_edge and t.get("hasSoftEdge"):
+            continue
+        if require_full_ground and t["hasEmptyGround"]:
+            continue
+        if require_rail and not t.get("hasRail"):
+            rail_rejected += 1
+            continue
+        pool.append(t)
+    if not pool and require_rail and rail_rejected:
+        return candidates(facts, stage_type, open_doors, room_shape=room_shape,
+                          room_category=room_category, exclude_soft_edge=exclude_soft_edge,
+                          require_full_ground=require_full_ground)
+    exact = [t for t in pool if t["openDoors"] == open_doors]
+    if exact:
+        return exact
+    return [t for t in pool if (t["openDoors"] & open_doors) == open_doors]

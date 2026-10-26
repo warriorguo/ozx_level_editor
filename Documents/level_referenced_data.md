@@ -392,6 +392,18 @@ consumable
 
 这张表随模板池变化，**必须由工具从当前 TilemapData 现算，不能硬编码**。
 
+### 5.7 镜像变体进入抽取池（OZX-1467；核对于 `ozx_base@b3d4d526` 的**工作区改动**——撰写时上游尚未提交）
+
+`RoomTilemapQuery.LoadPool` 现在把每张**没标 `noMirror`** 的模板展开成 4 条：原样 / `FlipX` / `FlipY` / `Rotate180`（`Game.Room/Tilemap/RoomTilemapQuery.cs:41`）。没有 90° 旋转，因为要保持网格尺寸。
+
+- **门位重映射**（`RoomTilemapData.cs:252` `MirrorDoors`）：`FlipX` 交换 Left↔Right，`FlipY` 交换 Top↔Bottom，`Rotate180` 两个都换；高于 4 位的 bit 原样保留。门在边中点，翻过去正好落在对边的门位上。
+- **每张底板固定 4 条**，对称模板也不去重，保证各底板被抽中的概率不变。
+- **命名**：变体的 `SourceFile` 是 `<原名>@<朝向>`。**pinned `templateId` 只匹配原样**（`RoomLoadManager` 按 `SourceFile == templateId` 找，没人会写 `@FlipX`）。
+- **去重按 family**（OZX-1103 的邻居去重、`ChapterTilemapAssigner` 的 priorUse）：A 的邻居不会抽到 A 的任何朝向。
+- **opt-out**：`RoomTilemapData.noMirror`（bool，缺省 false，`RoomTilemapData.cs:59`）——给「不对称就是重点」的布局用。
+
+所以 §5.6 的覆盖矩阵要在**展开后的池子**上算：一张只有 Left 门（mask 8）的 basement 模板，现在也服务 Right（mask 2）。编辑器侧：`ozxlevel/tilemaps.py` 的 `TilemapIndex.facts()` 返回展开后的池（`expand` / `mirror_doors`），`candidates()` 是 `RoomTilemapQuery.Candidates` 的 Python 版；`Dataset.pinned_templates` 直接按文件名读文件，不经过这个池，所以 pin 仍然只认原样。
+
 ---
 
 ## 6. 编辑器实现清单
