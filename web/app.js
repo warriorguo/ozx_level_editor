@@ -1657,9 +1657,35 @@ function renderAreaLinks() {
 
 // OZX-1483: per run, not per area — the generator hangs countMin–countMax
 // one-door story rooms off branch tips / cycle corners, as far apart as the
-// layout allows, each with one skill platform drawn without replacement.
+// layout allows, each with one skill platform. Their skills come from the
+// plan's activeSkillIds (OZX-1488), in the Platform skills card.
 // No block means no story rooms, and the card offers to add one.
-const STORY_ROOMS_DEFAULT = { countMin: 2, countMax: 3, charges: 3, activeSkillIds: [] };
+const STORY_ROOMS_DEFAULT = { countMin: 2, countMax: 3, charges: 3 };
+const START_SKILL_PLATFORM_DEFAULT = { charges: 3 };
+
+function quantityField(attr, key, label, value, min) {
+  return `<div><span>${label}</span>
+    <span class="quantity" ${attr}="${key}">
+      <button data-delta="-1" title="Decrease ${label}">−</button>
+      <input type="number" min="${min}" max="99" value="${value}" aria-label="${label}" />
+      <button data-delta="1" title="Increase ${label}">+</button>
+    </span></div>`;
+}
+
+function wireQuantityFields(attr, current, pointerOf, label) {
+  $('roomsGrid').querySelectorAll(`[${attr}]`).forEach((box) => {
+    const key = box.getAttribute(attr);
+    const input = box.querySelector('input');
+    const write = (value) => {
+      const n = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
+      if (n === current(key)) { input.value = current(key); return; }
+      applyPlanEdits([{ op: 'put', path: pointerOf(key), value: n }], `${label} ${key} = ${n}`);
+    };
+    input.addEventListener('change', () => write(input.value));
+    box.querySelectorAll('[data-delta]').forEach((b) => b.addEventListener('click',
+      () => write(current(key) + Number(b.dataset.delta))));
+  });
+}
 
 function renderStoryRooms() {
   const s = state.plan.storyRooms;
@@ -1676,22 +1702,7 @@ function renderStoryRooms() {
       </div>
     </div>`;
   }
-  const field = (key, label, min) => `<div><span>${label}</span>
-    <span class="quantity" data-story-field="${key}">
-      <button data-delta="-1" title="Decrease ${label}">−</button>
-      <input type="number" min="${min}" max="99" value="${s[key]}" aria-label="story rooms ${label}" />
-      <button data-delta="1" title="Increase ${label}">+</button>
-    </span></div>`;
-  const taken = new Set(s.skills.map((k) => k.id));
-  const choices = (state.boot.skillCatalog || []).filter((k) => !taken.has(k.id));
-  const skills = s.skills.length
-    ? s.skills.map((k, i) => `<div class="content-entry${k.missing ? ' missing' : ''}">
-        ${glyph(k.sprite, codeOf(k.id), k.missing ? 'missing' : '')}
-        <span><strong>${esc(k.displayName || k.id)}</strong><small>${esc(
-          k.missing ? 'no SkillData' : `${k.id} · ${k.skillType || '?'}`)}</small></span>
-        <button class="remove-decoration" data-story-remove="${i}" title="Remove ${esc(k.id)}">×</button>
-      </div>`).join('')
-    : '<div class="inline-empty">No skills — each room needs one, drawn without replacement</div>';
+  const field = (key, label, min) => quantityField('data-story-field', key, label, s[key], min);
   return `<div class="room-list-item plan-floor plan-links${
       issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="story">
     <div class="content-column plan-head">
@@ -1699,18 +1710,11 @@ function renderStoryRooms() {
       <div class="plan-facts">
         ${field('countMin', 'min', 1)}${field('countMax', 'max', 1)}${field('charges', 'charges', 1)}
       </div>
-      <div class="derived-note">one-door dead ends hung off branch tips and cycle corners, spread as far apart as the layout allows</div>
       ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
-      <button class="button ghost" id="storyRoomsRemove" title="Delete the storyRooms block">Remove story rooms</button>
     </div>
     <div class="content-column">
-      <div class="content-head">Platform skills <span>${s.skills.length}</span></div>
-      <div class="content-list">${skills}</div>
-      ${choices.length ? `<select id="storyRoomsSkill" aria-label="Add a skill">
-        <option value="">+ add an active skill…</option>
-        ${choices.map((k) => `<option value="${esc(k.id)}">${esc(k.displayName || k.id)}</option>`).join('')}
-      </select>` : ''}
-      <div class="derived-note">a run never offers the same skill twice, so list at least max</div>
+      <div class="derived-note">one-door dead ends hung off branch tips and cycle corners, spread as far apart as the layout allows; each platform's skill is drawn from Platform skills</div>
+      <button class="button ghost" id="storyRoomsRemove" title="Delete the storyRooms block">Remove story rooms</button>
     </div>
   </div>`;
 }
@@ -1724,37 +1728,79 @@ function wireStoryRooms() {
   const remove = $('storyRoomsRemove');
   if (remove) remove.addEventListener('click', () => applyPlanEdits(
     [{ op: 'remove', path: s.pointer }], 'story rooms removed'));
-  $('roomsGrid').querySelectorAll('[data-story-field]').forEach((box) => {
-    const key = box.dataset.storyField;
-    const input = box.querySelector('input');
-    const write = (value) => {
-      const n = Math.max(0, Math.min(99, Math.round(Number(value) || 0)));
-      if (n === s[key]) { input.value = s[key]; return; }
-      applyPlanEdits([{ op: 'put', path: `${s.pointer}/${key}`, value: n }], `story rooms ${key} = ${n}`);
-    };
-    input.addEventListener('change', () => write(input.value));
-    box.querySelectorAll('[data-delta]').forEach((b) => b.addEventListener('click',
-      () => write(s[key] + Number(b.dataset.delta))));
-  });
-  $('roomsGrid').querySelectorAll('[data-story-remove]').forEach((b) => b.addEventListener('click', () => {
-    const i = Number(b.dataset.storyRemove);
-    applyPlanEdits([{ op: 'remove', path: `${s.pointer}/activeSkillIds/${i}` }],
-      `story rooms − ${s.skills[i].id}`);
+  wireQuantityFields('data-story-field', (k) => s[k], (k) => `${s.pointer}/${k}`, 'story rooms');
+}
+
+// OZX-1488: the chapter's active skills, which the start room's platform and
+// the story rooms draw from together without replacement, so one run never
+// offers a skill twice. The start platform is an optional block of its own.
+function renderSkillPlatforms() {
+  const p = state.plan.skillPlatforms;
+  if (!p) return '';
+  const issues = [...planIssuesFor(p.pointer), ...planIssuesFor(p.start.pointer)];
+  const taken = new Set(p.skills.map((k) => k.id));
+  const choices = (state.boot.skillCatalog || []).filter((k) => !taken.has(k.id));
+  const skills = p.skills.length
+    ? p.skills.map((k, i) => `<div class="content-entry${k.missing ? ' missing' : ''}">
+        ${glyph(k.sprite, codeOf(k.id), k.missing ? 'missing' : '')}
+        <span><strong>${esc(k.displayName || k.id)}</strong><small>${esc(
+          k.missing ? 'no SkillData' : `${k.id} · ${k.skillType || '?'}`)}</small></span>
+        <button class="remove-decoration" data-skill-remove="${i}" title="Remove ${esc(k.id)}">×</button>
+      </div>`).join('')
+    : `<div class="inline-empty">No skills${p.drawn ? ' — every platform needs one' : ''}</div>`;
+  const start = p.start.declared
+    ? `<div class="plan-facts">${quantityField('data-start-skill-field', 'charges', 'start platform charges', p.start.charges, 1)}</div>
+       <button class="button ghost" id="startSkillRemove" title="Delete the startSkillPlatform block">Remove start platform</button>`
+    : `<div class="derived-note">no platform in the start room</div>
+       <button class="button ghost" id="startSkillAdd" title="Write a startSkillPlatform block (OZX-1488)">Add start platform</button>`;
+  return `<div class="room-list-item plan-floor plan-links${
+      issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="skills">
+    <div class="content-column plan-head">
+      <div class="content-head">Start room platform</div>
+      ${start}
+      ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+    </div>
+    <div class="content-column">
+      <div class="content-head">Platform skills <span>${p.skills.length}</span></div>
+      <div class="content-list">${skills}</div>
+      ${choices.length ? `<select id="platformSkillAdd" aria-label="Add a skill">
+        <option value="">+ add an active skill…</option>
+        ${choices.map((k) => `<option value="${esc(k.id)}">${esc(k.displayName || k.id)}</option>`).join('')}
+      </select>` : ''}
+      <div class="derived-note">a run draws up to ${p.drawn} (start platform + story rooms max) and never offers a skill twice, so list at least that many</div>
+    </div>
+  </div>`;
+}
+
+function wireSkillPlatforms() {
+  const p = state.plan.skillPlatforms;
+  if (!p) return;
+  const add = $('startSkillAdd');
+  if (add) add.addEventListener('click', () => applyPlanEdits(
+    [{ op: 'put', path: p.start.pointer, value: START_SKILL_PLATFORM_DEFAULT }], 'start platform added'));
+  const remove = $('startSkillRemove');
+  if (remove) remove.addEventListener('click', () => applyPlanEdits(
+    [{ op: 'remove', path: p.start.pointer }], 'start platform removed'));
+  wireQuantityFields('data-start-skill-field', (k) => p.start[k],
+    (k) => `${p.start.pointer}/${k}`, 'start platform');
+  $('roomsGrid').querySelectorAll('[data-skill-remove]').forEach((b) => b.addEventListener('click', () => {
+    const i = Number(b.dataset.skillRemove);
+    applyPlanEdits([{ op: 'remove', path: `${p.pointer}/${i}` }], `platform skills − ${p.skills[i].id}`);
   }));
-  const pick = $('storyRoomsSkill');
+  const pick = $('platformSkillAdd');
   if (pick) pick.addEventListener('change', () => {
     const id = pick.value;
     if (!id) return;
-    // One element in, as with tile groups — but a block written without the
-    // array has nothing to append to, so that one case writes it whole.
-    applyPlanEdits([s.skillsDeclared
-      ? { op: 'append', path: `${s.pointer}/activeSkillIds`, value: id }
-      : { op: 'put', path: `${s.pointer}/activeSkillIds`, value: [id] }], `story rooms + ${id}`);
+    // One element in, as with tile groups — but a plan without the array
+    // has nothing to append to, so that one case writes it whole.
+    applyPlanEdits([p.declared
+      ? { op: 'append', path: p.pointer, value: id }
+      : { op: 'put', path: p.pointer, value: [id] }], `platform skills + ${id}`);
   });
 }
 
 function renderPlanFloors() {
-  $('roomsGrid').innerHTML = renderPlanDefaults() + renderAreaLinks() + renderStoryRooms() + state.plan.floors.map((f) => {
+  $('roomsGrid').innerHTML = renderPlanDefaults() + renderAreaLinks() + renderSkillPlatforms() + renderStoryRooms() + state.plan.floors.map((f) => {
     const issues = planIssuesFor(f.pointer);
     const bad = issues.some((i) => i.severity === 'error');
 
@@ -1921,6 +1967,7 @@ function renderPlanFloors() {
     </div>`;
   }).join('');
 
+  wireSkillPlatforms();
   wireStoryRooms();
   $('roomsGrid').querySelectorAll('.tilepart').forEach((chip) =>
     chip.addEventListener('click', () => toggleTilePart(

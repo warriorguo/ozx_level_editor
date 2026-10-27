@@ -609,7 +609,8 @@ class Dataset:
         after generation. `declared` is whether the block exists in the file
         (the span writer needs a node to patch); `active` is whether it does
         anything — JsonUtility never leaves it null, so upstream reads
-        absence off `countMax`."""
+        absence off `countMax`. Their skills come from the plan's
+        `activeSkillIds` since OZX-1488 (see `_skill_platforms_view`)."""
         if not isinstance(block, dict):
             return {"declared": False, "active": False, "pointer": "/storyRooms"}
         return {
@@ -619,9 +620,30 @@ class Dataset:
             "countMin": block.get("countMin") or 0,
             "countMax": block.get("countMax") or 0,
             "charges": block.get("charges") or 0,
-            "skillsDeclared": "activeSkillIds" in block,
+        }
+
+    def _skill_platforms_view(self, plan: dict) -> dict:
+        """OZX-1488: the chapter's `activeSkillIds` and the start room's
+        platform. The start platform and the story rooms draw from the one
+        list together, without replacement (`SkillPlatformDeck`), so a run
+        never offers a skill twice and `drawn` is the most a run can take."""
+        start = plan.get("startSkillPlatform")
+        start_charges = (start.get("charges") or 0) if isinstance(start, dict) else 0
+        story = plan.get("storyRooms")
+        story_max = (story.get("countMax") or 0) if isinstance(story, dict) else 0
+        return {
+            "pointer": "/activeSkillIds",
+            "declared": "activeSkillIds" in plan,
             "skills": [{"id": sid, **self.skill_brief(sid)}
-                       for sid in block.get("activeSkillIds") or []],
+                       for sid in plan.get("activeSkillIds") or []],
+            "drawn": (1 if start_charges > 0 else 0) + max(story_max, 0),
+            "start": {
+                "pointer": "/startSkillPlatform",
+                "declared": isinstance(start, dict),
+                # JsonUtility never leaves it null; charges is what declares it.
+                "active": start_charges > 0,
+                "charges": start_charges,
+            },
         }
 
     def skill_catalog(self) -> list[dict]:
@@ -1223,6 +1245,7 @@ class Dataset:
             # pool" checks, so a plan that sets it says nothing about coverage.
             "waivePoolCoverage": bool(doc.value.get("waivePoolCoverage")),
             "storyRooms": self._story_rooms_view(doc.value.get("storyRooms")),
+            "skillPlatforms": self._skill_platforms_view(doc.value),
             "floors": floors,
             # OZX-1185: how the areas join. Empty = the implicit i → i+1 chain
             # of seam doors, keyed by each floor's transitionKeyId.

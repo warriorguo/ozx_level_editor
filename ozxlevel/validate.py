@@ -1219,7 +1219,7 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
               for raw in doc.value.get("floors") or []]
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
     issues.extend(_final_area_issues(plan_id, doc.value, merged))
-    issues.extend(_story_room_issues(ds, plan_id, doc.value, merged))
+    issues.extend(_skill_platform_issues(ds, plan_id, doc.value, merged))
     arrival = _arrival_order(doc.value.get("areaLinks") or [], len(merged))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
@@ -1277,71 +1277,102 @@ def _platform_skill_problem(ds: Dataset, skill) -> tuple | None:
     return None
 
 
-def _story_room_issues(ds: Dataset, plan_id: str, plan: dict,
-                       merged: list) -> list[dict]:
-    """`LevelBasePlanData.storyRooms` (OZX-1483).
+def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
+                           merged: list) -> list[dict]:
+    """A plan's skill platforms: `activeSkillIds`, `storyRooms` (OZX-1483)
+    and `startSkillPlatform` (OZX-1488).
 
-    `StoryRoomRules.Validate` rule for rule — `LevelBasePlan.FromData` and
-    `LevelPlanValidator` both throw on these — then what that assembly
+    `SkillPlatformPlanRules.Validate` rule for rule — `LevelBasePlan.FromData`
+    and `LevelPlanValidator` both throw on these — then what that assembly
     cannot see: each id is placed by SkillPlatformSpawnAdapter, so it has
     to be an active skill with a loadable icon. And `ValidateStoryTilemaps`:
     a story room is a one-door dead end hung off any free side, so every
     generated area's theme needs a `story` tilemap for each single-door
     mask, exactly or by a superset, in the mirror-expanded pool.
     """
-    block = plan.get("storyRooms")
-    if not isinstance(block, dict):
-        return []
     issues: list[dict] = []
 
-    def err(code, message, pointer="/storyRooms"):
-        issues.append(_issue("error", code, message, entity=plan_id, pointer=pointer))
+    def err(code, message, pointer, severity="error"):
+        issues.append(_issue(severity, code, message, entity=plan_id, pointer=pointer))
 
-    lo, hi = block.get("countMin") or 0, block.get("countMax") or 0
-    charges = block.get("charges") or 0
-    ids = block.get("activeSkillIds") or []
-    if hi <= 0:
+    story = plan.get("storyRooms") if isinstance(plan.get("storyRooms"), dict) else None
+    start = (plan.get("startSkillPlatform")
+             if isinstance(plan.get("startSkillPlatform"), dict) else None)
+    lo = (story or {}).get("countMin") or 0
+    hi = (story or {}).get("countMax") or 0
+    charges = (story or {}).get("charges") or 0
+    start_charges = (start or {}).get("charges") or 0
+    has_story, has_start = hi > 0, start_charges > 0
+
+    if story is not None and "activeSkillIds" in story:
+        # OZX-1488 moved the list to the plan; JsonUtility drops the old
+        # field without a word, so the story rooms would draw from nothing.
+        err("LEVEL_PLAN_FIELD_MOVED",
+            "storyRooms.activeSkillIds moved to the plan's top-level activeSkillIds "
+            "(OZX-1488), shared with the start room's platform; the old field is "
+            "ignored without a word", "/storyRooms/activeSkillIds")
+    if story is not None and not has_story and (lo or charges):
         # JsonUtility never leaves the block null; countMax is what declares it.
-        if lo or charges or ids:
-            err("LEVEL_STORY_ROOMS_UNDECLARED",
-                f"storyRooms is filled in but countMax is {hi}; countMax is what "
-                f"declares story rooms, so the generator throws. Omit the block for none",
-                "/storyRooms/countMax")
+        err("LEVEL_STORY_ROOMS_UNDECLARED",
+            f"storyRooms is filled in but countMax is {hi}; countMax is what "
+            f"declares story rooms, so the generator throws. Omit the block for none",
+            "/storyRooms/countMax")
+    if start is not None and start_charges < 0:
+        err("LEVEL_START_SKILL_PLATFORM_NO_CHARGES",
+            f"startSkillPlatform has charges {start_charges}; the platform needs at "
+            f"least 1, or omit the block for none", "/startSkillPlatform/charges")
+    elif start is not None and not has_start:
+        err("LEVEL_START_SKILL_PLATFORM_UNDECLARED",
+            "startSkillPlatform has charges 0, which is what declares no platform, so "
+            "the start room gets none. Give it charges, or omit the block",
+            "/startSkillPlatform/charges", "warning")
+    if has_story:
+        if lo < 1 or lo > hi:
+            err("LEVEL_STORY_ROOMS_COUNT_INVALID",
+                f"storyRooms has countMin {lo} / countMax {hi}; need 1 ≤ countMin ≤ countMax",
+                "/storyRooms/countMin")
+        if charges <= 0:
+            err("LEVEL_STORY_ROOMS_NO_CHARGES",
+                f"storyRooms has charges {charges}; each platform needs at least 1",
+                "/storyRooms/charges")
+
+    ids = plan.get("activeSkillIds") or []
+    drawn = (1 if has_start else 0) + (hi if has_story else 0)
+    if drawn == 0:
+        if ids:
+            err("LEVEL_ACTIVE_SKILLS_UNUSED",
+                f"lists {len(ids)} activeSkillIds but declares neither storyRooms nor "
+                f"startSkillPlatform, so nothing draws from them", "/activeSkillIds")
         return issues
-    if lo < 1 or lo > hi:
-        err("LEVEL_STORY_ROOMS_COUNT_INVALID",
-            f"storyRooms has countMin {lo} / countMax {hi}; need 1 ≤ countMin ≤ countMax",
-            "/storyRooms/countMin")
-    if charges <= 0:
-        err("LEVEL_STORY_ROOMS_NO_CHARGES",
-            f"storyRooms has charges {charges}; each platform needs at least 1",
-            "/storyRooms/charges")
-    if len(ids) < hi:
-        err("LEVEL_STORY_ROOMS_TOO_FEW_SKILLS",
-            f"storyRooms lists {len(ids)} activeSkillIds but countMax is {hi}. Skills "
-            f"are drawn without replacement, so a run with countMax rooms needs at "
-            f"least that many", "/storyRooms/activeSkillIds")
+    if len(ids) < drawn:
+        err("LEVEL_ACTIVE_SKILLS_TOO_FEW",
+            f"lists {len(ids)} activeSkillIds but a run can draw {drawn} "
+            f"(startSkillPlatform {1 if has_start else 0} + storyRooms.countMax "
+            f"{hi if has_story else 0}). Skills are drawn without replacement, so the "
+            f"list needs at least that many", "/activeSkillIds")
     seen: set = set()
     for i, sid in enumerate(ids):
-        ptr = f"/storyRooms/activeSkillIds/{i}"
+        ptr = f"/activeSkillIds/{i}"
         if not sid:
-            err("LEVEL_STORY_ROOMS_SKILL_EMPTY", f"storyRooms activeSkillIds[{i}] is empty", ptr)
+            err("LEVEL_ACTIVE_SKILLS_EMPTY", f"activeSkillIds[{i}] is empty", ptr)
             continue
         if sid in seen:
-            err("LEVEL_STORY_ROOMS_SKILL_DUPLICATE",
-                f"storyRooms lists '{sid}' twice in activeSkillIds; a duplicate would let "
-                f"one run offer the same skill twice", ptr)
+            err("LEVEL_ACTIVE_SKILLS_DUPLICATE",
+                f"lists '{sid}' twice in activeSkillIds; a duplicate would let one run "
+                f"offer the same skill twice", ptr)
             continue
         seen.add(sid)
         skill = ds.get("SkillData", sid)
         if skill is None:
             err("DATA_REFERENCE_MISSING",
-                f"storyRooms activeSkillIds[{i}] '{sid}' is not a SkillData", ptr)
+                f"activeSkillIds[{i}] '{sid}' is not a SkillData", ptr)
             continue
         problem = _platform_skill_problem(ds, skill)
         if problem:
-            err(problem[0], f"a story room's platform grants '{sid}', {problem[1]}", ptr)
+            err(problem[0], f"a skill platform may grant '{sid}', {problem[1]}", ptr)
 
+    if not has_story:
+        return issues
     facts = ds.tilemaps.facts()
     if not facts:
         return issues

@@ -306,21 +306,30 @@ LevelBasePlanData
 1. **负数** —— `LevelPlanValidator` 抛。**没有「不设上限」的写法**：想让它让路就写个高过所有 `maxLevel` 的数。0 是「没写」，读成默认 5。
 2. **cap 高于本章能掉的技能的 `maxLevel` 时等于没写** —— 这条最容易困惑，值得提示。判据：本章 `floors[].floorLootPlan.probabilistic` 里 `ItemData.type == "skill"` 的条目，逐个解析成它装的那份 `SkillData`（`ApplySkill` 交给 `AddPassive` 的是 **item 自己的 id**，`refId` 只是创作期的回退），取 `maxLevel`。
 
-### 5.0s storyRooms（OZX-1483，核对于 `ozx_base@8499bb17`）
+### 5.0s 技能平台：activeSkillIds / storyRooms / startSkillPlatform（OZX-1483 / OZX-1488，核对于 `ozx_base@67cc26fc`）
 
-plan 顶层（与 `areaLinks` 同级，**按整局**而不是按 area）可选的 `storyRooms: { countMin, countMax, charges, activeSkillIds }`（`LevelBasePlanData.cs:50`）。生成后 `StoryRoomPlanner.Apply` 在侧楼梯之后、传送点之前（`LevelBuilder.cs:140`）挂上 `[countMin, countMax]` 间单门 dead end：`stageType: "story"`，无遭遇，`staticPlacements` 只有一条 `{ kind: "skill", skillId, charges, count: 1 }`；tree area 挂枝末、cycle area 挂包围盒四角，选两两最近跳数最大的一组；技能从 `activeSkillIds` 无放回抽。**省略整块 = 没有 story 房，且不消耗 rng**。JsonUtility 不会留 null，所以是否声明看 `countMax > 0`（`IsDeclared`）。这一趟属于生成器，编辑器的预览照旧走 genlevel（OLE-1），不在 Python 里复刻；genlevel 旧于 `StoryRoomPlanner.cs` 时预览会标 stale。
+plan 顶层（与 `areaLinks` 同级，**按整局**而不是按 area）三个可选字段（`LevelBasePlanData.cs:51` / `:56` / `:59`）：
+
+- `activeSkillIds: [ ... ]` —— 本章技能平台能给的主动技能。OZX-1488 起从 `storyRooms` 里上移到顶层，start 房平台与 story 房**共用一副牌**：`SkillPlatformDeck` 洗一次、无放回抽（`LevelBuilder.cs:140`），一局不重复。牌在第一次抽时才洗，story 房先抽，所以 OZX-1488 之前就有 story 房的 plan 同 seed 布局不变。
+- `storyRooms: { countMin, countMax, charges }` —— 生成后 `StoryRoomPlanner.Apply` 在侧楼梯之后、传送点之前（`LevelBuilder.cs:144`）挂上 `[countMin, countMax]` 间单门 dead end：`stageType: "story"`，无遭遇，`staticPlacements` 只有一条 `{ kind: "skill", skillId, charges, count: 1 }`；tree area 挂枝末、cycle area 挂包围盒四角，选两两最近跳数最大的一组。JsonUtility 不会留 null，所以是否声明看 `countMax > 0`。
+- `startSkillPlatform: { charges }` —— `StartSkillPlatformPlanner.Apply`（`LevelBuilder.cs:146`）往生成的 start 房 `staticPlacements` 末尾追加一条随机落位的 `{ kind: "skill", skillId, charges, count: 1 }`。是否声明看 `charges > 0`。
+
+**三者都省略 = 没有平台，且不消耗 rng**。这几趟属于生成器，编辑器的预览照旧走 genlevel（OLE-1），不在 Python 里复刻；genlevel 旧于这些 C# 源码时预览会标 stale。手写的 `LevelData` 不走这条路：chapter_2 的 start 房直接 author 了一条 skill entry（§5.6 以下的房间规则照常适用）。
 
 | issue code | 规则 |
 |---|---|
-| `LEVEL_STORY_ROOMS_UNDECLARED` | `countMax` 为 0 但别的字段写了 —— `StoryRoomRules.cs:23` 抛 |
-| `LEVEL_STORY_ROOMS_COUNT_INVALID` | 需要 `1 ≤ countMin ≤ countMax` |
-| `LEVEL_STORY_ROOMS_NO_CHARGES` | `charges ≤ 0` |
-| `LEVEL_STORY_ROOMS_TOO_FEW_SKILLS` | `activeSkillIds` 少于 `countMax` 个（无放回抽） |
-| `LEVEL_STORY_ROOMS_SKILL_EMPTY` / `_DUPLICATE` | 空 id / 重复 id |
+| `LEVEL_PLAN_FIELD_MOVED` | `storyRooms.activeSkillIds` 还写在旧位置 —— OZX-1488 后 JsonUtility 静默丢掉，story 房抽不到技能 |
+| `LEVEL_STORY_ROOMS_UNDECLARED` | `countMax` 为 0 但别的字段写了 —— `SkillPlatformPlanRules.cs:28` 抛 |
+| `LEVEL_START_SKILL_PLATFORM_NO_CHARGES` | `startSkillPlatform.charges < 0`（`:31`） |
+| `LEVEL_START_SKILL_PLATFORM_UNDECLARED`（warning） | 块写了但 `charges` 为 0：上游不报错，只是 start 房没有平台 |
+| `LEVEL_STORY_ROOMS_COUNT_INVALID` / `_NO_CHARGES` | 需要 `1 ≤ countMin ≤ countMax`、`charges ≥ 1`（`:37` / `:40`） |
+| `LEVEL_ACTIVE_SKILLS_UNUSED` | 列了技能但两种平台都没声明，没人抽（`:47`） |
+| `LEVEL_ACTIVE_SKILLS_TOO_FEW` | 少于 `(startSkillPlatform ? 1 : 0) + storyRooms.countMax` 个（无放回抽，`:54`） |
+| `LEVEL_ACTIVE_SKILLS_EMPTY` / `_DUPLICATE` | 空 id / 重复 id（`:65` / `:67`） |
 | `DATA_REFERENCE_MISSING` / `ROOM_PLACEMENT_SKILL_NOT_ACTIVE` / `ROOM_PLACEMENT_SKILL_NO_ICON` | 平台走 `SkillPlatformSpawnAdapter`，所以每个 id 要是有可加载图标的 active 技能；`Game.Level` 看不到技能数据，这条上游在运行时拒，编辑器提前查 |
-| `LEVEL_STORY_TILEMAP_MISSING` | 每个生成 area（非 `static`）的 theme 对四个单门 mask 都要有 `story` tilemap（精确或超集，镜像展开后的池子）—— `LevelPlanValidator.cs:446` `ValidateStoryTilemaps` |
+| `LEVEL_STORY_TILEMAP_MISSING` | 声明了 story 房时，每个生成 area（非 `static`）的 theme 对四个单门 mask 都要有 `story` tilemap（精确或超集，镜像展开后的池子）—— `LevelPlanValidator.cs:446` `ValidateStoryTilemaps` |
 
-编辑器在 plan 视图里给一张「Story rooms」卡：可加 / 删整块（默认 2–3 间、3 charges），改三个数字，逐个加减技能（append / remove，不重写数组）。样本对比表在声明了 story 房时多一列 story 房数。
+编辑器在 plan 视图里给两张卡：「Start room platform / Platform skills」可加 / 删 `startSkillPlatform`、改 charges，逐个加减 `activeSkillIds`（append / remove，不重写数组），并显示一局最多抽几张；「Story rooms」可加 / 删整块（默认 2–3 间、3 charges）、改三个数字。样本对比表在声明了 story 房时多一列 story 房数。
 
 ### 5.00 areaLinks（OZX-1185 / OZX-1186，核对于 `ozx_base@5cd9b22e` 的 `AreaLinkPlan.Build`）
 
