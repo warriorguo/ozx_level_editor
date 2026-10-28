@@ -1757,6 +1757,16 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
                              f"floor {fi}: bossId '{boss}' does not exist",
                              entity=plan_id, pointer=f"{fptr}/bossId"))
+    # OZX-1555 `ValidateBossArrival`: a boss does not ambush. EnemyData has
+    # no boss flag — a boss is whatever a floor names here — so the rule
+    # lives on the plan: a teleporting boss would also count as late-arrivable
+    # and could be drawn into any pool's second wave.
+    elif boss and ds.get("EnemyData", boss).value.get("teleportArrival"):
+        issues.append(_issue("error", "LEVEL_BOSS_TELEPORT_ARRIVAL",
+                             f"floor {fi}: bossId '{boss}' has teleportArrival — a boss does "
+                             f"not ambush. Drop the flag (and give it spawnPlacement 'initial' "
+                             f"if it is a robot)",
+                             entity=plan_id, pointer=f"{fptr}/bossId"))
     # bossId being EMPTY is deliberate and means "no boss on this floor"
     # (OZX-994), so there is no rule for it — the room that would have been
     # the boss room becomes an ordinary one.
@@ -2690,12 +2700,14 @@ DISTINCT_TYPE_CAP = {"teaching": 2, "building": 3, "pressure": 4, "peak": 5}
 
 
 def _can_arrive_late(ds: Dataset, enemy_id: str | None) -> bool:
-    """`EnemyData.CanArriveLate`: an emerge window, and not spawnPlacement initial."""
+    """`EnemyData.CanArriveLate`: an emerge window or a teleport entrance
+    (OZX-1552), and not spawnPlacement initial."""
     enemy = ds.get("EnemyData", enemy_id or "")
     if enemy is None:
         return False
     v = enemy.value
-    return (v.get("emergeDuration") or 0) > 0 and v.get("spawnPlacement") != "initial"
+    return (((v.get("emergeDuration") or 0) > 0 or bool(v.get("teleportArrival")))
+            and v.get("spawnPlacement") != "initial")
 
 
 def _second_wave_issues(ds: Dataset, plan_id: str, fi: int,
@@ -2710,7 +2722,7 @@ def _second_wave_issues(ds: Dataset, plan_id: str, fi: int,
     omitted block.
 
     The rule that matters is capacity. Only types that can arrive late (an
-    emerge window, not `spawnPlacement: initial`) may fill it, at most the
+    emerge window or `teleportArrival`, not `spawnPlacement: initial`) may fill it, at most the
     stage's distinct cap of them, largest `maxPerRoom` first (0 = uncapped).
     Upstream throws rather than placing a smaller wave, because a wave cut to
     one body reads as a stray enemy. Spawner lines are not counted.
@@ -2786,7 +2798,7 @@ def _second_wave_issues(ds: Dataset, plan_id: str, fi: int,
                 f"needs {needed} late-arriving bodies (ceil(share {share:g} × budget {budget})) "
                 f"but the pool can hold only {capacity} — late-arrivable types: "
                 f"{', '.join(e.get('enemyId') for e in late) or 'none'}. A type arrives late "
-                f"with an emerge window and no spawnPlacement 'initial'; lower share, raise "
+                f"with an emerge window or teleportArrival and no spawnPlacement 'initial'; lower share, raise "
                 f"their maxPerRoom, or add such types")
     return issues
 

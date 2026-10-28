@@ -79,9 +79,10 @@ def test_a_stage_with_no_fight_has_no_wave_to_follow(ds, floor):
 
 def test_the_pool_must_be_able_to_fill_it(ds, floor):
     """Replace every pool type with one that cannot arrive late (no emerge
-    window); the wave then has nothing to draw from."""
+    window, no teleport entrance); the wave then has nothing to draw from."""
     grounded = next(d.id for d in ds.of_type("EnemyData")
                     if not (d.value.get("emergeDuration") or 0) > 0
+                    and not d.value.get("teleportArrival")
                     and not (d.value.get("railConfig") or {}).get("enabled"))
     for e in floor["enemyPool"]:
         e["enemyId"] = grounded
@@ -102,3 +103,50 @@ def test_a_capped_pool_too_small_for_the_share_is_refused(ds, floor):
 def test_the_stage_row_shows_the_wave(ds):
     st = ds.plan_view(PLAN)["floors"][0]["stageTypes"][0]
     assert st["secondWave"] == {"chance": 1.0, "share": 0.5, "triggers": ["cleared", "advance"]}
+
+
+# ── OZX-1552: a robot may teleport in instead of emerging ────────────────
+
+
+def robot(ds):
+    """A shipped robot that teleports in and has no emerge window."""
+    return next(d for d in ds.of_type("EnemyData")
+                if d.value.get("teleportArrival")
+                and not (d.value.get("emergeDuration") or 0) > 0
+                and d.value.get("spawnPlacement") != "initial")
+
+
+def test_a_teleporting_robot_can_fill_a_wave(ds, floor):
+    """`CanArriveLate` = (emerge window OR teleportArrival) AND not initial —
+    without the second half, a robot pool reads as unable to fill a wave
+    the game fills fine."""
+    for e in floor["enemyPool"]:
+        e["enemyId"] = robot(ds).id
+        e.pop("variantIds", None)
+    assert "LEVEL_SECOND_WAVE_CAPACITY" not in codes(ds)
+
+
+def test_spawn_placement_initial_still_keeps_a_robot_out(ds, floor):
+    bot = robot(ds)
+    for e in floor["enemyPool"]:
+        e["enemyId"] = bot.id
+        e.pop("variantIds", None)
+    bot.value["spawnPlacement"] = "initial"
+    try:
+        assert "LEVEL_SECOND_WAVE_CAPACITY" in codes(ds)
+    finally:
+        bot.value.pop("spawnPlacement")
+
+
+# ── OZX-1555: a boss does not ambush ─────────────────────────────────────
+
+
+def test_a_teleporting_boss_is_refused(ds, floor):
+    floor["bossId"] = robot(ds).id
+    assert "LEVEL_BOSS_TELEPORT_ARRIVAL" in codes(ds)
+
+
+def test_the_shipped_bosses_do_not_teleport(ds):
+    for plan in ds.of_type("LevelBasePlanData"):
+        assert "LEVEL_BOSS_TELEPORT_ARRIVAL" not in [
+            i["code"] for i in validate_plan(ds, plan.id)], plan.id
