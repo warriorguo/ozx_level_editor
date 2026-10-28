@@ -431,30 +431,39 @@ class Dataset:
         }
 
     def pinned_templates(self, template_id: str) -> list[dict]:
-        """Every tilemap a pinned `templateId` could resolve to.
+        """The tilemap a pinned `templateId` resolves to, as a list of 0 or 1.
 
-        A pin is looked up by file name across the whole pool
-        (`RoomLoadManager`: `SourceFile == templateId`), not by the room's
-        category, and the same name exists in more than one folder —
-        `all_teaching_15_04` is in both basement/ and normal/. Which copy wins
-        is load order, so a finding about a pin is only made when it holds
-        for every copy; an empty list means the pin names nothing.
+        Since OZX-1571 the id is the folder-qualified path
+        (`normal/all_start_1_01`), matched exactly against
+        `RoomTilemapData.SourceFile` (`RoomLoadManager`), so one id names one
+        file; an empty list means the pin names nothing. A bare file name, the
+        pre-OZX-1571 form, names nothing either — see `pin_id_candidates`.
+        Only the authored file: a mirror suffix reads as no tilemap.
 
         Read on demand and never cached: TilemapData is replaced wholesale by
         the room-template sync, and only a handful of rooms pin a template.
         """
         if not template_id or self.tilemap_data is None or not self.tilemap_data.is_dir():
             return []
-        out = []
-        for path in sorted(self.tilemap_data.glob(f"*/{template_id}.json")):
-            try:
-                out.append(json.loads(path.read_bytes().decode("utf-8")))
-            except (OSError, ValueError):
-                continue
-        return out
+        folder, _, name = template_id.partition("/")
+        if not folder or not name or "/" in name or folder in (".", "..") \
+                or name in (".", ".."):
+            return []
+        path = self.tilemap_data / folder / f"{name}.json"
+        try:
+            return [json.loads(path.read_bytes().decode("utf-8"))]
+        except (OSError, ValueError):
+            return []
+
+    def pin_id_candidates(self, name: str) -> list[str]:
+        """The folder-qualified ids a bare (pre-OZX-1571) file name could mean."""
+        if not name or "/" in name or self.tilemap_data is None \
+                or not self.tilemap_data.is_dir():
+            return []
+        return sorted(tilemaps.template_id(p) for p in self.tilemap_data.glob(f"*/{name}.json"))
 
     def pinned_template_rail(self, template_id: str) -> bool | None:
-        """Whether a pinned template carries rail — None unless every copy agrees."""
+        """Whether a pinned template carries rail — None when the pin names nothing."""
         answers = {tilemaps.has_rail(t) for t in self.pinned_templates(template_id)}
         return answers.pop() if len(answers) == 1 else None
 

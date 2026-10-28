@@ -108,7 +108,7 @@ LevelData
 | `decorations` | DecorationEntryData[] | 纯视觉，可选，见 §4.6 | 31 |
 | `staticPlacements` | StaticPlacementEntryData[] | **非 cave 房必须声明**（空数组也行），见 §4.5 | 83 声明 / 28 非空 |
 | `appearance` | RoomAppearanceData | 本房相对楼层主题的差异，见 §4.7 | 11 |
-| `templateId` | string | 钉死 tilemap 模板，跳过 `RoomTilemapQuery` 匹配 | 8 |
+| `templateId` | string | 钉死 tilemap 模板，跳过 `RoomTilemapQuery` 匹配。id 带目录：`normal/all_start_1_01`（OZX-1571，`IGameDataSource.cs` `TilemapDocument.IdOf`，核对于 `ozx_base@85fa6bf1`）；裸文件名不兼容，报 `LEVEL_PIN_TEMPLATE_MISSING` 并给出带目录的候选 | 8 |
 | ~~`lootPlanId`~~ | string | **OZX-1381 删除**（房间清场掉落通道没了；写了被静默丢弃 → `LEVEL_FIELD_REMOVED`）。房间自己的奖品写 `guaranteedDrops`，技能等走 cargo 的 `lootTableId` | 0 |
 | `guaranteedDrops` | GuaranteedDrop[] | OZX-1380：房间欠的奖品（钥匙、保底装备），由**开局波最后被击杀的那只**额外支付；要求房间有遭遇且开局波必有一具身体，见 `level_referenced_data.md` §1.6 | 4 |
 | `hasTeleportSpot` | bool | 传送点 | 5 |
@@ -123,7 +123,7 @@ LevelData
 | `requireFullGround` | bool | 这间房只抽 ground 层没有空格的 tilemap（OZX-1265）。**硬过滤**，门掩码下一张都没有就抛。复合房（`roomCols/Rows > 1`）设了它——或所在 area 设了 `FloorData.requireFullGround`（OZX-1340）——`RoomLoadManager` 直接抛（复合拼接没有这层过滤）→ `ROOM_FULL_GROUND_COMPOSITE`；钉了 `templateId` 时它不起作用 → `ROOM_FULL_GROUND_PINNED`（Warning） | 1 |
 | `requireRail` | bool | 这间房必须抽到带 rail 图层的 tilemap，好让矿车骑过去（OZX-1164）。程序化关卡由 `AssignRail` 逐房标；手写可自填。和 `railCart` 是两件事：一间房放车，每间房铺轨 | 2 |
 
-**钉了 `templateId` 的房间跳过 rail 过滤**（`RoomTilemapSelector` / `RoomLoadManager` 按文件名直接取，不走 `RoomTilemapQuery`）。所以钉的图没有 rail 时：`railCart` → `RailCartSpawnAdapter` 抛（`LEVEL_ROOM_RAIL_MISSING`，Error）；`requireRail` → 矿车骑到这间就停（同码，Warning）。按文件名查的是**整个池子**，同名图在多个目录里（`all_start_5_01` 在 normal/ 无 rail、test/ 有 rail）时结果取决于加载顺序，编辑器只在所有同名副本结论一致时才下判断。
+**钉了 `templateId` 的房间跳过 rail 过滤**（`RoomTilemapSelector` / `RoomLoadManager` 按 id 直接取，不走 `RoomTilemapQuery`）。所以钉的图没有 rail 时：`railCart` → `RailCartSpawnAdapter` 抛（`LEVEL_ROOM_RAIL_MISSING`，Error）；`requireRail` → 矿车骑到这间就停（同码，Warning）。OZX-1571 之前按裸文件名查整个池子，同名图在多个目录里时取决于加载顺序；现在 id 带目录，一个 id 只指一个文件，编辑器直接按它下判断。
 
 **钉了 `templateId` 也跳过门的全部检查**（OZX-1171，对齐 `Game.Tests/Level/PinnedTemplateDoorTests`）。`RoomTilemapQuery` 会拿模板的 `openDoors` 匹配房间的门掩码，钉图直接绕过、下游也不再问，所以下面四条在关卡 JSON 里完全看不出来，编辑器要拦（实现在 `ozxlevel/tilemaps.py`）：
 

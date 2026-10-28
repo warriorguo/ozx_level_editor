@@ -21,7 +21,7 @@
 | ~~`RoomNodeData.lootPlanId`~~ | —— | **OZX-1381 删除**（房间清场通道没了，写了被静默丢弃 → `LEVEL_FIELD_REMOVED`） |
 | `RoomNodeData.guaranteedDrops[].itemId` / `.tableId`（OZX-1380） | ItemData / LootTableData（必须 `pickOne`） | 房间欠的奖品，见 §1.6 |
 | `RoomNodeData.bossId` | EnemyData | 可选（**不驱动刷怪**） |
-| `RoomNodeData.templateId` | Tilemap 文件名 | 可选（不填则走匹配） |
+| `RoomNodeData.templateId` | Tilemap id = 相对 TilemapData 的路径去扩展名，如 `normal/all_start_1_01`（OZX-1571，`TilemapDocument.IdOf`，核对于 `ozx_base@85fa6bf1`；不保留裸文件名） | 可选（不填则走匹配） |
 | `RoomNodeData.requiredForExitItemIds[]` | ItemData | 可选 |
 | `RoomNodeData.appearance.*` | ResourcesDB key（非 GameData） | 可选 |
 | `staticPlacements[].lootTableId` | LootTableData | `cargo` 用 |
@@ -398,7 +398,7 @@ consumable
 
 - **门位重映射**（`RoomTilemapData.cs:252` `MirrorDoors`）：`FlipX` 交换 Left↔Right，`FlipY` 交换 Top↔Bottom，`Rotate180` 两个都换；高于 4 位的 bit 原样保留。门在边中点，翻过去正好落在对边的门位上。
 - **每张底板固定 4 条**，对称模板也不去重，保证各底板被抽中的概率不变。
-- **命名**：变体的 `SourceFile` 是 `<原名>@<朝向>`。**pinned `templateId` 只匹配原样**（`RoomLoadManager` 按 `SourceFile == templateId` 找，没人会写 `@FlipX`）。
+- **命名**：变体的 `SourceFile` 是 `<原 id>@<朝向>`（OZX-1571 起原 id 带目录，如 `normal/x@FlipX`）。**pinned `templateId` 只匹配原样**（`RoomLoadManager` 按 `SourceFile == templateId` 找，没人会写 `@FlipX`）。
 - **去重按 family**（OZX-1103 的邻居去重、`ChapterTilemapAssigner` 的 priorUse）：A 的邻居不会抽到 A 的任何朝向。
 - **opt-out**：`RoomTilemapData.noMirror`（bool，缺省 false，`RoomTilemapData.cs:59`）——给「不对称就是重点」的布局用。
 

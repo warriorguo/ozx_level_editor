@@ -102,5 +102,6 @@ def test_the_shipped_pool_is_expanded():
 def test_a_pin_names_the_authored_file_only():
     ds = Dataset(OZX_BASE)
     name = next(f["file"] for f in ds.tilemaps.facts() if f["orientation"] == "Authored")
+    assert "/" in name, "OZX-1571: the id carries its folder"
     assert ds.pinned_templates(name)
     assert ds.pinned_templates(f"{name}@FlipX") == []

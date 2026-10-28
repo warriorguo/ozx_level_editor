@@ -146,25 +146,58 @@ def test_shipped_pins_match_upstreams_guard(ds):
 
 
 @needs_data
-def test_a_pin_is_judged_on_every_copy_of_its_name(ds):
-    """`all_teaching_15_04` is in basement/ and normal/. A finding only one
-    copy has could be load order, so it is not made."""
-    copies = ds.pinned_templates("all_teaching_15_04")
-    assert len(copies) == 2
-    r = room(UP, DOWN, LEFT, RIGHT)
-    per = [set(codes(r, t)) for t in copies]
+def test_a_name_in_two_folders_is_two_ids(ds):
+    """OZX-1571: `all_teaching_15_04` is in basement/ and normal/. The id
+    carries the folder, so each resolves to its own file and the bare name
+    to neither — upstream keeps no bare-name compatibility."""
+    basement = ds.pinned_templates("basement/all_teaching_15_04")
+    normal = ds.pinned_templates("normal/all_teaching_15_04")
+    assert len(basement) == len(normal) == 1
+    assert basement[0] != normal[0]
+    assert ds.pinned_templates("all_teaching_15_04") == []
+
+
+@needs_data
+@pytest.mark.parametrize("bad", ["../normal/all_start_1_02", "normal/../normal/all_start_1_02",
+                                 "/normal/all_start_1_02", "normal/"])
+def test_an_id_does_not_walk_out_of_its_folder(ds, bad):
+    assert ds.pinned_templates(bad) == []
+
+
+def pin_issues(ds, template):
     doc = ds.get("LevelData", "level_test")
     before = copy.deepcopy(doc.value)
     try:
         target = doc.value["floors"][0]["rooms"][0]
-        target.update(templateId="all_teaching_15_04", doors=r["doors"])
+        target["templateId"] = template
         target.pop("roomCategory", None)
-        got = {i["code"] for i in validate_level(ds, "level_test")
-               if i["code"].startswith("LEVEL_PIN_") and i["pointer"].startswith("/floors/0/rooms/0")}
-        assert got == per[0] & per[1]
+        return [i for i in validate_level(ds, "level_test")
+                if i["code"] == "LEVEL_PIN_TEMPLATE_MISSING"
+                and i["pointer"].startswith("/floors/0/rooms/0")]
     finally:
         doc.value.clear()
         doc.value.update(before)
+
+
+@needs_data
+def test_a_bare_name_is_missing_and_offered_its_folder(ds):
+    found = pin_issues(ds, "all_start_1_02")
+    assert found and "'normal/all_start_1_02'" in found[0]["message"]
+    assert found[0]["fix"]["value"] == "normal/all_start_1_02"
+
+
+@needs_data
+def test_a_bare_name_two_folders_hold_names_both_and_fixes_neither(ds):
+    found = pin_issues(ds, "all_teaching_15_04")
+    assert found and "basement/all_teaching_15_04" in found[0]["message"] \
+        and "normal/all_teaching_15_04" in found[0]["message"]
+    assert found[0]["fix"] is None
+
+
+@needs_data
+def test_an_unknown_id_is_missing(ds):
+    found = pin_issues(ds, "normal/no_such_template")
+    assert found and found[0]["severity"] == "error" and found[0]["fix"] is None
 
 
 # ── story and sound ──────────────────────────────────────────────────────

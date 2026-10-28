@@ -222,7 +222,7 @@ def expand(fact: dict) -> list[dict]:
 class TilemapIndex:
     """Facts about every tilemap in the pool, the ones `LevelPlanValidator` reads.
 
-    `TilemapFacts` upstream: file, `roomCategory` (empty = wildcard),
+    `TilemapFacts` upstream: file (the folder-qualified id, OZX-1571), `roomCategory` (empty = wildcard),
     `stageType`, `openDoors`, and whether the ground leaves a cell empty
     (OZX-1340). TilemapData is replaced wholesale by the room-template sync,
     so each file's facts are kept against its stat stamp and re-read when it
@@ -262,6 +262,12 @@ def _file_stamp(path):
         return None
 
 
+def template_id(path) -> str:
+    """`TilemapDocument.IdOf` (OZX-1571) for a file directly under a folder of
+    TilemapData: `<folder>/<file>`, e.g. `normal/all_start_1_01`."""
+    return f"{path.parent.name}/{path.stem}"
+
+
 def _read_facts(path) -> dict | None:
     import json
     try:
@@ -269,7 +275,9 @@ def _read_facts(path) -> dict | None:
     except (OSError, ValueError):
         return None
     ground = t.get("ground") or []
-    return {"file": path.stem, "folder": path.parent.name,
+    # OZX-1571 `TilemapDocument.IdOf`: the id is the path relative to
+    # TilemapData without its extension, so two folders may hold one name.
+    return {"file": template_id(path), "folder": path.parent.name,
             "category": t.get("roomCategory") or "",
             "shape": t.get("roomShape") or "",
             "stageType": t.get("stageType") or "",

@@ -536,8 +536,7 @@ def _pinned_door_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
     Caves and composites are out of scope, as they are upstream: a cave has
     no tilemap, and a composite places its doors on the stitched grid, not
     on the pinned tile. A name that resolves to no tilemap at all throws at
-    room load. When the name resolves to several copies, a door finding is
-    only made if every copy has it.
+    room load. Since OZX-1571 an id names exactly one file.
     """
     template = room.get("templateId")
     if not template or room.get("roomCategory") == "cave":
@@ -548,16 +547,22 @@ def _pinned_door_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
     if not copies:
         if ds.tilemap_data is None or not ds.tilemap_data.is_dir():
             return []
+        # OZX-1571: ids carry their folder now and bare names are not kept
+        # compatible. A bare name that a file still has is the one mistake
+        # worth naming — and fixing, when only one folder holds it.
+        meant = ds.pin_id_candidates(template)
+        hint = (f" — since OZX-1571 a template id carries its folder: "
+                f"{' or '.join(repr(m) for m in meant)}" if meant else "")
         return [_issue(
             "error", "LEVEL_PIN_TEMPLATE_MISSING",
             f"{rid}: templateId '{template}' names no tilemap; RoomLoadManager "
-            f"throws when the room loads",
-            entity=level_id, pointer=f"{rptr}/templateId")]
-    per_copy = [tilemaps.pin_door_findings(room, t) for t in copies]
-    common = [f for f in per_copy[0] if all(f in other for other in per_copy[1:])]
+            f"throws when the room loads{hint}",
+            entity=level_id, pointer=f"{rptr}/templateId",
+            fix=({"op": "set", "path": f"{rptr}/templateId", "value": meant[0],
+                  "label": f"Pin {meant[0]}"} if len(meant) == 1 else None))]
     return [_issue("error", code, f"{rid}: pinned '{template}' {message}",
                    entity=level_id, pointer=f"{rptr}{suffix}")
-            for code, suffix, message in common]
+            for code, suffix, message in tilemaps.pin_door_findings(room, copies[0])]
 
 
 def _full_ground_issues(level_id: str, rid: str, rptr: str, room: dict,

@@ -67,32 +67,38 @@ def pin(level, template, **flags):
 
 
 def test_a_cart_parked_on_a_pin_without_track_is_an_error(ds, level):
-    """`all_start_1_02` exists once and has no rail; the adapter throws."""
-    assert ds.pinned_template_rail("all_start_1_02") is False
-    pin(level, "all_start_1_02", railCart=True)
+    """`normal/all_start_1_02` has no rail; the adapter throws."""
+    assert ds.pinned_template_rail("normal/all_start_1_02") is False
+    pin(level, "normal/all_start_1_02", railCart=True)
     bad = found(ds, "LEVEL_ROOM_RAIL_MISSING")
     assert bad and bad[0]["severity"] == "error"
 
 
 def test_track_required_on_a_pin_without_it_warns(ds, level):
     """A pin skips RoomTilemapQuery's rail filter; the ride just ends."""
-    pin(level, "all_start_1_02", requireRail=True)
+    pin(level, "normal/all_start_1_02", requireRail=True)
     bad = found(ds, "LEVEL_ROOM_RAIL_MISSING")
     assert bad and bad[0]["severity"] == "warning"
 
 
 def test_a_pin_with_track_is_fine(ds, level):
-    assert ds.pinned_template_rail("all_teaching_5_05") is True
-    pin(level, "all_teaching_5_05", railCart=True, requireRail=True)
+    assert ds.pinned_template_rail("test/all_teaching_5_05") is True
+    pin(level, "test/all_teaching_5_05", railCart=True, requireRail=True)
     assert not found(ds, "LEVEL_ROOM_RAIL_MISSING")
 
 
-def test_a_name_in_two_pools_that_disagree_is_not_judged(ds, level):
-    """The pool is searched by file name and both copies are in it — which
-    one a pin gets is load order, so neither answer can be claimed."""
-    assert ds.pinned_template_rail("all_teaching_15_04") is None
-    pin(level, "all_teaching_15_04", railCart=True)
-    assert not found(ds, "LEVEL_ROOM_RAIL_MISSING")
+def test_a_name_in_two_folders_is_two_templates(ds, level):
+    """Before OZX-1571 the pool was searched by file name and which copy a
+    pin got was load order. The id now carries the folder, so each copy is
+    judged on its own track."""
+    rails = {f: ds.pinned_template_rail(f"{f}/all_teaching_15_04")
+             for f in ("basement", "normal")}
+    assert None not in rails.values()
+    folder = next((f for f, has in rails.items() if not has), None)
+    if folder is None:
+        pytest.skip("both copies carry rail now")
+    pin(level, f"{folder}/all_teaching_15_04", railCart=True)
+    assert found(ds, "LEVEL_ROOM_RAIL_MISSING")
 
 
 def test_the_floor_switch_reaches_the_plan_view(ds):
