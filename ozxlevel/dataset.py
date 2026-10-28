@@ -1176,6 +1176,12 @@ class Dataset:
                      "minionsPerSpawner": e.get("minionsPerSpawner") or 0,
                      "isSpawner": bool(e.get("minionId")
                                        and (e.get("minionsPerSpawner") or 0) > 0),
+                     # OZX-1504: a rail factory's minionId names a train
+                     # entry of this pool by its railTrainId; each minion is
+                     # then one whole train.
+                     "minionIsTrain": any(m.get("railTrainId") == e.get("minionId")
+                                          for m in floor.get("enemyPool") or []
+                                          if e.get("minionId")),
                      # OZX-1063: variants of ONE creature folded into one
                      # entry. `enemyId` stays the representative — the entry
                      # is sampled, capped and counted as one type, and each

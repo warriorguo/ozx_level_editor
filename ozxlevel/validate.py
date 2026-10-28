@@ -2532,6 +2532,11 @@ def _rail_train_entry_issues(ds: Dataset, plan_id: str, fi: int,
     return issues
 
 
+def _minion_key(entry: dict) -> str | None:
+    """`EnemyPoolEntry.MinionKey` (OZX-1504): the train for a train entry, else the enemy."""
+    return entry.get("railTrainId") or entry.get("enemyId")
+
+
 def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                          fptr: str, floor: dict) -> list[dict]:
     """`enemyPool[].minionId` / `minionsPerSpawner` — the spawner channel.
@@ -2562,7 +2567,10 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
 
     spawner_ids = {e.get("enemyId") for e in pool
                    if e.get("minionId") and (e.get("minionsPerSpawner") or 0) > 0}
-    member_ids = {e.get("enemyId") for e in pool}
+    # OZX-1504 `EnemyPoolEntry.MinionKey`: a minionId names a train entry by
+    # its railTrainId, anything else by its enemyId.
+    members = {_minion_key(e): e for e in reversed(pool)}
+    member_ids = set(members)
 
     issues: list[dict] = []
     for ei, entry in enumerate(pool):
@@ -2607,9 +2615,32 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 f"block. Add it to the pool — weight 0 is not a way to hide it",
                 entity=plan_id, pointer=f"{eptr}/minionId"))
 
+        # OZX-1504: a train comes out of a rail factory and nothing else does —
+        # `EnemyEntity.RequestProduceRailTrain` refuses a spawner without
+        # `railFactory`, and a factory's emitter can only put a train on the rail.
+        minion_entry = members.get(minion)
+        minion_is_train = bool(minion_entry and minion_entry.get("railTrainId"))
+        spawner = ds.get("EnemyData", entry.get("enemyId") or "")
+        is_factory = bool(spawner and ((spawner.value.get("railFactory") or {}).get("enabled")))
+        if minion_entry is not None and spawner is not None:
+            if minion_is_train and not is_factory:
+                issues.append(_issue(
+                    "error", "LEVEL_SPAWNER_TRAIN_NOT_FROM_FACTORY",
+                    f"{who} produces train '{minion}', but only a rail factory "
+                    f"(EnemyData.railFactory.enabled) can put a train on the rail — the "
+                    f"room throws when the line is requested",
+                    entity=plan_id, pointer=f"{eptr}/minionId"))
+            elif is_factory and not minion_is_train:
+                issues.append(_issue(
+                    "error", "LEVEL_SPAWNER_FACTORY_NOT_TRAIN",
+                    f"{who} is a rail factory producing enemy '{minion}'. A rail factory only "
+                    f"produces trains — name a train entry of this pool by its railTrainId",
+                    entity=plan_id, pointer=f"{eptr}/minionId"))
+
         # Not a rule upstream (the pool check above already covers the pool),
         # but a minion naming nothing at all would be reported by neither.
-        if minion and minion in member_ids and ds.get("EnemyData", minion) is None:
+        if minion and minion in member_ids and not minion_is_train \
+                and ds.get("EnemyData", minion) is None:
             issues.append(_issue(
                 "error", "DATA_REFERENCE_MISSING",
                 f"{who}: minionId '{minion}' does not exist",
@@ -2639,7 +2670,6 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                     f"the room shares — so it is truncated every time, even alone",
                     entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
             continue
-        minion_entry = next((e for e in pool if e.get("enemyId") == minion), None)
         minion_cap = (minion_entry or {}).get("maxPerRoom") or 0
         if minion_cap and count > minion_cap:
             issues.append(_issue(

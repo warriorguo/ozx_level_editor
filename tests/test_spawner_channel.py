@@ -267,3 +267,60 @@ def test_the_shipped_allowances_silence_the_old_warning(ds):
     for plan_id in ("chapter_5", "chapter_6", "chapter_7"):
         assert not [i for i in validate_plan(ds, plan_id)
                     if i["code"] == "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED"], plan_id
+
+
+# ── OZX-1504: a rail factory's line is a train ───────────────────────────
+
+
+@pytest.fixture
+def ch5(ds):
+    """chapter_5, whose B1 (floors[2]) runs rail_evil_factory → rail_heavy_solo."""
+    doc = ds.get("LevelBasePlanData", "chapter_5")
+    before = copy.deepcopy(doc.value.get("floors"))
+    yield doc
+    doc.value["floors"] = before
+
+
+def factory_of(plan):
+    pool = pool_of(plan, floor=2)
+    return pool, next(e for e in pool if e.get("enemyId") == "rail_evil_factory")
+
+
+def test_a_factory_names_its_train_by_railTrainId(ds):
+    """The minion is matched to a train entry by its railTrainId
+    (`EnemyPoolEntry.MinionKey`), so the shipped line is in the pool."""
+    found = codes(ds, "chapter_5")
+    assert not [c for c in found if c in PAIR_CODES
+                or c in ("LEVEL_SPAWNER_TRAIN_NOT_FROM_FACTORY",
+                         "LEVEL_SPAWNER_FACTORY_NOT_TRAIN")]
+    assert "DATA_REFERENCE_MISSING" not in found
+
+
+def test_the_view_shows_the_line_as_trains(ds):
+    view = ds.plan_view("chapter_5")
+    factory = next(e for e in view["floors"][2]["enemyPool"]
+                   if e["enemyId"] == "rail_evil_factory")
+    assert factory["isSpawner"] and factory["minionIsTrain"]
+    assert factory["minionId"] == "rail_heavy_solo"
+    ordinary = [e for f in ds.plan_view("chapter_3")["floors"]
+                for e in f["enemyPool"] if e["isSpawner"]]
+    assert ordinary and not any(e["minionIsTrain"] for e in ordinary)
+
+
+def test_a_factory_produces_only_trains(ds, ch5):
+    pool, factory = factory_of(ch5)
+    enemy = next(e for e in pool if e.get("enemyId") and not e.get("minionId")
+                 and e is not factory)
+    factory["minionId"] = enemy["enemyId"]
+    assert "LEVEL_SPAWNER_FACTORY_NOT_TRAIN" in codes(ds, "chapter_5")
+
+
+def test_only_a_factory_produces_trains(ds, ch5):
+    pool, factory = factory_of(ch5)
+    other = next(e for e in pool if e.get("enemyId") and e is not factory
+                 and not (ds.get("EnemyData", e["enemyId"]).value.get("railFactory") or {})
+                 .get("enabled"))
+    other["minionId"], other["minionsPerSpawner"] = factory["minionId"], 1
+    found = codes(ds, "chapter_5")
+    assert "LEVEL_SPAWNER_TRAIN_NOT_FROM_FACTORY" in found
+    assert "LEVEL_SPAWNER_MINION_NOT_IN_POOL" not in found

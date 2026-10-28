@@ -499,7 +499,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 | 字段 | 语义 |
 |---|---|
-| `minionId` | 这台 spawner 产什么。非空 = 本条目是 spawner 锚点。**必须是同层 `enemyPool` 的另一个成员** |
+| `minionId` | 这台 spawner 产什么。非空 = 本条目是 spawner 锚点。**必须是同层 `enemyPool` 的另一个成员**；列车条目按它的 `railTrainId` 认（`EnemyPoolEntry.MinionKey`，`Game.Level/LevelBasePlan.cs:110`，OZX-1504） |
 | `minionsPerSpawner` | 一台 spawner 喂几只；乘以本房抽到的该 spawner 只数 |
 
 **两者必须同时非空或同时缺省**，旧 plan 不写这两个字段，行为不变。
@@ -527,6 +527,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 2. `minionId` 不是同层 `enemyPool` 成员 → 绕过池成员身份的三重保证（一次 run 见得到、role 在本层每张 tilemap 上都有生成格、带 elite 块），半路 `EnemyService.Spawn` 抛错。
 3. 不能产自己 → 无界增长，`maxAlive` 门的是整条 step，管不到通道里面。
 4. 不能产另一台 spawner → 链式生产没有人口上界。
+5. （OZX-1504，`LevelPlanValidator.cs:732-740`，核对于 `ozx_base@6a8e344e`）只有轨道工厂（`EnemyData.railFactory.enabled`，目前只有 `rail_evil_factory`）能产列车，轨道工厂也只产列车 → 否则房间请求产线时抛。工厂的子代是一整列车：合成的 launch 写 `railTrainId` + `viaSpawner`（不写 `enemyId`），从不当精英，额度和普通产线同一套（`spawnerMinionsPerRoom`，没有时是 `enemiesPerRoom` + 列车条目的 `maxPerRoom`）。首个出货用例：chapter_5 `floors[2]` `{ enemyId: rail_evil_factory, minionId: rail_heavy_solo, minionsPerSpawner: 3 }`。
 
 ### 5.5 stageWeights 的 category 维度（OZX-1044，核对于 `ozx_base@c87c6236`）
 

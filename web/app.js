@@ -1836,7 +1836,9 @@ function renderPlanFloors() {
             ? `<span class="spawner-line" title="${esc(f.spawnerMinionsPerRoom > 0
                 ? `OZX-1219: each of these that a room draws is fed from the room's own allowance of ${f.spawnerMinionsPerRoom} minions, shared by every spawner; enemies/room counts only bodies placed directly`
                 : `OZX-1064: each of these that a room draws is paired with a viaSpawner launch of ${e.minionId}, charged to the room's enemies/room and capped by the minion's maxPerRoom`)}">
-                 <span class="drop-tag">spawns</span>${esc(`×${e.minionsPerSpawner} ${e.minionId} each`)}</span>`
+                 <span class="drop-tag">spawns</span>${esc(e.minionIsTrain
+                   ? `→ ${e.minionsPerSpawner} train${e.minionsPerSpawner === 1 ? '' : 's'} of ${e.minionId} each`
+                   : `×${e.minionsPerSpawner} ${e.minionId} each`)}</span>`
             // Half a pair reads as a spawner to a designer and as an ordinary
             // enemy to the sampler. The validator errors; the row says why.
             : (e.minionId || e.minionsPerSpawner)
