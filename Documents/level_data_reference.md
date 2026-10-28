@@ -442,6 +442,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
 | `stageMustDrop[]` | `stageType`, `drops[{itemId` **或** `tableId, count, chance}]` | 该 stage 的**每个房间**各生成一个 cargo；`chance`(0/省略=必出) **逐房**在生成期掷（OZX-1109） |
 | `depthBoxTableId` + `depthRarityBumps[]` | 表 id；`[{ pathDepth: 1\|2, weights: [+0, +1, …] }]`（OZX-1560，`LevelBasePlan.cs:922`，核对于 `ozx_base@6a8e344e`） | 深度箱：从这张 pickOne 装备表抽一件，钉在 pathDepth 最大、能承载保底（开局波必有身体）的支线房（同深度取 BFS 序最后），按该房深度的权重上抬稀有度。写了表就必须给 depth 1 和 2 各一条、权重非负且和 > 0（`LOOT_DEPTH_BUMPS_INVALID`）；表本身按 guaranteed 的 `tableId` 规则查。表常按层、bumps 常写在 floorDefaults——只有 bumps 不报。无支线（cycle / 手写）楼层不发 |
+| `tipSkillTableId` | 表 id（OZX-1561，`LevelBasePlan.cs:967`，核对于 `ozx_base@a080bbdf`） | 枝末技能：从这张 pickOne 技能名册（出货 `loot_skills`，ch3–7 写在 floorDefaults）抽一个，钉在枝末房（pathDepth ≥ 1、非 story 房、只有一道门通向非 story 房）。三档：深度箱不在的枝末 → 深度箱所在的枝末 → 支线中段；每档最深、同深度 BFS 序最后，都要能承载保底。空白或带首尾空格 `FromData` 抛（`LOOT_TIP_SKILL_INVALID`）；表本身按 guaranteed 的 `tableId` 规则查。无支线楼层不发 |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
 

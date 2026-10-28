@@ -1142,6 +1142,13 @@ class Dataset:
                                      "weights": list(b.get("weights") or [])}
                                     for b in (floor["floorLootPlan"].get("depthRarityBumps") or [])],
                 } if (floor.get("floorLootPlan") or {}).get("depthBoxTableId") else None),
+                # OZX-1561: one draw from this pickOne skill roster, pinned to
+                # a branch tip (a dead end off the spine) the generator picks.
+                "tipSkill": ({
+                    "tableId": floor["floorLootPlan"]["tipSkillTableId"],
+                    "missing": self.get("LootTableData",
+                                        floor["floorLootPlan"]["tipSkillTableId"]) is None,
+                } if (floor.get("floorLootPlan") or {}).get("tipSkillTableId") else None),
                 # OZX-1164: every room of the area draws a rail tilemap and the
                 # start room gets a cart. A bool, so a floor can switch it on
                 # over the chapter but never off.

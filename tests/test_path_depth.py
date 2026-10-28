@@ -4,8 +4,10 @@
   budget it keeps at its depth. `StageEnemyBudget.ValidateDepthScale`.
 - OZX-1560: `floorLootPlan.depthBoxTableId` + `depthRarityBumps` — the
   depth box. `LevelBasePlan.DepthRarityBumpsFromData`.
+- OZX-1561: `floorLootPlan.tipSkillTableId` — the tip skill.
+  `LevelBasePlan.TipSkillTableFromData`.
 
-The room choices themselves (key room, depth-box room, spine-first stage
+The room choices themselves (key room, depth-box and tip-skill rooms, spine-first stage
 dealing) are the generator's, and previews get them from genlevel (OLE-1).
 """
 
@@ -147,3 +149,29 @@ def test_bumps_without_a_box_are_not_a_fault(ds, plan):
     for f in plan["floors"]:
         (f.get("floorLootPlan") or {}).pop("depthBoxTableId", None)
     assert "LOOT_DEPTH_BUMPS_INVALID" not in codes(ds)
+
+
+# ── OZX-1561 ─────────────────────────────────────────────────────────────
+
+
+def test_the_shipped_tip_skills_are_clean(ds):
+    for plan_id in ("chapter_3", "chapter_4", "chapter_5", "chapter_6", "chapter_7"):
+        view = ds.plan_view(plan_id)
+        assert any(f["tipSkill"] for f in view["floors"]), plan_id
+        assert not [i for i in validate_plan(ds, plan_id)
+                    if "tipSkillTableId" in (i["pointer"] or "")], plan_id
+
+
+@pytest.mark.parametrize("table_id", [" loot_skills", "loot_skills ", "   "])
+def test_a_padded_or_blank_roster_is_refused(ds, plan, table_id):
+    loot0(plan)["tipSkillTableId"] = table_id
+    assert "LOOT_TIP_SKILL_INVALID" in codes(ds)
+
+
+def test_the_roster_has_to_exist_and_pick_one(ds, plan):
+    loot0(plan)["tipSkillTableId"] = "no_such_table"
+    found = [i for i in validate_plan(ds, PLAN) if i["code"] == "LOOT_TABLE_MISSING"]
+    assert found and found[0]["pointer"].endswith("/tipSkillTableId")
+    loot0(plan)["tipSkillTableId"] = next(d.id for d in ds.of_type("LootTableData")
+                                          if not d.value.get("pickOne"))
+    assert "LOOT_SLOT_TABLE_NOT_PICKONE" in codes(ds)

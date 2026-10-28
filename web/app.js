@@ -1931,6 +1931,9 @@ function renderPlanFloors() {
             title="${esc(`OZX-1560: one draw from this table, pinned to the deepest off-spine room that can pay it; rarity rises by that room's depth — ${
               f.depthBox.rarityBumps.map((b) => `depth ${b.pathDepth}: ${b.weights.map((w, k) => `+${k} ${w}`).join(', ')}`).join('; ') || 'no rarity bumps'}`)}">${
             esc(f.depthBox.tableId)}${f.depthBox.missing ? ' (missing)' : ''}</strong></div>` : ''}
+          ${f.tipSkill ? `<div><span>tip skill</span><strong class="${f.tipSkill.missing ? 'bad' : inheritedMark(f, 'floorLootPlan/tipSkillTableId')}"
+            title="OZX-1561: one draw from this skill roster, pinned to a branch tip off the spine — preferring one the depth box is not in">${
+            esc(f.tipSkill.tableId)}${f.tipSkill.missing ? ' (missing)' : ''}</strong></div>` : ''}
           <div><span>key</span><strong class="${inheritedMark(f, 'transitionKeyId')}">${esc(f.transitionKeyId || '—')}</strong></div>
           <div><span>rail</span><strong class="${f.railCart ? inheritedMark(f, 'railCart') : 'noboss'}"
             title="OZX-1164: every room draws a tilemap with track, and the start room gets a cart. A floor can switch it on over the chapter, never off.">${

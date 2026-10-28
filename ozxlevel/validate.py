@@ -2024,6 +2024,7 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
                     f"value is a typo, not a probability",
                     entity=plan_id, pointer=f"{dptr}/chance"))
     issues.extend(_depth_box_issues(ds, plan_id, fi, lptr, plan))
+    issues.extend(_tip_skill_issues(ds, plan_id, fi, lptr, plan))
     issues.extend(_no_fight_stage_issues(plan_id, fi, fptr, floor, plan))
     return issues
 
@@ -2068,6 +2069,32 @@ def _depth_scale_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[d
                        f"depth {d}; a far room is never harder than a nearer one",
                        f"{sptr}/{d}")
     return []
+
+
+def _tip_skill_issues(ds: Dataset, plan_id: str, fi: int, lptr: str,
+                      plan: dict) -> list[dict]:
+    """`floorLootPlan.tipSkillTableId` — the tip skill (OZX-1561).
+
+    One guaranteed draw from a pickOne skill roster (shipped: loot_skills),
+    pinned to a branch tip the generator picks. `TipSkillTableFromData`
+    refuses a blank or padded id; the table is otherwise looked up only when
+    the pin pays, mid-fight, so it is held to the guaranteed-slot rules here.
+    """
+    table_id = plan.get("tipSkillTableId")
+    if not table_id:
+        return []
+    tptr = f"{lptr}/tipSkillTableId"
+    where = f"floor {fi}: floorLootPlan.tipSkillTableId"
+    if not table_id.strip() or table_id.strip() != table_id:
+        return [_issue("error", "LOOT_TIP_SKILL_INVALID",
+                       f"{where} is {table_id!r}; name a pickOne skill roster with no "
+                       f"surrounding whitespace, or leave it out for no tip skill",
+                       entity=plan_id, pointer=tptr)]
+    issues = _slot_target_issues(ds, plan_id, where, lptr, None, table_id, require_one=True)
+    for issue in issues:
+        if issue["pointer"] == f"{lptr}/tableId":
+            issue["pointer"] = tptr
+    return issues
 
 
 def _depth_box_issues(ds: Dataset, plan_id: str, fi: int, lptr: str,
