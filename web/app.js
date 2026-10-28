@@ -1924,6 +1924,13 @@ function renderPlanFloors() {
           <div><span>enemies/room</span><strong class="${inheritedMark(f, 'enemiesPerRoom')}">${f.enemiesPerRoom ?? '—'}</strong></div>
           ${f.spawnerMinionsPerRoom > 0 ? `<div><span>minion lines</span><strong class="${inheritedMark(f, 'spawnerMinionsPerRoom')}"
             title="OZX-1219: spawner production lines draw from this allowance instead of enemies/room">${f.spawnerMinionsPerRoom}/room</strong></div>` : ''}
+          ${f.pathDepthEnemyScale.length ? `<div><span>depth share</span><strong class="${inheritedMark(f, 'pathDepthEnemyScale')}"
+            title="OZX-1558: share of a room's enemy budget, minion allowance and elite count it keeps at pathDepth 0 / 1 / 2 (spine / branch / sub-branch)">${
+            esc(f.pathDepthEnemyScale.map((d) => `×${d}`).join(' · '))}</strong></div>` : ''}
+          ${f.depthBox ? `<div><span>depth box</span><strong class="${f.depthBox.missing ? 'bad' : inheritedMark(f, 'floorLootPlan/depthBoxTableId')}"
+            title="${esc(`OZX-1560: one draw from this table, pinned to the deepest off-spine room that can pay it; rarity rises by that room's depth — ${
+              f.depthBox.rarityBumps.map((b) => `depth ${b.pathDepth}: ${b.weights.map((w, k) => `+${k} ${w}`).join(', ')}`).join('; ') || 'no rarity bumps'}`)}">${
+            esc(f.depthBox.tableId)}${f.depthBox.missing ? ' (missing)' : ''}</strong></div>` : ''}
           <div><span>key</span><strong class="${inheritedMark(f, 'transitionKeyId')}">${esc(f.transitionKeyId || '—')}</strong></div>
           <div><span>rail</span><strong class="${f.railCart ? inheritedMark(f, 'railCart') : 'noboss'}"
             title="OZX-1164: every room draws a tilemap with track, and the start room gets a cart. A floor can switch it on over the chapter, never off.">${

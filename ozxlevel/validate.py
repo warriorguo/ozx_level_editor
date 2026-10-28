@@ -1803,6 +1803,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
 
     issues.extend(_second_wave_issues(ds, plan_id, fi, fptr, floor))
 
+    issues.extend(_depth_scale_issues(plan_id, fi, fptr, floor))
+
     issues.extend(_variant_tier_issues(ds, plan_id, fi, fptr, floor, arrival))
     return issues
 
@@ -2021,7 +2023,109 @@ def _floor_loot_issues(ds: Dataset, plan_id: str, fi: int,
                     f"means every room of the stage gets it; a negative or >1 "
                     f"value is a typo, not a probability",
                     entity=plan_id, pointer=f"{dptr}/chance"))
+    issues.extend(_depth_box_issues(ds, plan_id, fi, lptr, plan))
     issues.extend(_no_fight_stage_issues(plan_id, fi, fptr, floor, plan))
+    return issues
+
+
+# StageEnemyBudget.PathDepthCount: trunk 0, branch 1, sub-branch 2 — one
+# entry per depth the tree generator makes (OZX-1558).
+PATH_DEPTH_COUNT = 3
+
+
+def _depth_scale_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[dict]:
+    """`pathDepthEnemyScale` — d(pathDepth), the share of a room's enemy budget
+    it keeps at its depth (OZX-1558, `StageEnemyBudget.ValidateDepthScale`).
+
+    It scales the stage budget, `spawnerMinionsPerRoom` and the rolled elite
+    count. `LevelBasePlan.FromData` throws on any shape other than §5's:
+    exactly one entry per depth, d(0) = 1 (enemiesPerRoom IS the spine's
+    budget), each entry in (0, 1], never rising with depth. Empty = every
+    depth keeps its whole budget.
+    """
+    scale = floor.get("pathDepthEnemyScale") or []
+    if not scale:
+        return []
+    sptr = f"{fptr}/pathDepthEnemyScale"
+    where = f"floor {fi}: pathDepthEnemyScale"
+
+    def err(message, pointer=sptr):
+        return [_issue("error", "LEVEL_DEPTH_SCALE_INVALID", f"{where} {message}",
+                       entity=plan_id, pointer=pointer)]
+
+    if len(scale) != PATH_DEPTH_COUNT:
+        return err(f"has {len(scale)} entries; it lists one per path depth the generator "
+                   f"makes (0 / 1 / 2), so exactly {PATH_DEPTH_COUNT}")
+    if scale[0] != 1:
+        return err(f"[0] is {scale[0]:g}; the spine is the reference (d(0) = 1) — "
+                   f"enemiesPerRoom is the spine's budget", f"{sptr}/0")
+    for d in range(1, len(scale)):
+        if not (0 < scale[d] <= 1):
+            return err(f"[{d}] is {scale[d]:g}; each depth keeps a share of the budget in "
+                       f"(0, 1]", f"{sptr}/{d}")
+        if scale[d] > scale[d - 1]:
+            return err(f"rises from {scale[d - 1]:g} at depth {d - 1} to {scale[d]:g} at "
+                       f"depth {d}; a far room is never harder than a nearer one",
+                       f"{sptr}/{d}")
+    return []
+
+
+def _depth_box_issues(ds: Dataset, plan_id: str, fi: int, lptr: str,
+                      plan: dict) -> list[dict]:
+    """`floorLootPlan.depthBoxTableId` + `depthRarityBumps` (OZX-1560).
+
+    The depth box is one guaranteed draw from a pickOne equipment table,
+    pinned to the floor's deepest off-spine room that can pay it; its
+    equipment rises in rarity by that room's depth. Paid like a guaranteed
+    pin, so the table is held to the same slot rules. `LevelBasePlan
+    .DepthRarityBumpsFromData` throws unless the bumps name depth 1 and 2
+    exactly once each, with non-negative weights summing above 0. Bumps
+    with no table are not a fault: they are typically chapter-wide in
+    floorDefaults while the table is per floor.
+    """
+    table_id = plan.get("depthBoxTableId") or None
+    if not table_id:
+        return []
+    where = f"floor {fi}: floorLootPlan.depthBoxTableId"
+    issues = _slot_target_issues(ds, plan_id, where, lptr, None, table_id, require_one=True)
+    for issue in issues:
+        if issue["pointer"] == f"{lptr}/tableId":
+            issue["pointer"] = f"{lptr}/depthBoxTableId"
+
+    bptr = f"{lptr}/depthRarityBumps"
+
+    def err(message, pointer=bptr):
+        issues.append(_issue("error", "LOOT_DEPTH_BUMPS_INVALID",
+                             f"floor {fi}: floorLootPlan.depthRarityBumps {message}",
+                             entity=plan_id, pointer=pointer))
+
+    rows = plan.get("depthRarityBumps") or []
+    if not rows:
+        err("is missing, but depthBoxTableId names a table; say how far the box rises at "
+            "depth 1 and depth 2 (a weight list over +0, +1, …)", f"{lptr}/depthBoxTableId")
+        return issues
+    seen: set[int] = set()
+    for ri, row in enumerate(rows):
+        rptr = f"{bptr}/{ri}"
+        row = row or {}
+        depth = row.get("pathDepth") or 0
+        weights = row.get("weights") or []
+        if not 1 <= depth < PATH_DEPTH_COUNT:
+            err(f"[{ri}] names pathDepth {depth}; the box only ever lands off the spine, "
+                f"at depth 1 or 2", f"{rptr}/pathDepth")
+            continue
+        if depth in seen:
+            err(f"names pathDepth {depth} twice", f"{rptr}/pathDepth")
+        seen.add(depth)
+        if not weights:
+            err(f"[{ri}] (pathDepth {depth}) has no weights", rptr)
+        elif any(w < 0 for w in weights):
+            err(f"[{ri}] (pathDepth {depth}) has a negative weight", f"{rptr}/weights")
+        elif not sum(weights) > 0:
+            err(f"[{ri}] (pathDepth {depth}) weights are all zero", f"{rptr}/weights")
+    for depth in range(1, PATH_DEPTH_COUNT):
+        if depth not in seen:
+            err(f"has no entry for pathDepth {depth}")
     return issues
 
 

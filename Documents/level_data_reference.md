@@ -394,6 +394,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `generatorType` | `tree`/`cycle`/`mixed`/`static`；**缺省和未知值都静默回退 `tree`** | 9 |
 | `stageDecorations` | `[{ stageType, decorations: [{ decalCategory, count }] }]`（OZX-1291）：生成期按房间最终的 `stageType`，把该条的 `decorations` 拷到 `decorations` 为空的非 cave 生成房上（start / boss 也算）。缺 `stageType` 或同一 stage 写两次 `AssignStageDecorations` 抛（`LEVEL_STAGE_DECORATION_UNSCOPED` / `_DUPLICATE`）；每条贴花与手摆的同规则，按楼层 effective `themeId` 判能不能画（§4.6）。数组整体替换 | ch3 / ch4（floorDefaults） |
 | `spawnerMinionsPerRoom` | int（OZX-1219）：spawner 产线的独立额度，按房共享。0 = OZX-1064 的规则（产线占 `enemiesPerRoom`、受 minion 条目 `maxPerRoom` 约束）；> 0 = 产线只花这份额度，`enemiesPerRoom` 只数直接放置、minion 的 `maxPerRoom` 只管直接放置，每座 spawner 取 `minionsPerSpawner`、被剩余额度截断、一只都给不出就不放这座。可从 floorDefaults 继承。`LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` 据此改判：有额度时比的是额度，不是 minion 的 cap | 8（ch5–7） |
+| `pathDepthEnemyScale` | float[3]（OZX-1558，`StageEnemyBudget.cs:100`，核对于 `ozx_base@6a8e344e`）：d(pathDepth)，房间按自身 `pathDepth`（0 主干 / 1 支线 / 2 次支线）保留的敌人预算份额。缩放 stage 预算（`enemyBudgetCut` 之后）、`spawnerMinionsPerRoom` 和掷出的精英数；`round(n×s, 远离零)`，非空不会缩到 0。必须恰好 3 项、`[0] = 1`、各项 ∈ (0, 1]、随深度不升，否则 `FromData` 抛（`LEVEL_DEPTH_SCALE_INVALID`）。空 = 全 1。可继承。另：楼层有 pathDepth ≥ 1 的房时 stage 发牌改为「硬仗先落主干」，钥匙房优先 pathDepth ≥ 1（OZX-1559）——都在生成器里，预览经 genlevel 自动一致 | ch3–ch7 |
 | `elevation` | int（OZX-1338）：area 的高度——地面 0、basement −1、楼上 +1。楼梯朝向**只**看两端高度（目标更高 = UpStairs 1×3，更低 = DownStairs 1×1），与 area 下标无关；两端同高抛。**永不继承**（写进 floorDefaults 抛）。LevelData 的 `FloorData.elevation` 同义，`ValidateStairLinks` 用它 | ch4–ch6 |
 | `requireFullGround` | bool（OZX-1340）：本 area 每间房只抽 ground 无空格的模板，精确门型没有时回退到满地图的超集（最坏四门 TBRL）。所以**每个会发的 stage 都要有一张满地图四门模板**（`ValidateFullGroundTilemaps` → `LEVEL_FULL_GROUND_TILEMAP_MISSING`）。bool：楼层能打开不能关掉 | ch6 的两个 battlefield area |
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
@@ -440,6 +441,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `categoryCaps[]` | `category`（taxonomy 节点）, `maxPerFloor` | 每层每类上限 |
 | `stageWeights[]` | `stageType`, `category?`, `weight` | 按 stage 缩放 `probabilistic`；缺省 1.0，0 = 该 stage 不掉，负数非法。`category` 见 §5.5 |
 | `stageMustDrop[]` | `stageType`, `drops[{itemId` **或** `tableId, count, chance}]` | 该 stage 的**每个房间**各生成一个 cargo；`chance`(0/省略=必出) **逐房**在生成期掷（OZX-1109） |
+| `depthBoxTableId` + `depthRarityBumps[]` | 表 id；`[{ pathDepth: 1\|2, weights: [+0, +1, …] }]`（OZX-1560，`LevelBasePlan.cs:922`，核对于 `ozx_base@6a8e344e`） | 深度箱：从这张 pickOne 装备表抽一件，钉在 pathDepth 最大、能承载保底（开局波必有身体）的支线房（同深度取 BFS 序最后），按该房深度的权重上抬稀有度。写了表就必须给 depth 1 和 2 各一条、权重非负且和 > 0（`LOOT_DEPTH_BUMPS_INVALID`）；表本身按 guaranteed 的 `tableId` 规则查。表常按层、bumps 常写在 floorDefaults——只有 bumps 不报。无支线（cycle / 手写）楼层不发 |
 
 真实样例见 `level_10.json` 的 floor 1：4 条 probabilistic（两把枪各 `floorCap: 1`）、`weapon` 类每层上限 2、stage 权重 start/boss 归零、release 必掉一个中血包。
 

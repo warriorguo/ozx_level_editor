@@ -1127,6 +1127,21 @@ class Dataset:
                 # lines. 0 = the OZX-1064 rule (lines spend enemiesPerRoom and
                 # the minion's maxPerRoom); > 0 = they spend only this.
                 "spawnerMinionsPerRoom": floor.get("spawnerMinionsPerRoom") or 0,
+                # OZX-1558: d(pathDepth), the share of a room's enemy budget
+                # (and minion allowance, and elite count) it keeps at its
+                # depth — [spine, branch, sub-branch]. Empty = all 1.
+                "pathDepthEnemyScale": list(floor.get("pathDepthEnemyScale") or []),
+                # OZX-1560: one draw from this table, pinned to the deepest
+                # off-spine room that can pay it, rising in rarity by that
+                # room's depth. The room is the generator's to choose.
+                "depthBox": ({
+                    "tableId": (floor.get("floorLootPlan") or {})["depthBoxTableId"],
+                    "missing": self.get("LootTableData",
+                                        floor["floorLootPlan"]["depthBoxTableId"]) is None,
+                    "rarityBumps": [{"pathDepth": b.get("pathDepth"),
+                                     "weights": list(b.get("weights") or [])}
+                                    for b in (floor["floorLootPlan"].get("depthRarityBumps") or [])],
+                } if (floor.get("floorLootPlan") or {}).get("depthBoxTableId") else None),
                 # OZX-1164: every room of the area draws a rail tilemap and the
                 # start room gets a cart. A bool, so a floor can switch it on
                 # over the chapter but never off.
