@@ -432,6 +432,30 @@ if (plan) {
   // deleted the plane and every render after a write threw on the null.
   check('the map plane survives for the next render', !!q('#mapPlane'));
 
+  // ── where the run ends, and what it must pass (OZX-1518 / OZX-1568) ─────
+  {
+    const card = q('[data-floor="links"]');
+    const linked = plan.areaLinks.length > 0 || plan.areas.declared;
+    check('the area card is drawn iff the plan links its areas', !!card === linked);
+    if (card) {
+      const pick = q('#finalAreaPick');
+      check('it names the area the run ends in',
+            plan.areas.final === null
+              || pick.options[pick.selectedIndex].textContent.includes(`area ${plan.areas.final + 1}`),
+            pick?.options[pick.selectedIndex]?.textContent);
+      check('and says, per area, whether every run passes it',
+            card.querySelectorAll('.content-column:last-child .content-entry').length === plan.floors.length);
+    }
+    const upgrade = q('[data-floor="upgrade"]');
+    check('the upgrade rooms card is always offered', !!upgrade);
+    if (plan.upgradeStoryRooms.declared) {
+      check('and shows the count per run',
+            upgrade.querySelector('[data-upgrade-field="count"] input')?.value === String(plan.upgradeStoryRooms.count));
+    } else {
+      check('or a button to add them', !!q('#upgradeRoomsAdd'));
+    }
+  }
+
   // ── the spawner channel is on the pool row ─────────────────────────────
   // OZX-1032: a spawner produces nothing on its own, so an enemy-pool row
   // that shows only weight and max/room says nothing about the four jammers

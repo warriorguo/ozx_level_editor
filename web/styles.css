@@ -1179,5 +1179,5 @@ button { color: inherit; }
 .sample-controls { display: flex; gap: 6px; align-items: center; justify-content: center; margin: 10px 0 6px; font-size: 10px; }
 .sample-table { margin: 10px auto 0; border-collapse: collapse; font-size: 9px; }
 .sample-table th, .sample-table td { padding: 2px 6px; border-bottom: 1px solid var(--line); text-align: right; }
-.sample-table tr.bad td { color: var(--danger); }
+.sample-table tr.bad td, .sample-table td.bad { color: var(--danger); }
 .sample-table button.link { background: none; border: 0; color: var(--cyan); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }

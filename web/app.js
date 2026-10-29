@@ -1506,15 +1506,25 @@ function renderPlanAll() {
   const gen = state.generator;
   const failed = state.sample && state.sample.planId === plan.id && state.sample.error
     ? `<span class="stuck" title="${esc(state.sample.detail || '')}">seed ${esc(state.sample.seed)}: ${esc(state.sample.error)}</span>` : '';
+  const story = plan.storyRooms && plan.storyRooms.active;
+  // OZX-1568: upgrade rooms are story rooms too, counted apart; one in an
+  // area a run can skip is the thing to catch, so it is marked bad.
+  const upgrade = plan.upgradeStoryRooms && plan.upgradeStoryRooms.active;
+  const upgradeCell = (r) => {
+    const stray = (r.upgradeAreas || []).filter((a) => !plan.areas.mustPass[a]);
+    return `<td class="${stray.length || (r.upgradeRooms ?? 0) !== plan.upgradeStoryRooms.count ? 'bad' : ''}"
+      title="${esc(`in ${(r.upgradeAreas || []).map((a) => `area ${a + 1}`).join(', ') || 'no area'}${
+        stray.length ? ' — not every run passes there' : ''}`)}">${r.upgradeRooms ?? 0}</td>`;
+  };
   const summary = state.sampleSummary && state.sampleSummary.planId === plan.id
     ? `<table class="sample-table"><tr><th>seed</th><th>rooms</th>${
         plan.floors.map((f) => `<th>f${f.index + 1}</th>`).join('')}<th>teleports</th>${
-        plan.storyRooms && plan.storyRooms.active ? '<th>story</th>' : ''}</tr>${
+        story ? '<th>story</th>' : ''}${upgrade ? '<th>upgrade</th>' : ''}</tr>${
         state.sampleSummary.samples.map((r) => r.error
-          ? `<tr class="bad"><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td colspan="${plan.floors.length + 2 + (plan.storyRooms && plan.storyRooms.active ? 1 : 0)}" title="${esc(r.error)}">fails to generate</td></tr>`
+          ? `<tr class="bad"><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td colspan="${plan.floors.length + 2 + (story ? 1 : 0) + (upgrade ? 1 : 0)}" title="${esc(r.error)}">fails to generate</td></tr>`
           : `<tr><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td>${r.rooms}</td>${
               r.floors.map((f) => `<td title="${esc(Object.entries(f.stages).map(([k, v]) => `${k} ${v}`).join(', '))}">${f.rooms}</td>`).join('')}<td>${r.teleports}</td>${
-              plan.storyRooms && plan.storyRooms.active ? `<td>${r.storyRooms ?? 0}</td>` : ''}</tr>`).join('')}</table>`
+              story ? `<td>${r.storyRooms ?? 0}</td>` : ''}${upgrade ? upgradeCell(r) : ''}</tr>`).join('')}</table>`
     : '';
   $('mapPlane').innerHTML =
     `<div class="plan-nomap">A plan has no rooms until it is generated.
@@ -1627,18 +1637,41 @@ function renderPlanDefaults() {
 // OZX-1185: a plan may say how its areas join — door or stair, keyed or
 // not — instead of the implicit chain. Without links the chain is the
 // answer, and saying so beats an empty card.
+//
+// OZX-1518: with links, the run ends in the area `finalArea` names — or, when
+// it is omitted, the one area no link leaves. Every other dead end is an
+// optional side area. OZX-1568: an area is "must pass" when cutting it off
+// strands area 0 from the end; upgrade story rooms only land on those.
 function renderAreaLinks() {
   const links = state.plan.areaLinks || [];
-  if (!links.length) return '';
-  const issues = planIssuesFor('/areaLinks');
+  const a = state.plan.areas;
+  if (!a || (!links.length && !a.declared)) return '';
+  const issues = planIssuesFor('/areaLinks').concat(planIssuesFor(a.pointer));
   const name = (i) => {
     const f = state.plan.floors[i];
     return f ? `area ${i + 1}${f.category === 'basement' ? ' (basement)' : ''}` : `area ${i + 1}?`;
   };
+  // Omitting finalArea is only an answer while one area is a dead end.
+  const derive = a.deadEnds.length === 1
+    ? `<option value=""${a.declared ? '' : ' selected'}>${esc(name(a.deadEnds[0]))} — the only dead end</option>` : '';
+  const picks = a.deadEnds.map((f) => `<option value="${f}"${
+    a.declared && a.finalArea === f ? ' selected' : ''}>${esc(name(f))}</option>`).join('');
+  const unset = !a.declared && a.deadEnds.length !== 1
+    ? '<option value="" selected disabled>— pick the end —</option>' : '';
+  const bad = a.declared && !a.deadEnds.includes(a.finalArea)
+    ? `<option value="${a.finalArea}" selected disabled>area ${a.finalArea + 1} (leads on)</option>` : '';
+  const role = (i) => (i === a.final ? 'final'
+    : a.side.includes(i) ? 'side area — optional dead end'
+      : a.mustPass[i] ? 'must pass' : 'optional');
   return `<div class="room-list-item plan-floor plan-links${
       issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="links">
     <div class="content-column plan-head">
       <div class="content-head">Area links</div>
+      <div class="plan-facts">
+        <div><span>ends in</span><select class="inline-select" id="finalAreaPick" aria-label="Final area"
+          title="OZX-1518: the area the run ends in (finalArea). It must be one no link leaves; the other dead ends become optional side areas">${
+          unset}${bad}${derive}${picks}</select></div>
+      </div>
       <div class="derived-note">each link also builds its way back</div>
       ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
     </div>
@@ -1652,7 +1685,28 @@ function renderAreaLinks() {
             : `door${l.keyId ? ` · locked by ${esc(l.keyId)}` : ''}`}</small></span>
       </div>`).join('')}</div>
     </div>
+    <div class="content-column">
+      <div class="content-head">Areas <span>${a.mustPass.length}</span></div>
+      <div class="content-list">${a.mustPass.map((_, i) => `<div class="content-entry">
+        <span><strong>${esc(name(i))}</strong><small>${role(i)}</small></span>
+      </div>`).join('')}</div>
+      <div class="derived-note">must pass = every run walks it; upgrade story rooms land only there</div>
+    </div>
   </div>`;
+}
+
+function wireAreaLinks() {
+  const pick = $('finalAreaPick');
+  const a = state.plan.areas;
+  if (!pick || !a) return;
+  pick.addEventListener('change', () => {
+    if (pick.value === '') {
+      if (a.declared) applyPlanEdits([{ op: 'remove', path: a.pointer }], 'finalArea removed');
+      return;
+    }
+    applyPlanEdits([{ op: 'put', path: a.pointer, value: Number(pick.value) }],
+      `finalArea = ${pick.value}`);
+  });
 }
 
 // OZX-1483: per run, not per area — the generator hangs countMin–countMax
@@ -1661,6 +1715,7 @@ function renderAreaLinks() {
 // plan's activeSkillIds (OZX-1488), in the Platform skills card.
 // No block means no story rooms, and the card offers to add one.
 const STORY_ROOMS_DEFAULT = { countMin: 2, countMax: 3, charges: 3 };
+const UPGRADE_STORY_ROOMS_DEFAULT = { count: 1 };
 const START_SKILL_PLATFORM_DEFAULT = { charges: 3 };
 
 function quantityField(attr, key, label, value, min) {
@@ -1717,6 +1772,50 @@ function renderStoryRooms() {
       <button class="button ghost" id="storyRoomsRemove" title="Delete the storyRooms block">Remove story rooms</button>
     </div>
   </div>`;
+}
+
+// OZX-1568: a fixed number of story rooms per run holding an equipment
+// upgrade platform — the only way into upgrades. Placed with the skill story
+// rooms, but only on areas every run passes through (see Area links).
+function renderUpgradeRooms() {
+  const u = state.plan.upgradeStoryRooms;
+  if (!u) return '';
+  const issues = planIssuesFor(u.pointer);
+  if (!u.declared) {
+    return `<div class="room-list-item plan-floor plan-links" data-floor="upgrade">
+      <div class="content-column plan-head">
+        <div class="content-head">Upgrade rooms</div>
+        <div class="derived-note">none — no run is promised an equipment upgrade platform</div>
+      </div>
+      <div class="content-column">
+        <button class="button ghost" id="upgradeRoomsAdd" title="Write an upgradeStoryRooms block (OZX-1568)">Add upgrade rooms</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="room-list-item plan-floor plan-links${
+      issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="upgrade">
+    <div class="content-column plan-head">
+      <div class="content-head">Upgrade rooms</div>
+      <div class="plan-facts">${quantityField('data-upgrade-field', 'count', 'per run', u.count, 1)}</div>
+      ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+    </div>
+    <div class="content-column">
+      <div class="derived-note">one-door story rooms with an upgrade platform, on top of the skill story rooms; placed with them, but only in areas every run passes through</div>
+      <button class="button ghost" id="upgradeRoomsRemove" title="Delete the upgradeStoryRooms block">Remove upgrade rooms</button>
+    </div>
+  </div>`;
+}
+
+function wireUpgradeRooms() {
+  const u = state.plan.upgradeStoryRooms;
+  if (!u) return;
+  const add = $('upgradeRoomsAdd');
+  if (add) add.addEventListener('click', () => applyPlanEdits(
+    [{ op: 'put', path: u.pointer, value: UPGRADE_STORY_ROOMS_DEFAULT }], 'upgrade rooms added'));
+  const remove = $('upgradeRoomsRemove');
+  if (remove) remove.addEventListener('click', () => applyPlanEdits(
+    [{ op: 'remove', path: u.pointer }], 'upgrade rooms removed'));
+  wireQuantityFields('data-upgrade-field', (k) => u[k], (k) => `${u.pointer}/${k}`, 'upgrade rooms');
 }
 
 function wireStoryRooms() {
@@ -1800,7 +1899,7 @@ function wireSkillPlatforms() {
 }
 
 function renderPlanFloors() {
-  $('roomsGrid').innerHTML = renderPlanDefaults() + renderAreaLinks() + renderSkillPlatforms() + renderStoryRooms() + state.plan.floors.map((f) => {
+  $('roomsGrid').innerHTML = renderPlanDefaults() + renderAreaLinks() + renderSkillPlatforms() + renderStoryRooms() + renderUpgradeRooms() + state.plan.floors.map((f) => {
     const issues = planIssuesFor(f.pointer);
     const bad = issues.some((i) => i.severity === 'error');
 
@@ -1927,6 +2026,9 @@ function renderPlanFloors() {
           ${f.pathDepthEnemyScale.length ? `<div><span>depth share</span><strong class="${inheritedMark(f, 'pathDepthEnemyScale')}"
             title="OZX-1558: share of a room's enemy budget, minion allowance and elite count it keeps at pathDepth 0 / 1 / 2 (spine / branch / sub-branch)">${
             esc(f.pathDepthEnemyScale.map((d) => `×${d}`).join(' · '))}</strong></div>` : ''}
+          ${f.treeLoops ? `<div><span>loops</span><strong class="${inheritedMark(f, 'treeShape')}"
+            title="OZX-1578: trunk loops (balanced ones keep both arms on the spine, depth 0; the others detour at depth 1), branch-end rings (depth 2), and how many rows a loop spans">${
+            esc(`trunk ${f.treeLoops.trunk.join('–')} (balanced ${f.treeLoops.balanced.join('–')}) · ring ${f.treeLoops.branch.join('–')} · ${f.treeLoops.length.join('–')} rows`)}</strong></div>` : ''}
           ${f.depthBox ? `<div><span>depth box</span><strong class="${f.depthBox.missing ? 'bad' : inheritedMark(f, 'floorLootPlan/depthBoxTableId')}"
             title="${esc(`OZX-1560: one draw from this table, pinned to the deepest off-spine room that can pay it; rarity rises by that room's depth — ${
               f.depthBox.rarityBumps.map((b) => `depth ${b.pathDepth}: ${b.weights.map((w, k) => `+${k} ${w}`).join(', ')}`).join('; ') || 'no rarity bumps'}`)}">${
@@ -1981,6 +2083,8 @@ function renderPlanFloors() {
 
   wireSkillPlatforms();
   wireStoryRooms();
+  wireUpgradeRooms();
+  wireAreaLinks();
   $('roomsGrid').querySelectorAll('.tilepart').forEach((chip) =>
     chip.addEventListener('click', () => toggleTilePart(
       chip.dataset.floor === 'defaults' ? 'defaults' : Number(chip.dataset.floor),

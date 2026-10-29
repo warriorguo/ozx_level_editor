@@ -183,9 +183,16 @@ def summarize(doc: dict) -> dict:
             "teleports": sum(1 for r in rooms if r.get("hasTeleportSpot")),
             "lockedDoors": sum(1 for r in rooms for d in r.get("doors") or [] if d.get("locked")),
             "finalRoom": next((r.get("roomId") for r in rooms if r.get("isFinalRoom")), None),
+            # OZX-1568: story rooms whose one placement is an upgrade platform.
+            "upgradeRooms": sum(1 for r in rooms if r.get("stageType") == "story" and any(
+                (p or {}).get("kind") == "upgrade" for p in r.get("staticPlacements") or [])),
         })
     return {"masterSeed": doc.get("masterSeed"), "floors": floors,
             "rooms": sum(f["rooms"] for f in floors),
             "teleports": sum(f["teleports"] for f in floors),
             # OZX-1483: the dead ends StoryRoomPlanner hangs off the layout.
-            "storyRooms": sum(f["stages"].get("story", 0) for f in floors)}
+            "storyRooms": sum(f["stages"].get("story", 0) for f in floors),
+            # OZX-1568: of those, the upgrade-platform ones, and the areas they
+            # landed in — which should all be areas every run passes through.
+            "upgradeRooms": sum(f["upgradeRooms"] for f in floors),
+            "upgradeAreas": [i for i, f in enumerate(floors) for _ in range(f["upgradeRooms"])]}

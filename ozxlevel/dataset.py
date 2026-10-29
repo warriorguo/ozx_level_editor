@@ -16,7 +16,7 @@ import math
 import pathlib
 from typing import Any
 
-from . import jsonspan, plandefaults, tilemaps
+from . import arealinks, jsonspan, plandefaults, tilemaps
 from .sprites import SpriteIndex
 from .themes import ThemeIndex
 
@@ -613,6 +613,29 @@ class Dataset:
                  "authoredOnly": bool(d.value.get("authoredOnly"))}
                 for d in self.of_type("CargoData")]
 
+    @staticmethod
+    def _tree_loops_view(floor: dict):
+        shape = floor.get("treeShape") or {}
+        if (not (shape.get("trunkLengthMax") or 0) > 0
+                or floor.get("generatorType") in ("cycle", "static")
+                or not ((shape.get("trunkLoopsMax") or 0) > 0
+                        or (shape.get("branchLoopsMax") or 0) > 0)):
+            return None
+        pair = lambda k: [shape.get(f"{k}Min") or 0, shape.get(f"{k}Max") or 0]  # noqa: E731
+        return {"trunk": pair("trunkLoops"), "balanced": pair("balancedLoops"),
+                "branch": pair("branchLoops"), "length": pair("loopLength")}
+
+    @staticmethod
+    def _upgrade_story_rooms_view(block) -> dict:
+        """OZX-1568: a fixed number of story rooms per run holding an equipment
+        upgrade platform, placed with the skill story rooms but only on areas
+        every run passes through. Like `storyRooms`, `declared` is whether the
+        block is in the file and `active` whether it does anything (`count`)."""
+        if not isinstance(block, dict):
+            return {"declared": False, "active": False, "pointer": "/upgradeStoryRooms"}
+        return {"declared": True, "active": (block.get("count") or 0) > 0,
+                "pointer": "/upgradeStoryRooms", "count": block.get("count") or 0}
+
     def _story_rooms_view(self, block) -> dict:
         """OZX-1483: the run's skill-platform story rooms, hung off the layout
         after generation. `declared` is whether the block exists in the file
@@ -1054,6 +1077,26 @@ class Dataset:
             })
         return out
 
+    @staticmethod
+    def _areas_view(plan: dict) -> dict:
+        """Which area the run ends in (OZX-1518) and which areas every run
+        walks through (OZX-1568). Without links: the last, and all of them.
+        With them, every other dead end is an optional side area. `final` is
+        None when the plan cannot say (the validator reports why)."""
+        n = len(plan.get("floors") or [])
+        links = plan.get("areaLinks") or []
+        final, _ = arealinks.final_area(plan, n)
+        ends = arealinks.dead_ends(links, n)
+        return {
+            "pointer": "/finalArea",
+            "declared": "finalArea" in plan,
+            "finalArea": plan.get("finalArea") or 0,
+            "final": final,
+            "deadEnds": ends,
+            "side": [f for f in ends if final is not None and f != final],
+            "mustPass": arealinks.must_pass(links, n, final),
+        }
+
     def plan_view(self, plan_id: str) -> dict:
         """A `LevelBasePlanData` as authored — no generation involved.
 
@@ -1140,6 +1183,9 @@ class Dataset:
                 # (and minion allowance, and elite count) it keeps at its
                 # depth — [spine, branch, sub-branch]. Empty = all 1.
                 "pathDepthEnemyScale": list(floor.get("pathDepthEnemyScale") or []),
+                # OZX-1578: the tree shape's local loops, or None when it
+                # builds none (both loop counts 0–0, or no shape written).
+                "treeLoops": self._tree_loops_view(floor),
                 # OZX-1560: one draw from this table, pinned to the deepest
                 # off-spine room that can pay it, rising in rarity by that
                 # room's depth. The room is the generator's to choose.
@@ -1282,6 +1328,8 @@ class Dataset:
             # pool" checks, so a plan that sets it says nothing about coverage.
             "waivePoolCoverage": bool(doc.value.get("waivePoolCoverage")),
             "storyRooms": self._story_rooms_view(doc.value.get("storyRooms")),
+            "upgradeStoryRooms": self._upgrade_story_rooms_view(
+                doc.value.get("upgradeStoryRooms")),
             "skillPlatforms": self._skill_platforms_view(doc.value),
             "floors": floors,
             # OZX-1185: how the areas join. Empty = the implicit i → i+1 chain
@@ -1294,6 +1342,7 @@ class Dataset:
                  "pointer": f"/areaLinks/{i}"}
                 for i, l in enumerate(doc.value.get("areaLinks") or [])
             ],
+            "areas": self._areas_view(doc.value),
             "floorDefaults": {
                 "declared": bool(defaults),
                 "pointer": "/floorDefaults",

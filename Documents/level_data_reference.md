@@ -327,9 +327,17 @@ plan 顶层（与 `areaLinks` 同级，**按整局**而不是按 area）三个�
 | `LEVEL_ACTIVE_SKILLS_TOO_FEW` | 少于 `(startSkillPlatform ? 1 : 0) + storyRooms.countMax` 个（无放回抽，`:54`） |
 | `LEVEL_ACTIVE_SKILLS_EMPTY` / `_DUPLICATE` | 空 id / 重复 id（`:65` / `:67`） |
 | `DATA_REFERENCE_MISSING` / `ROOM_PLACEMENT_SKILL_NOT_ACTIVE` / `ROOM_PLACEMENT_SKILL_NO_ICON` | 平台走 `SkillPlatformSpawnAdapter`，所以每个 id 要是有可加载图标的 active 技能；`Game.Level` 看不到技能数据，这条上游在运行时拒，编辑器提前查 |
-| `LEVEL_STORY_TILEMAP_MISSING` | 声明了 story 房时，每个生成 area（非 `static`）的 theme 对四个单门 mask 都要有 `story` tilemap（精确或超集，镜像展开后的池子）—— `LevelPlanValidator.cs:446` `ValidateStoryTilemaps` |
+| `LEVEL_STORY_TILEMAP_MISSING` | 声明了 story 房（或 `upgradeStoryRooms`）时，每个生成 area（非 `static`、非 `requireFullGround`）的 theme 对四个单门 mask 都要有 `story` tilemap（精确或超集，镜像展开后的池子）—— `LevelPlanValidator.cs:133` / `:501` `ValidateStoryTilemaps`（核对于 `ozx_base@d323f618`） |
 
 编辑器在 plan 视图里给两张卡：「Start room platform / Platform skills」可加 / 删 `startSkillPlatform`、改 charges，逐个加减 `activeSkillIds`（append / remove，不重写数组），并显示一局最多抽几张；「Story rooms」可加 / 删整块（默认 2–3 间、3 charges）、改三个数字。样本对比表在声明了 story 房时多一列 story 房数。
+
+**升级平台 story 房 `upgradeStoryRooms: { count }`**（OZX-1568，`LevelBasePlanData.cs:70`，核对于 `ozx_base@d323f618`）：每局**固定** `count` 间单门 story 房，`staticPlacements` 只有一条 `{ kind: "upgrade", count: 1 }`，不抽 `activeSkillIds`。和技能 story 房一起按「两两最远」选点，但只落在**必经 area**（`AreaLinkPlan.MustPassAreas`，`LevelBasePlan.cs:673`）：无 areaLinks 时全部；有时 area 0 与终点 area 必经，其它 area 当且仅当从连接图（双向）删掉它后 0 到不了终点——钥匙不算。ch4 = {0,1,2}，ch5 = {0,1}（地下室旁有钥匙门直通）。省略 = 没有且不消耗 rng。编辑器侧 `ozxlevel/arealinks.py` 复刻必经判定，plan 视图「Upgrade rooms」卡可加 / 删 / 改 count，「Area links」卡标出每个 area 是否必经；样本表多一列 upgrade 房数，落在非必经 area 或数目不对时标红。
+
+| issue code | 规则 |
+|---|---|
+| `LEVEL_UPGRADE_STORY_ROOMS_COUNT_INVALID` | `count < 0`（`SkillPlatformPlanRules.cs:31`） |
+| `LEVEL_UPGRADE_STORY_ROOMS_UNDECLARED`（warning） | 块写了但 `count` 为 0：上游不报错，只是没有升级房 |
+| `LEVEL_UPGRADE_STORY_ROOMS_NO_HOST` | 必经 area 全是 `static` 或 `requireFullGround`，挂不了 story 房（`LevelPlanValidator.cs:477` `ValidateUpgradeRoomAreas`） |
 
 ### 5.00 areaLinks（OZX-1185 / OZX-1186，核对于 `ozx_base@5cd9b22e` 的 `AreaLinkPlan.Build`）
 
@@ -337,7 +345,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 - `kind: "door"`：共面接缝（OZX-1117 的那对孪生门），可带 `keyId`（钥匙掉在 fromArea 里）；`kind: "stair"`：孪生 stair link，进出 basement，可在 fromArea 的 `stairRoomsMin..Max` 间不同房各开一道（都省略 = 1）。
 - basement **没有新字段**：effective `themeId` 为 `themes/basement` 即是（生成房 `roomCategory: basement`，只抽 `TilemapData/basement/`）。
-- 终点 area = 没有连接离开的那个，不再是最后一个下标（ch5 的 boss 在下标 1）。
+- 终点 area = plan 的 `finalArea`（OZX-1518，`LevelBasePlanData.cs:54`，核对于 `ozx_base@d323f618`），不再是最后一个下标（ch5 的 boss 在下标 1）。省略（0）= **唯一一个**没有连接离开的 area；area 0 在有连接的 plan 里总有路出去，所以 0 可以当「省略」。其余没有连接离开的 area 是**可选支线**（`IsSideArea`）：原路进出，按中间 area 长，没有终点房、不能 `endsRunOnClear`。规则在 `AreaLinkPlan.FinalArea`（`LevelBasePlan.cs:612`），`FromData` 与 `LevelPlanValidator` 共用；编辑器 `ozxlevel/arealinks.py`，「Area links」卡用下拉选终点并标出支线。
 
 `Build` 抛的每一条编辑器都报（读**合并后**的楼层，因为 basement 判定要看 effective `themeId`）：
 
@@ -351,6 +359,9 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `LEVEL_AREA_LINK_FAN_OUT` | 每个 area 最多 1 条出门、1 条进门、1 条出楼梯；只靠楼梯离开的 area，那道楼梯只能 1 间房 |
 | `LEVEL_AREA_LINK_LANDING_NEEDS_DOOR` | 多间落点的楼梯，目标 area 必须有门连接离开 |
 | `LEVEL_AREA_UNREACHABLE` | 每个 area 都要能从 area 0 沿连接（双向）走到 |
+| `LEVEL_FINAL_AREA_AMBIGUOUS` | 没有连接离开的 area 不止一个却没写 `finalArea` |
+| `LEVEL_FINAL_AREA_LEADS_ON` / `_OUT_OF_RANGE` | `finalArea` 指的 area 有连接离开 / 下标越界 |
+| `LEVEL_FINAL_AREA_WITHOUT_LINKS` | 没有 `areaLinks` 却写了 `finalArea`（链式时终点就是最后一层） |
 | `DATA_REFERENCE_MISSING` | door 的 `keyId` 不是 ItemData |
 
 **关卡侧的 stairLinks**（`LevelValidator.ValidateStairLinks`，加载即抛，编辑器之前完全没查）：`roomIdA` 在本层（`LEVEL_STAIR_ROOM_NOT_ON_FLOOR`）、`targetFloor` 是另一层（`LEVEL_STAIR_TARGET_INVALID`）、对面层有孪生（`LEVEL_STAIR_TWIN_MISSING`）、两层 elevation 不同（`LEVEL_STAIR_NO_DIRECTION`）、**一间房只有一个楼梯端**（OZX-1188，`PlaceStairs` 会跳过第二道，那条就成了单程；`themeId` 含 `cave` 的楼层豁免 → `LEVEL_STAIR_ROOM_TWO_ENDS`）。
@@ -395,6 +406,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `stageDecorations` | `[{ stageType, decorations: [{ decalCategory, count }] }]`（OZX-1291）：生成期按房间最终的 `stageType`，把该条的 `decorations` 拷到 `decorations` 为空的非 cave 生成房上（start / boss 也算）。缺 `stageType` 或同一 stage 写两次 `AssignStageDecorations` 抛（`LEVEL_STAGE_DECORATION_UNSCOPED` / `_DUPLICATE`）；每条贴花与手摆的同规则，按楼层 effective `themeId` 判能不能画（§4.6）。数组整体替换 | ch3 / ch4（floorDefaults） |
 | `spawnerMinionsPerRoom` | int（OZX-1219）：spawner 产线的独立额度，按房共享。0 = OZX-1064 的规则（产线占 `enemiesPerRoom`、受 minion 条目 `maxPerRoom` 约束）；> 0 = 产线只花这份额度，`enemiesPerRoom` 只数直接放置、minion 的 `maxPerRoom` 只管直接放置，每座 spawner 取 `minionsPerSpawner`、被剩余额度截断、一只都给不出就不放这座。可从 floorDefaults 继承。`LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED` 据此改判：有额度时比的是额度，不是 minion 的 cap | 8（ch5–7） |
 | `pathDepthEnemyScale` | float[3]（OZX-1558，`StageEnemyBudget.cs:100`，核对于 `ozx_base@6a8e344e`）：d(pathDepth)，房间按自身 `pathDepth`（0 主干 / 1 支线 / 2 次支线）保留的敌人预算份额。缩放 stage 预算（`enemyBudgetCut` 之后）、`spawnerMinionsPerRoom` 和掷出的精英数；`round(n×s, 远离零)`，非空不会缩到 0。必须恰好 3 项、`[0] = 1`、各项 ∈ (0, 1]、随深度不升，否则 `FromData` 抛（`LEVEL_DEPTH_SCALE_INVALID`）。空 = 全 1。可继承。另：楼层有 pathDepth ≥ 1 的房时 stage 发牌改为「硬仗先落主干」，钥匙房优先 pathDepth ≥ 1（OZX-1559）——都在生成器里，预览经 genlevel 自动一致 | ch3–ch7 |
+| `treeShape` 的局部环路 | `trunkLoops` / `balancedLoops` / `branchLoops` / `loopLength` 各一对 `Min/Max`（OZX-1578，`LevelBasePlanData.cs:322`，核对于 `ozx_base@d323f618`）：主干环（其中 `balancedLoops` 条等臂，两臂 pathDepth 0；不等臂侧臂 1）、支线末端挂环（2）、环跨几行。两个环计数都 0–0 = 关闭，连 rng 都不动。`TreeShapeFromData` 拒 max < min（`LevelBasePlan.cs:1205`），生成器拒负的计数、环开着时 `loopLengthMin < 2`（`TreeLevelGenerator.cs:799`）→ `LEVEL_TREE_LOOPS_INVALID` / `LEVEL_TREE_LOOP_LENGTH_INVALID`。**陷阱**：生成器自带的 `LoopLength` 2–3 只在楼层没写 treeShape 时生效，写了 treeShape、开了环却省略 `loopLength` 就是 0–0，会抛。`balancedLoops` 开了而 `trunkLoops` 0–0 → 什么都不建（warning `LEVEL_TREE_LOOPS_IGNORED`）。cycle / static 楼层不读。楼层卡在开环时显示 loops。OZX-1579 的 `cycleShape` 上游尚未落地 | 出货暂无 |
 | `elevation` | int（OZX-1338）：area 的高度——地面 0、basement −1、楼上 +1。楼梯朝向**只**看两端高度（目标更高 = UpStairs 1×3，更低 = DownStairs 1×1），与 area 下标无关；两端同高抛。**永不继承**（写进 floorDefaults 抛）。LevelData 的 `FloorData.elevation` 同义，`ValidateStairLinks` 用它 | ch4–ch6 |
 | `requireFullGround` | bool（OZX-1340）：本 area 每间房只抽 ground 无空格的模板，精确门型没有时回退到满地图的超集（最坏四门 TBRL）。所以**每个会发的 stage 都要有一张满地图四门模板**（`ValidateFullGroundTilemaps` → `LEVEL_FULL_GROUND_TILEMAP_MISSING`）。bool：楼层能打开不能关掉 | ch6 的两个 battlefield area |
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
@@ -406,7 +418,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `rooms` | 预定义房间；`generatorType="static"` 时必填，否则 fail-fast | 0 |
 | `overflowStageType/EncounterId/LootPlanId` | 比例分配后剩余房间的兜底。默认 `pressure` / `loot_common` | 0 |
 | `useExitRoom` | true = 合成专用 exit room（单向 Up 门） | 0 |
-| `endsRunOnClear` | 本层清完即通关。只有**终点 area** 可以写（无 areaLinks 时是最后一层；有时是没有连接离开的那个，`LevelBasePlan.IsFinalArea`），否则生成期抛（`LEVEL_ENDS_RUN_NOT_FINAL_AREA`）。有 `bossId` → `isFinalRoom` 盖到 boss 房；**没有 `bossId`**（OZX-1442）→ 盖到按 BFS 序的**最后一间 peak 房**（离入口最远，不用 rng）。这时 `ValidateFinalPeak` 要求：列了 peak、peak 在 `roomCountMin` 下按最大余数法至少分到 1 间（`PortionResolver`，编辑器按单精度逐步复刻）、peak 的 `enemyBudgetCut < 1`（空房一进门就通关）、peak 的 `secondWave` 只能 `cleared`（`advance` 可能还在等，而第一次平静就是胜利）→ `LEVEL_FINAL_PEAK_INVALID`。终点房不承接 `guaranteedDrops`、不放传送点。不能从 floorDefaults 继承 | ch3–ch7 各一层 |
+| `endsRunOnClear` | 本层清完即通关。只有**终点 area** 可以写（无 areaLinks 时是最后一层；有时是 `finalArea` 或唯一的死胡同，`AreaLinkPlan.FinalArea`；可选支线 area 也不行），否则生成期抛（`LEVEL_ENDS_RUN_NOT_FINAL_AREA`）。有 `bossId` → `isFinalRoom` 盖到 boss 房；**没有 `bossId`**（OZX-1442）→ 盖到按 BFS 序的**最后一间 peak 房**（离入口最远，不用 rng）。这时 `ValidateFinalPeak` 要求：列了 peak、peak 在 `roomCountMin` 下按最大余数法至少分到 1 间（`PortionResolver`，编辑器按单精度逐步复刻）、peak 的 `enemyBudgetCut < 1`（空房一进门就通关）、peak 的 `secondWave` 只能 `cleared`（`advance` 可能还在等，而第一次平静就是胜利）→ `LEVEL_FINAL_PEAK_INVALID`。终点房不承接 `guaranteedDrops`、不放传送点。不能从 floorDefaults 继承 | ch3–ch7 各一层 |
 
 **每个会发的 stage 都要有 tilemap**（`LevelPlanValidator.ValidateStageTilemaps`）：area 的库 = 主题的 category（`themes/X` → `X`，没有 tilemap 认领就退回 `normal`；没写 `roomCategory` 的 tilemap 是通配），`stageType` 为 `all` / `none` / 空的模板服务任何 stage。plan 列出的每个 stage、overflow stage（默认 `pressure`）、area 0 的 `start`、有 `bossId` 的 area 的 `boss`，库里一张都没有 → `RoomTilemapQuery` 在玩家进门时抛 → `LEVEL_STAGE_TILEMAP_MISSING`。编辑器维护一份按文件 stat 戳失效的 tilemap 事实索引（`ozxlevel/tilemaps.py` 的 `TilemapIndex`）。
 

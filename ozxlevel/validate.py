@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from . import plandefaults, tilemaps
+from . import arealinks, plandefaults, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
                       Dataset, _stage_budget, banned_stages, countmin_reading)
 
@@ -1223,8 +1223,14 @@ def validate_plan(ds: Dataset, plan_id: str) -> list[dict]:
     merged = [plandefaults.merge_floor(defaults, raw)
               for raw in doc.value.get("floors") or []]
     issues.extend(_area_link_issues(ds, plan_id, doc.value, [m for m, _ in merged]))
-    issues.extend(_final_area_issues(plan_id, doc.value, merged))
-    issues.extend(_skill_platform_issues(ds, plan_id, doc.value, merged))
+    # OZX-1518: which area the run ends in. None = unresolvable, reported here;
+    # the rules that read it then take every dead end as an end.
+    final, problem = arealinks.final_area(doc.value, len(merged))
+    if problem:
+        issues.append(_issue("error", problem[0], f"plan '{plan_id}' {problem[1]}",
+                             entity=plan_id, pointer="/finalArea"))
+    issues.extend(_final_area_issues(plan_id, doc.value, merged, final))
+    issues.extend(_skill_platform_issues(ds, plan_id, doc.value, merged, final))
     arrival = _arrival_order(doc.value.get("areaLinks") or [], len(merged))
     by_pointer: dict = {}
     for fi, (floor, source) in enumerate(merged):
@@ -1283,9 +1289,9 @@ def _platform_skill_problem(ds: Dataset, skill) -> tuple | None:
 
 
 def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
-                           merged: list) -> list[dict]:
-    """A plan's skill platforms: `activeSkillIds`, `storyRooms` (OZX-1483)
-    and `startSkillPlatform` (OZX-1488).
+                           merged: list, final=None) -> list[dict]:
+    """A plan's skill platforms: `activeSkillIds`, `storyRooms` (OZX-1483),
+    `startSkillPlatform` (OZX-1488) and `upgradeStoryRooms` (OZX-1568).
 
     `SkillPlatformPlanRules.Validate` rule for rule — `LevelBasePlan.FromData`
     and `LevelPlanValidator` both throw on these — then what that assembly
@@ -1294,6 +1300,11 @@ def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
     a story room is a one-door dead end hung off any free side, so every
     generated area's theme needs a `story` tilemap for each single-door
     mask, exactly or by a superset, in the mirror-expanded pool.
+
+    Upgrade story rooms draw no skill, so only their count has a shape; but
+    they hang only on areas every run passes through, so one of those has to
+    be able to host a story room (`ValidateUpgradeRoomAreas`), and they need
+    the same story tilemaps.
     """
     issues: list[dict] = []
 
@@ -1308,6 +1319,33 @@ def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
     charges = (story or {}).get("charges") or 0
     start_charges = (start or {}).get("charges") or 0
     has_story, has_start = hi > 0, start_charges > 0
+    upgrade = (plan.get("upgradeStoryRooms")
+               if isinstance(plan.get("upgradeStoryRooms"), dict) else None)
+    upgrades = (upgrade or {}).get("count") or 0
+    has_upgrade = upgrades > 0
+
+    if upgrade is not None and upgrades < 0:
+        err("LEVEL_UPGRADE_STORY_ROOMS_COUNT_INVALID",
+            f"upgradeStoryRooms has count {upgrades}; need at least 1, or omit the block "
+            f"for none", "/upgradeStoryRooms/count")
+    elif upgrade is not None and not has_upgrade:
+        # JsonUtility never leaves the block null; count is what declares it.
+        err("LEVEL_UPGRADE_STORY_ROOMS_UNDECLARED",
+            "upgradeStoryRooms has count 0, which is what declares none, so no run gets an "
+            "upgrade room. Give it a count, or omit the block",
+            "/upgradeStoryRooms/count", "warning")
+    if has_upgrade:
+        n = len(merged)
+        required = arealinks.must_pass(plan.get("areaLinks") or [], n, final)
+        compulsory = [f for f in range(n) if required[f]]
+        if compulsory and not any(
+                merged[f][0].get("generatorType") != "static"
+                and not merged[f][0].get("requireFullGround") for f in compulsory):
+            err("LEVEL_UPGRADE_STORY_ROOMS_NO_HOST",
+                f"declares upgradeStoryRooms, but none of the areas every run passes through "
+                f"([{', '.join(map(str, compulsory))}]) can host a story room: each is static "
+                f"or requireFullGround. An upgrade room in an optional area could be skipped, "
+                f"and it is the only way into equipment upgrades", "/upgradeStoryRooms")
 
     if story is not None and "activeSkillIds" in story:
         # OZX-1488 moved the list to the plan; JsonUtility drops the old
@@ -1340,6 +1378,42 @@ def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
             err("LEVEL_STORY_ROOMS_NO_CHARGES",
                 f"storyRooms has charges {charges}; each platform needs at least 1",
                 "/storyRooms/charges")
+
+    issues.extend(_active_skill_issues(ds, plan_id, plan, has_start, has_story, hi))
+    if not (has_story or has_upgrade):
+        return issues
+    facts = ds.tilemaps.facts()
+    if not facts:
+        return issues
+    declares = " and ".join(name for name, on in (("storyRooms", has_story),
+                                                 ("upgradeStoryRooms", has_upgrade)) if on)
+    for fi, (floor, source) in enumerate(merged):
+        # Upstream skips these too: a full-ground area never takes a story room.
+        if floor.get("generatorType") == "static" or floor.get("requireFullGround"):
+            continue
+        library = tilemaps.for_theme(facts, floor.get("themeId"))
+        missing = [f"{side} ({mask})" for mask, side in
+                   ((1, "top"), (2, "right"), (4, "bottom"), (8, "left"))
+                   if not any(tilemaps.matches_stage(t["stageType"], "story")
+                              and (t["openDoors"] & mask) == mask for t in library)]
+        if missing:
+            err("LEVEL_STORY_TILEMAP_MISSING",
+                f"{declares} declared, but floor {fi}'s theme "
+                f"'{floor.get('themeId')}' has no 'story' tilemap with a door on: "
+                f"{', '.join(missing)}. A story room hung off that side would throw "
+                f"out of RoomTilemapQuery on entry",
+                plandefaults.reroute(f"/floors/{fi}/themeId", fi, source))
+    return issues
+
+
+def _active_skill_issues(ds: Dataset, plan_id: str, plan: dict, has_start: bool,
+                         has_story: bool, hi: int) -> list[dict]:
+    """`activeSkillIds`: drawn by the start platform and the skill story
+    rooms together, without replacement. Upgrade rooms draw nothing."""
+    issues: list[dict] = []
+
+    def err(code, message, pointer):
+        issues.append(_issue("error", code, message, entity=plan_id, pointer=pointer))
 
     ids = plan.get("activeSkillIds") or []
     drawn = (1 if has_start else 0) + (hi if has_story else 0)
@@ -1375,27 +1449,6 @@ def _skill_platform_issues(ds: Dataset, plan_id: str, plan: dict,
         problem = _platform_skill_problem(ds, skill)
         if problem:
             err(problem[0], f"a skill platform may grant '{sid}', {problem[1]}", ptr)
-
-    if not has_story:
-        return issues
-    facts = ds.tilemaps.facts()
-    if not facts:
-        return issues
-    for fi, (floor, source) in enumerate(merged):
-        if floor.get("generatorType") == "static":
-            continue
-        library = tilemaps.for_theme(facts, floor.get("themeId"))
-        missing = [f"{side} ({mask})" for mask, side in
-                   ((1, "top"), (2, "right"), (4, "bottom"), (8, "left"))
-                   if not any(tilemaps.matches_stage(t["stageType"], "story")
-                              and (t["openDoors"] & mask) == mask for t in library)]
-        if missing:
-            err("LEVEL_STORY_TILEMAP_MISSING",
-                f"storyRooms is declared, but floor {fi}'s theme "
-                f"'{floor.get('themeId')}' has no 'story' tilemap with a door on: "
-                f"{', '.join(missing)}. A story room hung off that side would throw "
-                f"out of RoomTilemapQuery on entry",
-                plandefaults.reroute(f"/floors/{fi}/themeId", fi, source))
     return issues
 
 
@@ -1561,12 +1614,14 @@ def _area_link_issues(ds: Dataset, plan_id: str, plan: dict,
     return issues
 
 
-def _final_area_issues(plan_id: str, plan: dict, merged: list) -> list[dict]:
+def _final_area_issues(plan_id: str, plan: dict, merged: list, final) -> list[dict]:
     """`endsRunOnClear` on a plan floor, and the boss-less ending (OZX-1442).
 
     Only the chapter's final area may end the run — the last floor without
-    areaLinks, the one no link leaves with them (`LevelBasePlan.IsFinalArea`);
-    elsewhere the generator throws. A final area with no `bossId` ends on
+    areaLinks, the one `finalArea` names (or the one dead end) with them
+    (`AreaLinkPlan.FinalArea`, OZX-1518); elsewhere the generator throws. An
+    unresolvable end (`final` None) is reported on its own, and every dead
+    end is taken as an end meanwhile. A final area with no `bossId` ends on
     its last peak room in BFS order, so `ValidateFinalPeak` asks that the
     floor lists a peak stage, that the portions buy at least one peak room
     at `roomCountMin` (largest remainder, as the generator deals), that the
@@ -1575,18 +1630,20 @@ def _final_area_issues(plan_id: str, plan: dict, merged: list) -> list[dict]:
     `advance` wave can still be waiting at the first calm, which IS the
     victory. Static floors mark their own final rooms and are skipped.
     """
-    links = plan.get("areaLinks") or []
-    n = len(merged)
+    ends = ({final} if final is not None
+            else set(arealinks.dead_ends(plan.get("areaLinks") or [], len(merged))))
     issues: list[dict] = []
     for fi, (floor, source) in enumerate(merged):
         if not floor.get("endsRunOnClear") or floor.get("generatorType") == "static":
             continue
         fptr = f"/floors/{fi}"
-        final = (not any(l.get("fromArea") == fi for l in links)) if links else fi == n - 1
-        if not final:
+        if fi not in ends:
+            why = (f"it is an optional side area — the run ends in area {final} (finalArea)"
+                   if fi in arealinks.dead_ends(plan.get("areaLinks") or [], len(merged))
+                   else "the chapter continues past it")
             issues.append(_issue(
                 "error", "LEVEL_ENDS_RUN_NOT_FINAL_AREA",
-                f"floor {fi} sets endsRunOnClear, but the chapter continues past it; only the "
+                f"floor {fi} sets endsRunOnClear, but {why}; only the "
                 f"final area may end the run", entity=plan_id, pointer=f"{fptr}/endsRunOnClear"))
             continue
         if floor.get("bossId"):
@@ -1700,6 +1757,56 @@ def _variant_tier_issues(ds: Dataset, plan_id: str, fi: int, fptr: str,
     return issues
 
 
+TREE_LOOP_RANGES = ("trunkLoops", "balancedLoops", "branchLoops", "loopLength")
+
+
+def _tree_loop_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[dict]:
+    """`treeShape`'s local loops (OZX-1578): trunk loops, how many of them are
+    balanced, branch-end rings, and how many rows a loop spans.
+
+    `TreeShapeFromData` refuses a range whose max is below its min, and the
+    tree generator refuses a negative count and a loop under two rows while
+    any loop is on. The shape is inherited whole, so once a floor writes it
+    the generator's own `LoopLength` 2–3 no longer applies: a block that
+    turns loops on and leaves `loopLength` out asks for 0–0, and throws.
+    A shape without a trunk (`trunkLengthMax` 0) is no shape, and a cycle
+    floor never reads one.
+    """
+    shape = floor.get("treeShape") or {}
+    if (not (shape.get("trunkLengthMax") or 0) > 0
+            or floor.get("generatorType") in ("cycle", "static")):
+        return []
+    sptr = f"{fptr}/treeShape"
+    issues: list[dict] = []
+
+    def err(code, message, key, severity="error"):
+        issues.append(_issue(severity, code, f"floor {fi}: treeShape.{message}",
+                             entity=plan_id, pointer=f"{sptr}/{key}"))
+
+    lo = {k: shape.get(f"{k}Min") or 0 for k in TREE_LOOP_RANGES}
+    hi = {k: shape.get(f"{k}Max") or 0 for k in TREE_LOOP_RANGES}
+    for k in TREE_LOOP_RANGES:
+        if hi[k] < lo[k]:
+            err("LEVEL_TREE_LOOPS_INVALID",
+                f"{k} has max {hi[k]} below min {lo[k]}; a range that cannot be sampled "
+                f"is a typo, not a shape", f"{k}Max")
+        elif k != "loopLength" and lo[k] < 0:
+            err("LEVEL_TREE_LOOPS_INVALID", f"{k}Min is {lo[k]}; a loop count is at least 0",
+                f"{k}Min")
+    if (hi["trunkLoops"] > 0 or hi["branchLoops"] > 0) and lo["loopLength"] < 2:
+        err("LEVEL_TREE_LOOP_LENGTH_INVALID",
+            f"loopLengthMin is {lo['loopLength']} while loops are on; a loop one row tall "
+            f"cannot close, and the generator's 2–3 default does not apply to a written "
+            f"shape. Set loopLengthMin/Max (at least 2), or the loop counts to 0–0",
+            "loopLengthMin")
+    if hi["balancedLoops"] > 0 and hi["trunkLoops"] == 0:
+        err("LEVEL_TREE_LOOPS_IGNORED",
+            f"balancedLoops is {lo['balancedLoops']}–{hi['balancedLoops']}, but trunkLoops is "
+            f"0–0; balanced loops are counted among the trunk loops, so none is built",
+            "balancedLoopsMax", "warning")
+    return issues
+
+
 def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                        floor: dict, waive_coverage: bool = False,
                        arrival: int | None = None) -> list[dict]:
@@ -1739,6 +1846,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                                  entity=plan_id,
                                  pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
     issues.extend(_removed_plan_field_issues(plan_id, fi, fptr, floor))
+    issues.extend(_tree_loop_issues(plan_id, fi, fptr, floor))
     issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
