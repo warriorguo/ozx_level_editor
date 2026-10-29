@@ -1774,7 +1774,7 @@ def _tree_loop_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[dic
     """
     shape = floor.get("treeShape") or {}
     if (not (shape.get("trunkLengthMax") or 0) > 0
-            or floor.get("generatorType") in ("cycle", "static")):
+            or plandefaults.generator_kind(floor.get("generatorType"), fi) != "tree"):
         return []
     sptr = f"{fptr}/treeShape"
     issues: list[dict] = []
@@ -1804,6 +1804,114 @@ def _tree_loop_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[dic
             f"balancedLoops is {lo['balancedLoops']}–{hi['balancedLoops']}, but trunkLoops is "
             f"0–0; balanced loops are counted among the trunk loops, so none is built",
             "balancedLoopsMax", "warning")
+    return issues
+
+
+CYCLE_SHAPE_RANGES = ("sideBranches", "topBranches", "branchLength")
+# `LevelBuilder.DefaultCycleHeight`: a cycle ring's height when floorHeight is unset.
+DEFAULT_CYCLE_HEIGHT = (2, 3)
+
+
+def cycle_derive_width(budget: int, height: int, branch_rooms: int) -> int:
+    """`CycleLevelGenerator.DeriveWidth`: the ring takes what the branches leave."""
+    return max(3, (budget - branch_rooms + 2 * (height - 2)) // 2)
+
+
+def _cycle_corners(width: int) -> int:
+    return 2 if width >= 3 else width - 1
+
+
+def cycle_side_slots(width: int, height: int) -> int:
+    """`CycleLevelGenerator.SideSlots`: wall rooms plus the two top corners."""
+    return 0 if height < 2 else 2 * (height - 2) + _cycle_corners(width)
+
+
+def cycle_top_slots(width: int, height: int, side_branches: int) -> int:
+    """`CycleLevelGenerator.TopSlots`: top rooms bar the middle (stairs), less
+    the corners side branches may have taken."""
+    if height < 2:
+        return max(0, width - 2)
+    return width - 1 - min(side_branches, _cycle_corners(width))
+
+
+def _cycle_branch_issues(plan_id: str, fi: int, fptr: str, floor: dict) -> list[dict]:
+    """`cycleShape`, a cycle floor's branches (OZX-1579): side branches
+    straight out of the ring's walls, top branches straight up out of its top
+    row, `branchLength` rooms each. All or nothing, declared by
+    `branchLengthMax > 0`.
+
+    `CycleShapeFromData` refuses an unordered range on any floor that
+    declares the block. On a cycle floor `ValidateCycleBranches` then refuses
+    a negative count, a branch under one room, and — asked of the worst case:
+    `roomCountMin`, both counts and the length at their max, every ring
+    height the floor can roll — a ring with too few rooms to hang them from.
+    """
+    shape = floor.get("cycleShape") or {}
+    if not (shape.get("branchLengthMax") or 0) > 0:
+        return []
+    sptr = f"{fptr}/cycleShape"
+    issues: list[dict] = []
+
+    def err(code, message, key, severity="error"):
+        issues.append(_issue(severity, code, f"floor {fi}: cycleShape{message}",
+                             entity=plan_id, pointer=f"{sptr}/{key}" if key else sptr))
+
+    lo = {k: shape.get(f"{k}Min") or 0 for k in CYCLE_SHAPE_RANGES}
+    hi = {k: shape.get(f"{k}Max") or 0 for k in CYCLE_SHAPE_RANGES}
+    unordered = [k for k in CYCLE_SHAPE_RANGES if hi[k] < lo[k]]
+    for k in unordered:
+        err("LEVEL_CYCLE_SHAPE_INVALID",
+            f".{k} has max {hi[k]} below min {lo[k]}; a range that cannot be sampled is a "
+            f"typo, not a shape", f"{k}Max")
+    if unordered or plandefaults.generator_kind(floor.get("generatorType"), fi) != "cycle":
+        return issues
+    if lo["sideBranches"] < 0 or lo["topBranches"] < 0:
+        err("LEVEL_CYCLE_SHAPE_INVALID", ": a branch count is negative",
+            "sideBranchesMin" if lo["sideBranches"] < 0 else "topBranchesMin")
+        return issues
+    if lo["branchLength"] < 1:
+        err("LEVEL_CYCLE_SHAPE_INVALID",
+            f".branchLengthMin is {lo['branchLength']}; a branch of no rooms is not a branch",
+            "branchLengthMin")
+        return issues
+
+    width_set = (floor.get("floorWidthMax") or 0) > 0
+    if (floor.get("floorHeightMax") or 0) > 0:
+        heights = (floor.get("floorHeightMin") or 0, floor.get("floorHeightMax") or 0)
+    else:
+        heights = DEFAULT_CYCLE_HEIGHT
+    room_min = floor.get("roomCountMin") or 0
+    side, top = hi["sideBranches"], hi["topBranches"]
+    branch_rooms = (side + top) * hi["branchLength"]
+    for h in range(heights[0], heights[1] + 1):
+        width = (floor.get("floorWidthMin") or 0) if width_set \
+            else cycle_derive_width(room_min, h, branch_rooms)
+        side_slots, top_slots = cycle_side_slots(width, h), cycle_top_slots(width, h, side)
+        if side > side_slots or top > top_slots:
+            leaves = "" if width_set else \
+                f", what roomCountMin {room_min} leaves after {branch_rooms} branch rooms"
+            err("LEVEL_CYCLE_BRANCHES_NO_ROOM",
+                f" asks for up to {side} side and {top} top branches, but its smallest ring — "
+                f"{width} wide, {h} high{leaves} — has room for {side_slots} side and "
+                f"{top_slots} top; the generator throws on the seed that rolls it. Lower the "
+                f"counts or branchLength, or raise roomCount / floorWidth", None)
+            break
+    # README (OZX-1579): a one-room branch can draw the floor's second release
+    # slot; a release room has no opening wave, so it cannot carry the tip
+    # skill or the depth box, and the assigner throws when no off-spine room
+    # can. Upstream's validator lets it through, and the README puts it at
+    # about one seed in six — genlevel over 200 seeds of chapter_4 / chapter_5's
+    # cycle areas with 1–2 one-room branches threw on 73 and 64 of them.
+    loot = floor.get("floorLootPlan") or {}
+    pinned = [k for k in ("tipSkillTableId", "depthBoxTableId") if loot.get(k)]
+    if lo["branchLength"] == 1 and side + top > 0 and pinned:
+        err("LEVEL_CYCLE_BRANCH_TOO_SHORT",
+            f".branchLengthMin is 1 while the floor pins {' and '.join(pinned)} off the ring; "
+            f"a one-room branch can be dealt the floor's second release slot, which has no "
+            f"opening wave to carry either, and the generator throws when no branch room can "
+            f"— on about a third of seeds for the shipped cycle areas. Upstream's plan "
+            f"validator does not catch it; branchLengthMin 2 ran 200 seeds clean",
+            "branchLengthMin")
     return issues
 
 
@@ -1847,6 +1955,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                                  pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
     issues.extend(_removed_plan_field_issues(plan_id, fi, fptr, floor))
     issues.extend(_tree_loop_issues(plan_id, fi, fptr, floor))
+    issues.extend(_cycle_branch_issues(plan_id, fi, fptr, floor))
     issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))

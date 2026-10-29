@@ -2029,6 +2029,9 @@ function renderPlanFloors() {
           ${f.treeLoops ? `<div><span>loops</span><strong class="${inheritedMark(f, 'treeShape')}"
             title="OZX-1578: trunk loops (balanced ones keep both arms on the spine, depth 0; the others detour at depth 1), branch-end rings (depth 2), and how many rows a loop spans">${
             esc(`trunk ${f.treeLoops.trunk.join('–')} (balanced ${f.treeLoops.balanced.join('–')}) · ring ${f.treeLoops.branch.join('–')} · ${f.treeLoops.length.join('–')} rows`)}</strong></div>` : ''}
+          ${f.cycleBranches ? `<div><span>branches</span><strong class="${inheritedMark(f, 'cycleShape')}"
+            title="OZX-1579: branches off the ring (depth 1) — side ones straight out of a wall, top ones straight up out of the top row, never off the stairs room — and how many rooms each">${
+            esc(`side ${f.cycleBranches.side.join('–')} · top ${f.cycleBranches.top.join('–')} · ${f.cycleBranches.length.join('–')} rooms`)}</strong></div>` : ''}
           ${f.depthBox ? `<div><span>depth box</span><strong class="${f.depthBox.missing ? 'bad' : inheritedMark(f, 'floorLootPlan/depthBoxTableId')}"
             title="${esc(`OZX-1560: one draw from this table, pinned to the deepest off-spine room that can pay it; rarity rises by that room's depth — ${
               f.depthBox.rarityBumps.map((b) => `depth ${b.pathDepth}: ${b.weights.map((w, k) => `+${k} ${w}`).join(', ')}`).join('; ') || 'no rarity bumps'}`)}">${

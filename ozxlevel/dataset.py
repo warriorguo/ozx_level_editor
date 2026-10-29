@@ -614,16 +614,30 @@ class Dataset:
                 for d in self.of_type("CargoData")]
 
     @staticmethod
-    def _tree_loops_view(floor: dict):
+    def _tree_loops_view(floor: dict, fi: int):
         shape = floor.get("treeShape") or {}
         if (not (shape.get("trunkLengthMax") or 0) > 0
-                or floor.get("generatorType") in ("cycle", "static")
+                or plandefaults.generator_kind(floor.get("generatorType"), fi) != "tree"
                 or not ((shape.get("trunkLoopsMax") or 0) > 0
                         or (shape.get("branchLoopsMax") or 0) > 0)):
             return None
         pair = lambda k: [shape.get(f"{k}Min") or 0, shape.get(f"{k}Max") or 0]  # noqa: E731
         return {"trunk": pair("trunkLoops"), "balanced": pair("balancedLoops"),
                 "branch": pair("branchLoops"), "length": pair("loopLength")}
+
+    @staticmethod
+    def _cycle_branches_view(floor: dict, fi: int):
+        """OZX-1579: a cycle floor's ring branches, or None when it hangs none
+        (no `cycleShape`, both counts 0–0, or not a cycle floor)."""
+        shape = floor.get("cycleShape") or {}
+        if (not (shape.get("branchLengthMax") or 0) > 0
+                or plandefaults.generator_kind(floor.get("generatorType"), fi) != "cycle"
+                or not ((shape.get("sideBranchesMax") or 0) > 0
+                        or (shape.get("topBranchesMax") or 0) > 0)):
+            return None
+        pair = lambda k: [shape.get(f"{k}Min") or 0, shape.get(f"{k}Max") or 0]  # noqa: E731
+        return {"side": pair("sideBranches"), "top": pair("topBranches"),
+                "length": pair("branchLength")}
 
     @staticmethod
     def _upgrade_story_rooms_view(block) -> dict:
@@ -1185,7 +1199,9 @@ class Dataset:
                 "pathDepthEnemyScale": list(floor.get("pathDepthEnemyScale") or []),
                 # OZX-1578: the tree shape's local loops, or None when it
                 # builds none (both loop counts 0–0, or no shape written).
-                "treeLoops": self._tree_loops_view(floor),
+                "treeLoops": self._tree_loops_view(floor, fi),
+                # OZX-1579: a cycle floor's ring branches (depth 1), or None.
+                "cycleBranches": self._cycle_branches_view(floor, fi),
                 # OZX-1560: one draw from this table, pinned to the deepest
                 # off-spine room that can pay it, rising in rarity by that
                 # room's depth. The room is the generator's to choose.

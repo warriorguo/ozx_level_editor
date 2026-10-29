@@ -11,7 +11,7 @@ The rule, from `FloorPlanDefaults.cs`:
 
 - **per field, one level deep, arrays are leaves.** Every field inherits on
   its own; `floorLootPlan` is entered and its five lists inherit on their
-  own; `treeShape` / `appearance` / `elitePlan` are inherited or authored
+  own; `treeShape` / `cycleShape` / `appearance` / `elitePlan` are inherited or authored
   WHOLE, each by its own discriminator, because their point is that a meant
   zero stays zero.
 - **an authored array replaces, never appends.**
@@ -32,13 +32,23 @@ that never wrote it.
 
 from __future__ import annotations
 
-# The three blocks inherited whole, and the discriminator that says the floor
-# declared one (OZX-1006 / OZX-1013).
+# The blocks inherited whole, and the discriminator that says the floor
+# declared one (OZX-1006 / OZX-1579 / OZX-1013).
 WHOLE_BLOCKS = {
     "treeShape": lambda b: (b.get("trunkLengthMax") or 0) > 0,
+    "cycleShape": lambda b: (b.get("branchLengthMax") or 0) > 0,
     "appearance": lambda b: bool(b.get("tilePartConfigs")),
     "elitePlan": lambda b: bool(b.get("perStage")),
 }
+
+def generator_kind(gen, fi: int) -> str:
+    """`LevelBuilder.ParseGeneratorType` on a merged floor's `generatorType`:
+    `mixed` alternates by floor index (odd floors are cycles), and null or
+    anything unknown is a tree."""
+    if gen == "mixed":
+        return "cycle" if fi % 2 == 1 else "tree"
+    return gen if gen in ("tree", "cycle", "static") else "tree"
+
 
 # Never taken from the defaults; `refused_defaults` says why each one is
 # refused when it is written there.
