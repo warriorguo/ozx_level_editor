@@ -107,6 +107,7 @@ LevelData
 | `stageType` | string | `start`/`teaching`/`building`/`default`/`pressure`/`peak`/`release`/`boss`/`exit`/`story`。**缺省 ≠ default**，53/84 未填。`story`（OZX-1171）：不打架、只推进剧情的房，只在教学章手摆；和 `release` 一样没有 `encounterId` 是合法的，演出靠 `trigger` 摆放 + 遭遇的 `sound` 动作 | 31 |
 | `decorations` | DecorationEntryData[] | 纯视觉，可选，见 §4.6 | 31 |
 | `staticPlacements` | StaticPlacementEntryData[] | **非 cave 房必须声明**（空数组也行），见 §4.5 | 83 声明 / 28 非空 |
+| `noRoots` | bool | OZX-1808（`LevelData.cs:220`，核对于 `ozx_base@2e204463b` 工作区）：本房 rootConfig 植物不长根系（运行时读 `RoomData.noRoots`，`RoomData.cs:23`）。缺省 false。**`roomCategory: "cave"` 的房必须写 `true`**，否则 `LevelValidator.ValidateCaveRoots`（`LevelValidator.cs:56`，`LevelService.cs:42` / `LevelBuilder.cs:166` 调）加载即抛 → 编辑器 `LEVEL_CAVE_ROOTS_MISSING`。房间卡片右上有 roots / no roots 开关（关 = 删键，不写 `false`） | `level_cave_demo` 的 cave 房 |
 | `appearance` | RoomAppearanceData | 本房相对楼层主题的差异，见 §4.7 | 11 |
 | `templateId` | string | 钉死 tilemap 模板，跳过 `RoomTilemapQuery` 匹配。id 带目录：`normal/all_start_1_01`（OZX-1571，`IGameDataSource.cs` `TilemapDocument.IdOf`，核对于 `ozx_base@85fa6bf1`）；裸文件名不兼容，报 `LEVEL_PIN_TEMPLATE_MISSING` 并给出带目录的候选 | 8 |
 | ~~`lootPlanId`~~ | string | **OZX-1381 删除**（房间清场掉落通道没了；写了被静默丢弃 → `LEVEL_FIELD_REMOVED`）。房间自己的奖品写 `guaranteedDrops`，技能等走 cargo 的 `lootTableId` | 0 |
@@ -265,15 +266,38 @@ LevelData
 | `targetFloor` | 0（同层） | 目标楼层，**不能等于自身楼层** |
 | `gridWidth/Height` | 通道网格尺寸，≥1 | 楼梯数据里通常省略 |
 | `tentaclePlacement` | `{count, allowedTypes[]}`，占用通道里的 TentaclePlaces 标记 | — |
+| `cargoPlacement` | `{count, lootTableId, cargoId?}`，箱子摆在通道各段的 CargoPlaces 标记上（OZX-1806） | — |
+| `noRoots` | `linkType` 为 `cave`（或省略）时**必须** `true`（OZX-1808） | — |
 
-真实样例（`level_test.json`）：
+真实样例（`level_test.json`，`ozx_base@2e204463b`）：
 
 ```json
 { "caveId": "cave_test_01", "roomIdA": "f0_room_0_0", "roomIdB": "f0_room_2_0",
-  "linkType": "cave", "targetFloor": 0, "gridWidth": 3, "gridHeight": 4,
-  "tentaclePlacement": { "count": 5,
-    "allowedTypes": ["tentacle_basic", "tentacle_thick", "tentacle_long", "tentacle_fast"] } }
+  "linkType": "cave", "noRoots": true, "targetFloor": 0, "gridWidth": 3, "gridHeight": 4,
+  "encounterId": "enc_cave_test_01",
+  "tentaclePlacement": { "count": 10,
+    "allowedTypes": ["tentacle_basic", "tentacle_short", "tentacle_long", "tentacle_fast"] },
+  "cargoPlacement": { "count": 6, "lootTableId": "loot_common" } }
 ```
+
+#### 4.8.1 cave 通道里装什么（OLE-79 / OLE-81，核对于 `ozx_base@2e204463b` 工作区）
+
+cave 没有 tilemap，出生点、触手、箱子全都站在通道各段 `CaveSectionPart` 的标记上（OZX-1804：`CargoPlaces` 1×1、`ZonerPlaces` 2×2、`TentaclePlaces`）。下表是进 cave 时（或加载时）会抛 / 会静默跳过的规则，编辑器全查，指向 `caveLinks[i]` 下对应字段。plan 的 `caves[]` 原样拷到生成的 caveLink 上（§5.0c），同一套规则也在 plan 行上查。
+
+| 码 | 上游 | 规则 |
+|---|---|---|
+| `LEVEL_CAVE_ROOTS_MISSING` | `LevelValidator.cs:56` `ValidateCaveRoots`（加载即抛，手写与生成关卡都过） | `linkType` 为 `cave` 或省略的 caveLink 没有 `noRoots: true`；`roomCategory: "cave"` 的房没有 `noRoots: true`。`direct` 链接没有通道，不要求 |
+| `LEVEL_CAVE_GRID_INVALID` | `CaveSystemAdapter.cs:83`（进 cave 时抛） | cave 通道 `gridWidth` / `gridHeight` < 1 |
+| `LEVEL_CAVE_CARGO_COUNT_INVALID` | `CaveCargoPlacementLogic.cs:15` `Validate`（`CargoSpawnAdapter.cs:108` `StockCave`） | `cargoPlacement.count < 0` |
+| `LEVEL_CAVE_CARGO_LOOT_MISSING` | 同上 | 写了 `cargoPlacement` 却没有 `lootTableId`——cave 没有楼层掉落表可回退，`count` 为 0 也抛 |
+| `LEVEL_CAVE_CARGO_NOT_CAVE_CRATE` | `CargoVariantLogic.cs:37` `CaveLooks`（OZX-1815） | `count > 0` 时：点名的 `cargoId` 不是 `caveCrate`（出货只有 `cargo_nest_large` / `cargo_nest_medium` 是）；或没点名而全库没有 `caveCrate` |
+| `DATA_REFERENCE_MISSING` | `CargoVariantLogic.cs:71` `ResolveNamed` 等 | `cargoPlacement.lootTableId` / `cargoId`（仅 `count > 0` 时查，`StockCave` 在 0 时提前返回）、`tentaclePlacement.allowedTypes[]`、`encounterId` 不存在 |
+| `LEVEL_CAVE_TENTACLE_TYPES_EMPTY`（warning） | `TentaclePlacementSpawner.cs:66` | `tentaclePlacement.count > 0` 但 `allowedTypes` 为空——告警跳过，一根触手都不放 |
+| `LEVEL_CAVE_LAUNCH_SKIPPED`（warning） | `EncounterActionExecutor.cs:398` / `:1340` `CaveSpawnPoints`（OZX-1805） | 通道遭遇里直接落点的 launch（不走 `viaSpawner` / `viaDoor` / 轨道），其类别（`at`，否则 `EnemyEntity.GetSpawnPointCategory`：`role`，再按 spawner/turret → zoner、ground → chaser、其余 air）不是 `zoner`——cave 只有 ZonerPlaces，告警跳过。prop 类别归 `LEVEL_CAVE_PROP_LAUNCH`（§5.7） |
+
+**缺 `cargoPlacement` 块 = 不放箱子**是上游 README（`Game.Unity/Room/README.md:42`）写明的语义，`StockCave` 也是 `placement == null` 就返回；编辑器照此不报。注意：游戏里 `LevelData` 走 JsonUtility，它会把省略的 `[Serializable]` 嵌套块实例化成默认对象，`Validate` 看到的就是 `count 0` / 空 `lootTableId`、按上面那条抛——是否真会在没写 cargo 的 cave 里抛（出货 7 个测试关的 `cave_test_01` 都没写）要上游确认。headless `genlevel` 不经 JsonUtility，生成的 caveLink 省略时就是没有这个键。
+
+编辑器：关卡视图在房间卡片上方列出本层的 cave 通道（「Cave passages」：两端房、grid、遭遇、触手、箱子、noRoots），只读——caveLink 的其余字段也没有编辑控件，修正看 issue 指针。
 
 ---
 
@@ -366,6 +390,17 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 **关卡侧的 stairLinks**（`LevelValidator.ValidateStairLinks`，加载即抛，编辑器之前完全没查）：`roomIdA` 在本层（`LEVEL_STAIR_ROOM_NOT_ON_FLOOR`）、`targetFloor` 是另一层（`LEVEL_STAIR_TARGET_INVALID`）、对面层有孪生（`LEVEL_STAIR_TWIN_MISSING`）、两层 elevation 不同（`LEVEL_STAIR_NO_DIRECTION`）、**一间房只有一个楼梯端**（OZX-1188，`PlaceStairs` 会跳过第二道，那条就成了单程；`themeId` 含 `cave` 的楼层豁免 → `LEVEL_STAIR_ROOM_TWO_ENDS`）。
 
+### 5.0c 生成的 cave：`caves[]`（OLE-80 / OLE-81，核对于 `ozx_base@2e204463b` 工作区）
+
+`LevelBasePlanAssigner.InsertCaveLinks`（`LevelBasePlanAssigner.cs:879`）把每条 `CavePlanData` 落成一条 `CaveLinkData`：`caveId = cave_f{层}_{序号}`，`roomIdA` 取 BFS 序前 1/3 里第一间没用过的房，`roomIdB` 取后 1/3 里最后一间没用过的房（取不到就静默跳过这一条），`linkType`（缺省 `cave`）、`encounterId`、`gridWidth` / `gridHeight`、`tentaclePlacement`、`cargoPlacement` 原样拷过去（OZX-1807），并写 `noRoots: true`（OZX-1808，`:942`）。`caves` 是数组，按 `FloorPlanDefaults.Merge` 整体从 `floorDefaults` 继承（`FloorPlanDefaults.cs:113`）。
+
+- `linkType` 为 `cave`（或省略）而 `gridWidth` / `gridHeight` < 1：**每个楼层**在挑房之前就抛（`LevelBasePlanAssigner.cs:885-891`）→ 编辑器 `LEVEL_PLAN_CAVE_GRID_INVALID`，指向 `caves[i].gridWidth` / `gridHeight`（继承来的改指 `/floorDefaults/caves/…`，消息注明被哪些楼层继承）。
+- 其余字段生成后由 cave 自己读，规则同 §4.8.1，编辑器在 plan 行上照查（指针 `caves[i].cargoPlacement.*` 等）。
+- 选房、写 `noRoots` 都是生成算法，预览走 `genlevel`，编辑器不重写；`level_02` 多个 seed 生成的 caveLink 都带上了 grid / 触手 / 箱子和 `noRoots: true`，编辑器的关卡校验在生成结果上为空。
+- plan 视图楼层卡多一列「Caves」，只读列出每条（grid、遭遇、触手、箱子）。
+
+**OZX-1825（洞穴自己的 zoner 池、每局抽遭遇、预算按通道长度）尚未落地**：截至 `ozx_base@2e204463b`，`CavePlanData` 只有上面六个字段，没有池子，遭遇仍是一条手写 `encounterId`（`Documents/Chapter/SceneProgression_Plan.md:230` 记为待做）。等它落地再对齐（OLE-84）。
+
 ### 5.0 floorDefaults（OZX-1011，核对于 `ozx_base@5cd9b22e`）
 
 `LevelBasePlanData.floorDefaults` 是**与 `floors[]` 元素同形**的章节级默认楼层：楼层没写的字段从这里取，写了就覆盖。chapter_3–7 都用了它（chapter_3 的 `themeId` / `enemiesPerRoom` / `appearance` / `stageWeights` / `categoryCaps` 等只写在这里），**所以直接读 `floors[f]` 看到的是「只剩差异」的楼层**——这是 OLE-9 之前 chapter_3 在编辑器里「打不开」的原因。
@@ -413,7 +448,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `railCart` | bool（OZX-1164）：本层跑在轨道上——每间房标 `requireRail`、起始房标 `railCart`。bool 无「没写」：楼层能在章节默认之上打开，不能关掉 | 2（ch4/ch5 的 basement） |
 | `defaultStaticPlacements` | 兜底静态摆放，只作用于「生成后 staticPlacements 仍为空」的房间。`chance` / `countMin` 见 §5.6 | 9 |
 | `floorWidth/HeightMin/Max` | 显式楼层尺寸，0 = 由房间数推导（cycle 环宽先从 `roomCount` 扣掉 `cycleShape` 支线房，OZX-1579；环高未设取 2–3）。cycle：height 是环高（1 = 平排，≥3 = 完整环）；tree：只有 floor 0 的 height 有意义 | 4 |
-| `caves` | `{linkType, encounterId}`（`lootPlanId` 已删，OZX-1381） | 1 |
+| `caves` | `{linkType, encounterId, gridWidth, gridHeight, tentaclePlacement?, cargoPlacement?}`（OZX-1807，`LevelBasePlanData.cs:782`；`lootPlanId` 已删，OZX-1381）。见 §5.0c | 1（`level_02`） |
 | `bossId` | 楼层 boss，合成为单敌人 inline encounter | 0（字段写了 null） |
 | `stairs` | `{targetFloor, linkType, encounterId}` | 0 |
 | `rooms` | 预定义房间；`generatorType="static"` 时必填，否则 fail-fast | 0 |

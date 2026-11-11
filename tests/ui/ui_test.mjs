@@ -68,8 +68,20 @@ function check(name, condition, detail = '') {
 }
 
 // ── it renders at all ────────────────────────────────────────────────────
-check('renders a card per room', qa('.room-list-item').length === level.floors[0].rooms.length,
-      `${qa('.room-list-item').length} cards`);
+check('renders a card per room', qa('.room-list-item[data-index]').length === level.floors[0].rooms.length,
+      `${qa('.room-list-item[data-index]').length} cards`);
+{
+  // OLE-79 / OLE-81: the floor's cave passages, and a noRoots toggle per room.
+  const caves = level.floors[0].caveLinks || [];
+  const block = q('[data-floor="caves"]');
+  check('a floor with cave passages lists them',
+        caves.length ? block && block.querySelectorAll('.content-entry').length === caves.length
+                     : !block,
+        block ? block.textContent.replace(/\s+/g, ' ').slice(0, 120) : 'no block');
+  check('the cave block is not taken for a room card', !block || block.dataset.index === undefined);
+  check('every room card carries a noRoots toggle',
+        qa('.room-list-item[data-index] [data-noroots]').length === level.floors[0].rooms.length);
+}
 check('renders the floor map', qa('.map-room').length > 0, `${qa('.map-room').length} map rooms`);
 check('populates all three libraries',
       ['enemy', 'static', 'loot'].every((k) => q(`#${k}Library`).children.length > 0));
@@ -91,13 +103,13 @@ check('the library target follows the selection',
 // re-rendered the card and destroyed the open <select> before anything could
 // be chosen — making loot impossible to edit.
 const select = lootTable.querySelector('select.loot-picker');
-const firstCard = qa('.room-list-item')[0];
+const firstCard = qa('.room-list-item[data-index]')[0];
 const otherTable = qa('.loot-table')[5];
 click(otherTable.querySelector('select.loot-picker'));
 await tick();
 check('a dropdown click does not move the selection',
       lootTable.classList.contains('selected-slot') && !otherTable.classList.contains('selected-slot'));
-check('a dropdown click does not rebuild the room list', qa('.room-list-item')[0] === firstCard);
+check('a dropdown click does not rebuild the room list', qa('.room-list-item[data-index]')[0] === firstCard);
 check('the open dropdown survives', d.contains(select) && select.options.length > 1,
       `${select.options.length} options`);
 
@@ -114,17 +126,17 @@ check('the edit carries the chosen value', write?.body.edits[0].value === 'loot_
 // ── other controls are equally protected ─────────────────────────────────
 const qty = qa('[data-enemy-index] input')[0];
 if (qty) {
-  const before = qa('.room-list-item')[0];
+  const before = qa('.room-list-item[data-index]')[0];
   click(qty);
   await tick();
-  check('a quantity-input click does not rebuild the list', qa('.room-list-item')[0] === before);
+  check('a quantity-input click does not rebuild the list', qa('.room-list-item[data-index]')[0] === before);
 }
 const roomSelect = qa('[data-field]')[0];
 if (roomSelect) {
-  const before = qa('.room-list-item')[0];
+  const before = qa('.room-list-item[data-index]')[0];
   click(roomSelect);
   await tick();
-  check('a room-field click does not rebuild the list', qa('.room-list-item')[0] === before);
+  check('a room-field click does not rebuild the list', qa('.room-list-item[data-index]')[0] === before);
 }
 
 // ── column selection still works ─────────────────────────────────────────
@@ -569,8 +581,8 @@ if (plan) {
     q('#sampleSeed').value = String(SAMPLE_SEED);
     click(q('#sampleGo'));
     await settle(20);
-    check('a sample renders room cards', qa('.room-list-item').length === sample.floors[0].rooms.length,
-          `${qa('.room-list-item').length} of ${sample.floors[0].rooms.length}`);
+    check('a sample renders room cards', qa('.room-list-item[data-index]').length === sample.floors[0].rooms.length,
+          `${qa('.room-list-item[data-index]').length} of ${sample.floors[0].rooms.length}`);
     check('and says it is one sample, with its seed',
           !q('#sampleBar').hidden && q('#sampleBar').textContent.includes('SAMPLE')
           && q('#sampleBarSeed').value === String(SAMPLE_SEED));
@@ -593,7 +605,7 @@ if (plan) {
   picker.value = `level:${level.id}`;
   picker.dispatchEvent(new window.Event('change', { bubbles: true }));
   await settle(20);
-  check('switching back to a level restores the room list', qa('.room-list-item').length > 0);
+  check('switching back to a level restores the room list', qa('.room-list-item[data-index]').length > 0);
   check('and restores Add room', q('#addRoomBtn').hidden === false);
 }
 

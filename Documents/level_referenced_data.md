@@ -33,6 +33,8 @@
 | `doors[].keyId` | ItemData | 锁门用 |
 | `caveLinks[].encounterId` / `stairLinks[].encounterId` | EncounterData | 可选 |
 | `caveLinks[].tentaclePlacement.allowedTypes[]` | EnemyData | 可选 |
+| `caveLinks[].cargoPlacement.lootTableId` | LootTableData | 写了块就必需（OZX-1806，`CaveCargoPlacementLogic.cs:21`，`ozx_base@2e204463b`） |
+| `caveLinks[].cargoPlacement.cargoId` | CargoData（必须 `caveCrate`，OZX-1815） | 可选；省略 = 任一 caveCrate |
 | `FloorData.themeId` | RoomThemeConfig（ScriptableObject，非 GameData） | 需要 |
 | `FloorPlanData.enemyPool[].enemyId` | EnemyData | plan 必需 |
 | `FloorPlanData.enemyPool[].dropTableId` | LootTableData | 可选（可能被楼层表覆盖） |
@@ -46,6 +48,7 @@
 | `floorLootPlan.categoryCaps[].category` | ItemTaxonomy 节点 | 必需 |
 | `floorLootPlan.stageWeights[].category` | ItemTaxonomy 节点 | 可选；留空 = 该 stage 的兜底倍率 |
 | `caves[]/stairs[].encounterId` | EncounterData | 可选（`caves[].lootPlanId` 已删，OZX-1381） |
+| `caves[].tentaclePlacement.allowedTypes[]` / `caves[].cargoPlacement.*` | 同 caveLinks（OZX-1807 原样拷到生成的 caveLink） | 可选 |
 
 ### 数据族之间
 

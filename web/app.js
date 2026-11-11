@@ -713,13 +713,56 @@ function dropLine(drop) {
     <span class="drop-tag">drops</span>${esc(body)}</span>${pinRow(drop.pin, 'pinned')}`;
 }
 
+// OZX-1806 / 1807 / 1808: one cave passage — a level's caveLinks[] entry,
+// or a plan's caves[] entry that the generator copies onto its link.
+function caveEntry(c) {
+  const passage = c.linkType === 'cave';
+  const ends = c.roomIdA ? `${c.roomIdA} ⇄ ${c.roomIdB || '?'}` : 'early room ⇄ late room (generator picks)';
+  const facts = [
+    passage ? `${c.gridWidth}×${c.gridHeight} grid` : 'direct — no passage',
+    c.encounterId ? `encounter ${c.encounterId}${c.encounterMissing ? ' (missing)' : ''}` : (passage ? 'no encounter' : ''),
+  ].filter(Boolean).join(' · ');
+  const tent = c.tentaclePlacement && c.tentaclePlacement.count > 0
+    ? `<span class="odds-line" title="OZX-450: tentacles on the cave parts' TentaclePlaces markers, each a uniform pick from these types">
+         <span class="drop-tag">tentacles</span>${esc(`×${c.tentaclePlacement.count} of ${c.tentaclePlacement.allowedTypes.join(' / ') || 'nothing'}`)}</span>` : '';
+  const cargo = c.cargoPlacement
+    ? `<span class="odds-line" title="OZX-1806: crates on a uniform subset of the cave parts' CargoPlaces markers (all of them, with a warning, when there are fewer); every crate rolls this table. No cargoId = any caveCrate (OZX-1815)">
+         <span class="drop-tag">crates</span>${esc(`×${c.cargoPlacement.count} · ${c.cargoPlacement.lootTableId || 'no lootTableId'}${c.cargoPlacement.cargoId ? ` · ${c.cargoPlacement.cargoId}` : ''}`)}</span>` : '';
+  const roots = !passage || c.caveId == null ? ''
+    : `<span class="odds-line${c.noRoots ? '' : ' bad'}" title="OZX-1808: caves grow no roots; a cave passage without noRoots refuses to load">
+         <span class="drop-tag">roots</span>${c.noRoots ? 'none (noRoots)' : 'noRoots missing'}</span>`;
+  return `<div class="content-entry odds-carrier${c.encounterMissing ? ' missing' : ''}">
+    <span class="content-glyph">${passage ? 'CV' : '⇢'}</span>
+    <span><strong>${esc(c.caveId || ends)}</strong><small>${esc((c.caveId ? `${ends} · ` : '') + facts)}</small></span>
+    ${tent}${cargo}${roots}
+  </div>`;
+}
+
+function renderCaveLinks(floor) {
+  const caves = floor.caveLinks || [];
+  if (!caves.length) return '';
+  const issues = issuesFor(`${floor.pointer}/caveLinks`);
+  return `<div class="room-list-item plan-floor plan-links${
+      issues.some((i) => i.severity === 'error') ? ' has-error' : ''}" data-floor="caves">
+    <div class="content-column plan-head">
+      <div class="content-head">Cave passages</div>
+      <div class="derived-note">caveLinks — entered from either room; a cave has no tilemap, so its spawn points, tentacles and crates stand on its parts' markers</div>
+      ${issues.map((i) => `<div class="room-issue ${i.severity}" title="${esc(i.message)}">${esc(i.code)}</div>`).join('')}
+    </div>
+    <div class="content-column">
+      <div class="content-head">Links <span>${caves.length}</span></div>
+      <div class="content-list">${caves.map(caveEntry).join('')}</div>
+    </div>
+  </div>`;
+}
+
 function renderRooms() {
   const floor = currentFloor();
   const rooms = floor.rooms;
   const enemyCatalog = state.boot.enemyCatalog;
   const staticCatalog = state.boot.staticCatalog;
 
-  $('roomsGrid').innerHTML = rooms.map((room, index) => {
+  $('roomsGrid').innerHTML = renderCaveLinks(floor) + rooms.map((room, index) => {
     const sel = state.selection;
     const isSelRoom = sel.roomIndex === index;
     const colCls = (kind) => `content-column${isSelRoom && sel.kind === kind ? ' selected-target' : ''}`;
@@ -961,6 +1004,12 @@ function renderRooms() {
             ${room.railCart ? '<span class="chip" title="OZX-1164: a rail cart is parked in this room">cart</span>' : ''}
             ${room.requireRail ? '<span class="chip" title="OZX-1164: this room must draw a tilemap with track, so a cart can ride through">rail</span>' : ''}
             ${room.requireFullGround ? '<span class="chip" title="OZX-1265: this room only draws tilemaps whose ground has no empty cell; none for its door mask is a throw">full ground</span>' : ''}
+            ${room.noRoots || room.roomCategory === 'cave'
+              ? `<button class="chip${room.noRoots ? '' : ' stuck'}" data-noroots="${room.noRoots ? 'on' : 'off'}"
+                  title="${esc(room.noRoots
+                    ? 'OZX-1808: rooted plants grow no roots here (noRoots). Click to let them root again'
+                    : 'OZX-1808: a cave room must set noRoots — the level refuses to load. Click to set it')}">${room.noRoots ? 'no roots' : 'roots!'}</button>`
+              : `<button class="chip ghost-chip" data-noroots="off" title="OZX-1808: switch off rooted plants' roots in this room (noRoots)">roots</button>`}
             ${room.reachable === false
               ? '<span class="chip stuck" title="No route here from the start room without a key that is itself unreachable">unreachable</span>'
               : ''}
@@ -1058,7 +1107,7 @@ function revealSelectedRoom() {
 /** Move the selection highlight by toggling classes, touching no markup. */
 function applySelectionStyles() {
   const sel = state.selection;
-  document.querySelectorAll('.room-list-item').forEach((card) => {
+  document.querySelectorAll('.room-list-item[data-index]').forEach((card) => {
     const isRoom = Number(card.dataset.index) === sel.roomIndex;
     card.classList.toggle('is-selected', isRoom);
 
@@ -1129,7 +1178,7 @@ function isInteractive(target) {
 }
 
 function wireRoomCards() {
-  document.querySelectorAll('.room-list-item').forEach((card) => {
+  document.querySelectorAll('.room-list-item[data-index]').forEach((card) => {
     const roomIndex = Number(card.dataset.index);
 
     // Clicking a column selects it as the add target; clicking a specific
@@ -1173,6 +1222,14 @@ function wireRoomCards() {
         state.selectedRoomIndex = roomIndex;
         await toggleDoor(roomIndex, button.dataset.door,
                          !button.classList.contains('open'));
+      }));
+
+    card.querySelectorAll('[data-noroots]').forEach((button) =>
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (state.busy) return;
+        state.selectedRoomIndex = roomIndex;
+        await setNoRoots(roomIndex, button.dataset.noroots !== 'on');
       }));
 
     card.querySelectorAll('[data-tip-path]').forEach((input) => {
@@ -2099,6 +2156,11 @@ function renderPlanFloors() {
         <div class="content-list">${weights}</div>
         ${f.stageWeights.length ? `<div class="derived-note">${weightNote}</div>` : ''}
       </div>
+      ${f.caves.length ? `<div class="content-column">
+        <div class="content-head">Caves ${inheritedTag(f, 'caves')}<span>${f.caves.length}</span></div>
+        <div class="content-list">${f.caves.map(caveEntry).join('')}</div>
+        <div class="derived-note">each becomes a caveLink between an early and a late room, with noRoots set; the rest is copied as written</div>
+      </div>` : ''}
       <div class="content-column">
         <div class="content-head">Tile groups ${inheritedTag(f, 'appearance')}<span>${chosen.length || 'all'}</span></div>
         <div class="tilepart-list${f.appearance.inherited ? ' inherited' : ''}">${chips}</div>
@@ -2247,6 +2309,17 @@ async function setRoomField(roomIndex, field, value) {
   // cannot tell an explicit null from an omitted key, the file can.
   await applyEdits('LevelData', state.levelId,
     [{ op: 'put', path: `${room.pointer}/${field}`, value }], `${field} = ${value}`);
+}
+
+/** OZX-1808: `noRoots` is a bool whose false is the default, so off is no
+ *  key at all rather than an explicit false. */
+async function setNoRoots(roomIndex, on) {
+  const room = currentFloor().rooms[roomIndex];
+  if (room.noRoots === on) return;
+  await applyEdits('LevelData', state.levelId,
+    [on ? { op: 'put', path: `${room.pointer}/noRoots`, value: true }
+        : { op: 'remove', path: `${room.pointer}/noRoots` }],
+    on ? 'noRoots = true' : 'noRoots cleared');
 }
 
 /** A HUD tip (OZX-1168): written when given text, removed when cleared.

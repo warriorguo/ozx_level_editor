@@ -1244,6 +1244,11 @@ class Dataset:
                 # start room gets a cart. A bool, so a floor can switch it on
                 # over the chapter but never off.
                 "railCart": bool(floor.get("railCart")),
+                # OZX-1807: same-floor cave passages, each copied onto the
+                # caveLink the generator lays between an early and a late room.
+                "caves": [self.cave_view(c, f"{at('caves')}/caves/{ci}")
+                          for ci, c in enumerate(floor.get("caves") or [])
+                          if isinstance(c, dict)],
                 # OZX-1185: an area of `themes/basement` IS a basement — its
                 # rooms are roomCategory basement and draw only that library.
                 "category": (floor.get("themeId") or "normal").rsplit("/", 1)[-1]
@@ -1432,6 +1437,38 @@ class Dataset:
             },
         }
 
+    def cave_view(self, cave: dict, pointer: str) -> dict:
+        """A cave passage — a level's `caveLinks[]` entry, or a plan's
+        `caves[]` entry, which the generator copies onto the link it makes
+        (OZX-1807). Room ids, caveId and noRoots are None on a plan line:
+        the generator picks the rooms and writes noRoots itself (OZX-1808)."""
+        tent = cave.get("tentaclePlacement") if isinstance(cave.get("tentaclePlacement"), dict) else None
+        cargo = cave.get("cargoPlacement") if isinstance(cave.get("cargoPlacement"), dict) else None
+        return {
+            "pointer": pointer,
+            "caveId": cave.get("caveId"),
+            "roomIdA": cave.get("roomIdA"),
+            "roomIdB": cave.get("roomIdB"),
+            # Omitted reads as "cave" (CaveLinkData, LevelBasePlanAssigner.LinkTypeOf).
+            "linkType": cave.get("linkType") or "cave",
+            "encounterId": cave.get("encounterId"),
+            "encounterMissing": bool(cave.get("encounterId"))
+                                and self.get("EncounterData", cave["encounterId"]) is None,
+            "gridWidth": cave.get("gridWidth") or 0,
+            "gridHeight": cave.get("gridHeight") or 0,
+            "noRoots": bool(cave.get("noRoots")),
+            # OZX-450: tentacles on the parts' TentaclePlaces markers.
+            "tentaclePlacement": ({"count": tent.get("count") or 0,
+                                   "allowedTypes": list(tent.get("allowedTypes") or [])}
+                                  if tent else None),
+            # OZX-1806: crates on the parts' CargoPlaces markers, one table
+            # for all of them; no cargoId = any caveCrate (OZX-1815).
+            "cargoPlacement": ({"count": cargo.get("count") or 0,
+                                "lootTableId": cargo.get("lootTableId") or None,
+                                "cargoId": cargo.get("cargoId") or None}
+                               if cargo else None),
+        }
+
     def level_view(self, level_id: str, *, document: dict | None = None,
                    file_name: str | None = None) -> dict:
         """Everything the editor needs to render one level.
@@ -1487,6 +1524,9 @@ class Dataset:
                     "requireRail": bool(room.get("requireRail")),
                     # OZX-1265: draw only templates with no empty ground cell.
                     "requireFullGround": bool(room.get("requireFullGround")),
+                    # OZX-1808: rooted plants grow no RootSystem here. Every
+                    # roomCategory "cave" room must set it.
+                    "noRoots": bool(room.get("noRoots")),
                     "themeId": (room.get("appearance") or {}).get("backgroundImage"),
                     "doors": [
                         {"index": i,
@@ -1626,6 +1666,9 @@ class Dataset:
                 "startRoomId": floor.get("startRoomId"),
                 "bossRoomId": floor.get("bossRoomId"),
                 "rooms": rooms,
+                "caveLinks": [self.cave_view(link, f"/floors/{f_index}/caveLinks/{i}")
+                              for i, link in enumerate(floor.get("caveLinks") or [])
+                              if isinstance(link, dict)],
             })
         return {
             "id": level_id,

@@ -104,6 +104,12 @@ def fixtures(tmp_path_factory):
     (out / "val.json").write_text(json.dumps(api.validate(None, None)))
     (out / "cfg.json").write_text(json.dumps(api.get_config()))
     level = _with_a_skill_platform(api, chosen["id"])
+    # OLE-79: the cave block draws only on a floor with caveLinks, which the
+    # chosen level may not have; borrow level_test's through the projection.
+    cave_src = api.dataset.get("LevelData", "level_test")
+    if not level["floors"][0].get("caveLinks") and cave_src is not None:
+        level["floors"][0]["caveLinks"] = [api.dataset.cave_view(
+            cave_src.value["floors"][0]["caveLinks"][0], "/floors/0/caveLinks/0")]
     (out / "lvl.json").write_text(json.dumps(level))
     # A plan too: it is a different document kind with no rooms, and the
     # client has a whole second render path for it.

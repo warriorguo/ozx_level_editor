@@ -133,6 +133,18 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     never_shown="the room has no requiredForExitItemIds, so its "
                                 "exit never refuses anyone"))
 
+            # OZX-1808: `LevelValidator.ValidateCaveRoots` — a cave room
+            # grows no roots, and says so; the runtime reads only the flag.
+            if category == "cave" and not room.get("noRoots"):
+                issues.append(_issue(
+                    "error", "LEVEL_CAVE_ROOTS_MISSING",
+                    f"floor {fi} room '{rid}' is a cave room without \"noRoots\": true. "
+                    f"Caves grow no roots — set it on the room. The level refuses to load",
+                    entity=level_id,
+                    pointer=f"{rptr}/noRoots" if "noRoots" in room else rptr,
+                    fix={"op": "put", "path": f"{rptr}/noRoots", "value": True,
+                         "label": "Set noRoots"}))
+
             # Non-cave rooms MUST declare staticPlacements. Every spawn adapter
             # calls RequireDeclared and throws on null — an empty array is the
             # way to say "this room places nothing".
@@ -338,6 +350,7 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          entity=level_id, pointer=dptr))
 
         issues.extend(_stair_link_issues(level_id, floors, fi))
+        issues.extend(_cave_link_issues(ds, level_id, fi, floor))
 
         # ── reachability from the start room, over doors only ────────────
         if start:
@@ -684,6 +697,204 @@ def validate_habitat_config(ds: Dataset) -> list[dict]:
                 bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
                     f"rule '{key}' has ring band [{lo}, {hi}]; it needs 0 ≤ ringMin < ringMax "
                     f"≤ 1 (or both 0)", f"{rptr}/ringMin")
+    return issues
+
+
+# ── cave passages (OZX-1805 / 1806 / 1807 / 1808) ───────────────────────────
+
+# `SpawnPointCategory` (GameEnums.cs), as `EncounterActionExecutor.CategoryKey`
+# spells them.
+_SPAWN_CATEGORIES = ("chaser", "air", "zoner", "dps", "edge")
+
+
+def spawn_category(enemy: dict) -> str:
+    """`EnemyEntity.GetSpawnPointCategory`: `role` when it names a category
+    (case-insensitive), else spawners and turrets are zoners, ground walkers
+    chasers and the rest air."""
+    role = (enemy.get("role") or "").lower()
+    if role in _SPAWN_CATEGORIES:
+        return role
+    if (enemy.get("category") or "").lower() in ("spawner", "turret"):
+        return "zoner"
+    return "chaser" if enemy.get("movementType") == "ground" else "air"
+
+
+def is_cave_passage(link: dict) -> bool:
+    """`linkType` "cave" or omitted — the default (`CaveLinkData`, and
+    `LevelBasePlanAssigner.LinkTypeOf` for a plan's caves[])."""
+    return not link.get("linkType") or link.get("linkType") == "cave"
+
+
+def _cave_content_issues(ds: Dataset, entity: str, where: str, ptr: str,
+                         cave: dict) -> list[dict]:
+    """What a cave passage carries into the cave, read the way the cave reads
+    it on entry. Shared by a hand-written `caveLinks[]` entry and a plan's
+    `caves[]` entry, which `InsertCaveLinks` copies onto the generated link
+    verbatim (OZX-1807), so a plan line is held to the same rules.
+
+    - `encounterId` must resolve; a launch placed directly on the cave's
+      spawn points is a zoner, or `EncounterActionExecutor` finds no point
+      and skips it with a warning (OZX-1805: only ZonerPlaces exist in a
+      cave). A prop category is `LEVEL_CAVE_PROP_LAUNCH`'s.
+    - `tentaclePlacement` (OZX-450): `TentaclePlacementSpawner` skips a block
+      with no `allowedTypes`, with a warning.
+    - `cargoPlacement` (OZX-1806): `CaveCargoPlacementLogic.Validate` throws
+      on count < 0 and on no `lootTableId`; when it stocks anything,
+      `CargoVariantLogic.CaveLooks` throws on a `cargoId` no CargoData has,
+      on one that is not a `caveCrate`, and on no `caveCrate` at all.
+    """
+    issues: list[dict] = []
+    enc_id = cave.get("encounterId")
+    enc = ds.get("EncounterData", enc_id) if enc_id else None
+    if enc_id and enc is None:
+        issues.append(_issue("error", "DATA_REFERENCE_MISSING",
+                             f"{where}: encounterId '{enc_id}' does not exist",
+                             entity=entity, pointer=f"{ptr}/encounterId"))
+    if enc is not None and is_cave_passage(cave):
+        for index, step in enumerate(enc.value.get("steps") or []):
+            action = (step or {}).get("action") or {}
+            if action.get("verb") != "launch" or any(action.get(k) for k in (
+                    "viaSpawner", "viaDoor", "railTrainId", "railOilTankId")):
+                continue
+            if habitats.is_prop_category(action.get("at")):
+                continue
+            enemy = ds.get("EnemyData", action.get("enemyId") or "")
+            if enemy is None:
+                continue
+            v = enemy.value
+            if (v.get("railConfig") or {}).get("enabled") or (v.get("railFactory") or {}).get("enabled"):
+                continue
+            category = (action.get("at") or "").lower() or spawn_category(v)
+            if category != "zoner":
+                issues.append(_issue(
+                    "warning", "LEVEL_CAVE_LAUNCH_SKIPPED",
+                    f"{where}: encounter '{enc_id}' (step {index}) launches "
+                    f"'{action.get('enemyId')}' on '{category}' spawn points, which a cave does "
+                    f"not have — only zoner (ZonerPlaces, OZX-1805). The launch is skipped",
+                    entity=entity, pointer=f"{ptr}/encounterId"))
+
+    tent = cave.get("tentaclePlacement")
+    if isinstance(tent, dict) and (tent.get("count") or 0) > 0:
+        tptr = f"{ptr}/tentaclePlacement"
+        types = tent.get("allowedTypes") or []
+        if not types:
+            issues.append(_issue(
+                "warning", "LEVEL_CAVE_TENTACLE_TYPES_EMPTY",
+                f"{where}: tentaclePlacement asks for {tent['count']} but allowedTypes is "
+                f"empty — the cave places no tentacles",
+                entity=entity, pointer=f"{tptr}/allowedTypes" if "allowedTypes" in tent else tptr))
+        for ti, enemy_id in enumerate(types):
+            if enemy_id and ds.get("EnemyData", enemy_id) is None:
+                issues.append(_issue(
+                    "error", "DATA_REFERENCE_MISSING",
+                    f"{where}: tentaclePlacement allowedTypes '{enemy_id}' does not exist",
+                    entity=entity, pointer=f"{tptr}/allowedTypes/{ti}"))
+
+    # An absent block stocks nothing — that is upstream's stated meaning
+    # (`StockCave` returns on null; Game.Unity/Room/README "缺块 = 不放箱子").
+    # JsonUtility materialises an omitted [Serializable] block, though, so in
+    # the game `Validate` may see count 0 / no lootTableId and throw on entry;
+    # that is upstream's to settle, and not a designer's error to flag here.
+    cargo = cave.get("cargoPlacement")
+    if not isinstance(cargo, dict):
+        return issues
+    cptr = f"{ptr}/cargoPlacement"
+    count = cargo.get("count") or 0
+    if count < 0:
+        issues.append(_issue(
+            "error", "LEVEL_CAVE_CARGO_COUNT_INVALID",
+            f"{where}: cargoPlacement.count is {count}; it must be ≥ 0",
+            entity=entity, pointer=f"{cptr}/count"))
+    table = cargo.get("lootTableId")
+    if not table:
+        issues.append(_issue(
+            "error", "LEVEL_CAVE_CARGO_LOOT_MISSING",
+            f"{where}: cargoPlacement has no lootTableId. A cave has no floor loot table to "
+            f"fall back on, so every cave crate's table must be named",
+            entity=entity, pointer=f"{cptr}/lootTableId" if "lootTableId" in cargo else cptr))
+    elif ds.get("LootTableData", table) is None:
+        issues.append(_issue(
+            "error", "DATA_REFERENCE_MISSING",
+            f"{where}: cargoPlacement lootTableId '{table}' does not exist",
+            entity=entity, pointer=f"{cptr}/lootTableId"))
+    if count <= 0:
+        return issues
+    cargo_id = cargo.get("cargoId")
+    if cargo_id:
+        crate = ds.get("CargoData", cargo_id)
+        if crate is None:
+            issues.append(_issue(
+                "error", "DATA_REFERENCE_MISSING",
+                f"{where}: cargoPlacement cargoId '{cargo_id}' does not exist (GameData/cargo/)",
+                entity=entity, pointer=f"{cptr}/cargoId"))
+        elif not crate.value.get("caveCrate"):
+            issues.append(_issue(
+                "error", "LEVEL_CAVE_CARGO_NOT_CAVE_CRATE",
+                f"{where}: cargoPlacement places cargoId '{cargo_id}', which is not a "
+                f"caveCrate; caves hold only cave crates (OZX-1815)",
+                entity=entity, pointer=f"{cptr}/cargoId"))
+    elif not any(d.value.get("caveCrate") for d in ds.of_type("CargoData")):
+        issues.append(_issue(
+            "error", "LEVEL_CAVE_CARGO_NOT_CAVE_CRATE",
+            f"{where}: cargoPlacement stocks crates, but no CargoData is a caveCrate",
+            entity=entity, pointer=cptr))
+    return issues
+
+
+def _cave_link_issues(ds: Dataset, level_id: str, fi: int, floor: dict) -> list[dict]:
+    """One floor's `caveLinks`: what level load refuses
+    (`LevelValidator.ValidateCaveRoots`, OZX-1808), what entering the cave
+    throws on (`CaveSystemAdapter` without a grid), and what the cave reads
+    (`_cave_content_issues`). A `direct` link has no passage, so it needs
+    neither a grid nor noRoots."""
+    issues: list[dict] = []
+    for li, link in enumerate(floor.get("caveLinks") or []):
+        if not isinstance(link, dict):
+            continue
+        lptr = f"/floors/{fi}/caveLinks/{li}"
+        cave_id = link.get("caveId")
+        where = f"floor {fi} cave '{cave_id}'"
+        if is_cave_passage(link):
+            if not link.get("noRoots"):
+                issues.append(_issue(
+                    "error", "LEVEL_CAVE_ROOTS_MISSING",
+                    f"{where} is a cave passage without \"noRoots\": true. Caves grow no "
+                    f"roots — set it on the cave link. The level refuses to load",
+                    entity=level_id,
+                    pointer=f"{lptr}/noRoots" if "noRoots" in link else lptr,
+                    fix={"op": "put", "path": f"{lptr}/noRoots", "value": True,
+                         "label": "Set noRoots"}))
+            w, h = link.get("gridWidth") or 0, link.get("gridHeight") or 0
+            if w < 1 or h < 1:
+                issues.append(_issue(
+                    "error", "LEVEL_CAVE_GRID_INVALID",
+                    f"CaveLinkData '{cave_id}' has invalid gridWidth={w}, gridHeight={h}. Both "
+                    f"must be ≥ 1 — entering the cave throws",
+                    entity=level_id,
+                    pointer=f"{lptr}/{'gridWidth' if w < 1 else 'gridHeight'}"))
+        issues.extend(_cave_content_issues(ds, level_id, where, lptr, link))
+    return issues
+
+
+def _plan_cave_issues(ds: Dataset, plan_id: str, fi: int, fptr: str,
+                      floor: dict) -> list[dict]:
+    """A merged plan floor's `caves[]` (OZX-1807): `InsertCaveLinks` throws on
+    a passage without a grid on every floor, before it picks rooms, and copies
+    the rest onto the generated link — which it marks `noRoots` itself."""
+    issues: list[dict] = []
+    for ci, cave in enumerate(floor.get("caves") or []):
+        if not isinstance(cave, dict):
+            continue
+        cptr = f"{fptr}/caves/{ci}"
+        where = f"floor {fi} caves[{ci}]"
+        w, h = cave.get("gridWidth") or 0, cave.get("gridHeight") or 0
+        if is_cave_passage(cave) and (w < 1 or h < 1):
+            issues.append(_issue(
+                "error", "LEVEL_PLAN_CAVE_GRID_INVALID",
+                f"{where} is a cave passage but has gridWidth={w}, gridHeight={h} — both must "
+                f"be >= 1. The plan does not generate",
+                entity=plan_id, pointer=f"{cptr}/{'gridWidth' if w < 1 else 'gridHeight'}"))
+        issues.extend(_cave_content_issues(ds, plan_id, where, cptr, cave))
     return issues
 
 
@@ -2335,6 +2546,7 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
                                  entity=plan_id,
                                  pointer=f"{fptr}/enemyPool/{ei}/enemyId"))
     issues.extend(_removed_plan_field_issues(plan_id, fi, fptr, floor))
+    issues.extend(_plan_cave_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_tree_loop_issues(plan_id, fi, fptr, floor))
     issues.extend(_cycle_branch_issues(plan_id, fi, fptr, floor))
     issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
