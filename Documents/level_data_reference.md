@@ -605,6 +605,47 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 **`groundlaser`**（OZX-1371，选点 OZX-1373）：固定 12 格（列 {2, 7} × 下组行 {2, 3, 6} / 上组行 {9, 12, 13}，10×16 房），左右成对，优先玩家进门一侧（上门 → 上组，下门 → 下组，侧门或非门进入 → 下组），两台间距须 > 2 格。只读 `countMin` / `count`（台数，缺省 2 / 4，**必须落在 2–4** 且区间里有偶数——票里写的 2–6 已过时）和 `chance`；写 `cells` / footprint / `placement` 都抛（`GroundLaserPlacementLogic.ResolvePairRange` → `ROOM_GROUNDLASER_INVALID`）。ch3–ch6 每层默认 `chance: 0.3`。
 
+### 5.7 habitat 与出生点 prop：WaterPool、栖息者、basement 无地面激光（OLE-72 / OLE-75 / OLE-78 / OLE-87，核对于 `ozx_base@7c8e3c8ea` 工作区）
+
+**三份 GameData 配置**（`JsonDataRepository.cs:55-57` 注册类型，编辑器照常按 `(dataType, id)` 索引，`ozxlevel/habitats.py` 是规则的 Python 版）：
+
+| 文件 | dataType / id | 内容 |
+|---|---|---|
+| `prop_spawn_rules.json` | `PropSpawnRulesData` / `prop_spawn_rules` | 带敌人出生点的 prop 的规则（`PropSpawnRulesData.cs:12`）：`prefabKey`、`category`（encounter 的 `at` 值，`PropSpawnCategory.cs:11`，目前只有 `waterpool`）、`themeIds`、`footprintCols×Rows`、环带 `ringMin/ringMax`（OZX-1625）。现只有一条：`prefab/waterpool`，battlefield / factory / basement，2×2，0.33–0.67 |
+| `prop_habitats.json` | `PropHabitatsData` / `prop_habitats` | 每个环境 prop（placement 的 `kind`，`kind: "prop"` 时取 `prefabKey`，`HabitatData.cs:87` `PropIdOf`）给房间提供哪些要素；不提供写 `[]`。`waterpool` → `water`，`toxicbarrel` / `groundlaser` / 地雷 → `industrial`，`oiltank` → `oil`，生物培养舱 → `organic` |
+| `theme_habitats.json` | `ThemeHabitatsData` / `theme_habitats` | 每个 theme 的地面要素（battlefield → `sand`，volcano → `lava`，其余 `[]`）与 `dwellerWeightScale`（现为 3，`HabitatData.cs:53`） |
+
+**敌人 `habitats`**（`EnemyData.cs:23`，多选，省略 = 不栖息于任何要素；出货 9 个敌人写了，8 个 `water`、`quick_sand_worm` 一个 `sand`）。OZX-1802 定下语义（`HabitatData.cs:73-79`）：它**不限制**敌人去哪；房间具备的要素给它的栖息者加权（`RoomHabitatPlanner.cs:141` `WeightScales`，× `dwellerWeightScale`）；只有栖息者能从提供该要素的 prop 里冒出来（`HabitatData.cs:212` `EmergesFrom`）；楼层能出现某要素就得有它的栖息者（下面的 plan 校验）。房间的 habitat 是推导的（`HabitatData.cs:171` `OfRoom`：theme 地面 ∪ **确定**放下的环境 prop 所提供的要素；「确定」= `SurelyPlaces`，`HabitatData.cs:102`：pinned `cells` 或 `count ≥ 1`，且没有 0 < `chance` < 1）。
+
+**plan 楼层的 theme**：没写 `themeId` 的 plan 楼层生成时盖 `themes/factory`（`LevelBasePlanData.cs:191` `GeneratedThemeIdOf`），**不是** `LevelData` 楼层的缺省 `theme_default`（`LevelData.cs:60`）。habitat 检查与 basement 判定都按前者读。
+
+**上游拒绝的、编辑器都报**（plan 规则读合并后的楼层，结果改指到持有该值的节点）：
+
+| 码 | 上游 | 规则 |
+|---|---|---|
+| `ROOM_PROP_THEME_REFUSED` | `PropSpawnRuleValidator.cs:95` `CheckPlacements`（`LevelService.cs:74`，每个关卡加载时，生成的也一样） | 房间放规则 prefab，所在楼层 `themeId` 不在规则 `themeIds` 里。plan 的 `defaultStaticPlacements` 会下发到生成房，所以按 `GeneratedThemeIdOf` 一并检查 |
+| `ROOM_PROP_FOOTPRINT_MISMATCH` | 同上 | 条目 footprint（0 视为 1）≠ 规则的 |
+| `ROOM_PROP_PLACEMENT_REFUSED` | 同上 | 规则有环带（`ringMax > 0`）时条目还写了 `placement` |
+| `LEVEL_PROP_LAUNCH_UNCERTAIN` | `PropSpawnRuleValidator.cs:125` `CheckLaunches` | 房间的遭遇有 `at: "waterpool"`（大小写不敏感）的 launch，但本房不是**确定**放 `prefab/waterpool`（指向房间的 `encounterId`）。OZX-1920 起「放了但避不开 rail」只在放置时放弃并跳过这些 launch，不是关卡错误 |
+| `LEVEL_CAVE_PROP_LAUNCH` | 同上 | cave 通道（`caveLinks[].encounterId`）的遭遇 launch 在 prop 类别上——通道里没有 prop |
+| `ENCOUNTER_PROP_LAUNCH_NOT_DWELLER` | `PropSpawnRuleValidator.cs:157` `RequireAllowed` | `at: "waterpool"` 的 `enemyId` 或某个 `variantIds` 的 `habitats` 不含该 prop 提供的要素（不写 habitats 的敌人哪儿都能住，但不从任何 prop 冒出）。只看遭遇本身，所以挂在遭遇上报 |
+| `ENCOUNTER_PROP_CATEGORY_UNRULED` | 同上 | `at` 是 prop 类别却没有对应规则 |
+| `ROOM_PROP_HABITAT_UNMAPPED` | `HabitatData.cs:268` `ValidateLevelProps`（`LevelService.cs:73`）；plan 侧是 `PossibleOnFloor` 里 `Provides` 的抛 | 环境 placement 在 `prop_habitats.json` 里没条目（`equipment` / `skill` / `upgrade` / `ally` / `trigger` 豁免，`HabitatData.cs:84`） |
+| `LEVEL_THEME_HABITAT_MISSING` | `HabitatData.cs:156` `GroundOf`，经 `LevelPlanValidator.cs:973` `ValidateHabitats` | plan 楼层（按 `GeneratedThemeIdOf`）的 theme 不在 `theme_habitats.json` 里 |
+| `LEVEL_HABITAT_DWELLER_MISSING` | `LevelPlanValidator.cs:973` `ValidateHabitats`（OZX-1802） | 楼层可能具备的要素（`HabitatData.cs:123` `PossibleOnFloor`：theme 地面 ∪ `defaultStaticPlacements` 里 `MayPlace` 的环境 prop 提供的，`chance` 也算），只要敌人库里有谁栖息于它，pool（条目 + 变体，列车除外，`LevelBasePlanAssigner.PoolEnemyIds`）就至少要有一个栖息者。没人栖息的要素（`industrial` / `oil` / `organic` / `lava`）不查。指向 `enemyPool`。静态楼层不查 |
+| `ENEMY_HABITAT_UNPROVIDED` | `HabitatData.cs:226` `ValidateAll`（`GameBootstrap.cs:1238`，开机） | 敌人写的要素没有任何 prop 或 theme 地面提供（拼错，或永远不会有房间具备） |
+| `HABITAT_CONFIG_INVALID` | 同上 | `dwellerWeightScale < 1`；prop / theme 条目缺 id 或重复 |
+| `PROP_SPAWN_RULE_INVALID` | `PropSpawnRuleValidator.cs:64` `ValidateRules`（每次关卡加载） | 没有规则、规则缺 `prefabKey`、`category` 不是 prop 类别、`themeIds` 为空、prop 不提供任何要素（没人能冒出来）、无 footprint、环带不满足 0 ≤ min < max ≤ 1（或都为 0） |
+| `DATA_CONFIG_MISSING` | `LevelService.cs:61-72`、`GameBootstrap.cs:1238` | 三份配置缺任何一份 |
+| `ROOM_PLACEMENT_THEME_BANNED` | `StaticPlacementPolicy.cs:54`（OZX-1919），经 `LevelValidator.cs:38` | `themes/basement` 楼层的房间**自己**写了 `groundlaser`；地雷照放。同一条目也撞 stage 禁令时只报 stage 那条（上游一条条目只给一个理由） |
+
+**静默处理、编辑器只显示的**：
+
+- plan 楼层默认里的 `groundlaser` 在 basement 楼层被 `Filter` 从每间房滤掉（`LevelBasePlanAssigner.cs:1383-1390`，按 `GeneratedThemeIdOf` 判）——plan 视图在该条目上标「except basement floor」（`skipsFloor`）。
+- plan 视图：每条默认 placement 显示它提供的要素（`provides`），pool 条目显示 `dwells in …`，楼层显示「can offer …」（`habitats.possible`）；敌人 picker 的 meta 带 `dwells in …`；房间敌人行显示 `from the waterpool`（launch 的 `at`）。
+
+**生成算法的改动不在 Python 里重写**（预览走 genlevel）：pool 有栖息者时 `DecideProps`（`RoomHabitatPlanner.cs:88`）在采样前用生成 rng 掷带 `chance` 的 habitat prop，命中写成确定条目；采样按房间 habitat 加权；能从确定放置的出生点 prop 冒出的条目 launch 写 `at: <category>`（`SpawnAt`）；有确定多格 prop 的房间只抽有同尺寸全 Static 空块的 tilemap（`StaticBlockNeed`）。OZX-1920 的 WaterPool 避 rail 重试 8 次后放弃、OZX-1919 的地雷不落 Rail 格都是房间内放置，编辑器不查。用 genlevel 对 chapter_4 / 5 / 6 各几个 seed 核过：有池的房间都没有残留 `chance`，每条 `at: "waterpool"` 的 launch 都落在确定放池的房里，basement 没有激光，生成的关卡过编辑器的上述关卡检查无一命中。
+
 ## 6. plan 如何编译成 level
 
 **编辑器里看样本（OLE-1）**：plan 视图的「Generate a sample」调用 ozx_base 自己的 headless 入口（`DotnetTests/Game.Balance` 的 `genlevel --plan <id> --seed <n> --gamedata <dir>`，OZX-991），把返回的 `LevelData` 走普通关卡视图画出来（只读，带可达性叠加）——不在 Python 里重写生成器，所以传送点、间距、stage 发牌、采样都和游戏一致。**一次只是一个样本**：样本条上写着 SAMPLE 和 seed，「Compare 5 seeds」并排给出各 seed 的房间数 / 每层 / 传送点，看的是分布不是某一次。GameData 是实时读的；C# 改了要重建 DLL，编辑器在 DLL 比 `Assets/Scripts` 里（Game.Unity / Tests 之外）最新的 `.cs` 旧时明确提示 stale 和重建命令。生成失败时原样显示 genlevel 的报错——plan 生成不出来是 plan 的问题。
@@ -661,6 +702,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 - spawner 通道四条（`LevelPlanValidator.ValidateSpawnerPairs`，见 §5.4）→ 抛错。
 - `guaranteed` 条目绑定数 ≠ 1 → 抛错；`boundWaveLastEnemy` 无条件抛错。
 - `endsRunOnClear: true` 但楼层没有 boss 房 → 抛错。
+- WaterPool 等出生点 prop 的 theme / footprint / 环带、`at: "waterpool"` 的栖息者与确定放置、环境 prop 的 habitat 映射、basement 房间自己写 `groundlaser` → 加载时抛（见 §5.7）；plan 楼层能出现某要素却没有栖息者 → `LevelPlanValidator` 抛（§5.7）。
 
 ### 7.3 静默失败（更危险，编辑器必须报错）
 

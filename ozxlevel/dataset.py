@@ -16,7 +16,7 @@ import math
 import pathlib
 from typing import Any
 
-from . import arealinks, jsonspan, plandefaults, tilemaps
+from . import arealinks, habitats, jsonspan, plandefaults, tilemaps
 from .sprites import SpriteIndex
 from .themes import ThemeIndex
 
@@ -334,7 +334,8 @@ class Dataset:
         for doc in self.of_type("EnemyData"):
             v = doc.value
             meta = " · ".join(x for x in (
-                v.get("movementType"), v.get("attackType"), v.get("role")) if x)
+                v.get("movementType"), v.get("attackType"), v.get("role"),
+                ("dwells in " + " / ".join(v["habitats"])) if v.get("habitats") else None) if x)
             out.append({
                 "id": doc.id,
                 "meta": meta or "enemy",
@@ -352,6 +353,10 @@ class Dataset:
                 # picker that shows this as an ordinary enemy understates
                 # the room by that much.
                 "hatch": self.hatch_brief(v),
+                # OZX-1788 / OZX-1802: the elements it dwells in. Favoured by
+                # a room offering one; the only enemies that may come out of
+                # a prop providing one (encounter `at: "waterpool"`).
+                "habitats": list(v.get("habitats") or []),
             })
         return out
 
@@ -1040,6 +1045,9 @@ class Dataset:
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),
                 "viaSpawner": action.get("viaSpawner"),
+                # OZX-1621: a prop category (`waterpool`) launches from the
+                # placed prop's rim instead of a tilemap spawn layer.
+                "at": action.get("at") or None,
                 "pointer": f"/steps/{index}/action",
                 "encounterId": encounter_id,
                 "missing": enemy is None,
@@ -1128,6 +1136,7 @@ class Dataset:
             return {"id": plan_id, "missing": True, "floors": []}
         floors = []
         defaults = doc.value.get("floorDefaults") or {}
+        libs = habitats.Libraries(self)
         for fi, raw in enumerate(doc.value.get("floors") or []):
             # The floor as the generator sees it (OZX-1011). Every pointer
             # below goes to the node that HOLDS the value, so an inherited
@@ -1139,6 +1148,8 @@ class Dataset:
                 return plandefaults.field_base(fi, source, key)
 
             base = f"/floors/{fi}"
+            # OZX-1790: a plan floor naming no theme runs themes/factory.
+            gen_theme = habitats.generated_theme_id(floor.get("themeId"))
             appearance = floor.get("appearance") or {}
             theme_id = floor.get("themeId")
             owned = self.themes.tile_parts(theme_id)
@@ -1283,6 +1294,12 @@ class Dataset:
                      # the group gets one guaranteed body instead of three.
                      "variantIds": [v for v in (e.get("variantIds") or [])],
                      "isVariantGroup": bool(e.get("variantIds")),
+                     # OZX-1802: what the entry's bodies dwell in (union over
+                     # the representative and its variants).
+                     "habitats": sorted({h for i in [e.get("enemyId")] + list(e.get("variantIds") or [])
+                                         for h in ((self.get("EnemyData", i or "") or _NoDoc).value
+                                                   .get("habitats") or [])}
+                                        if not e.get("railTrainId") else set()),
                      "cluster": _cluster_brief(e),
                      "pointer": f"{at('enemyPool')}/enemyPool/{ei}"}
                     for ei, e in enumerate(floor.get("enemyPool") or [])
@@ -1310,6 +1327,12 @@ class Dataset:
                      # because the authoring handle cannot express it: this
                      # list applies to a whole floor and never names a room.
                      "skipsStages": banned_stages(p),
+                     # OZX-1919: Filter drops a ground laser from every room
+                     # of a basement floor, judged by the plan's theme.
+                     "skipsFloor": (p.get("kind") == GROUND_LASER_KIND
+                                    and gen_theme == habitats.BASEMENT_THEME_ID),
+                     # OZX-1788: the habitat elements it gives a room.
+                     "provides": habitats.placement_brief(libs, p),
                      "pointer": f"{at('defaultStaticPlacements')}"
                                 f"/defaultStaticPlacements/{pi}"}
                     for pi, p in enumerate(
@@ -1325,6 +1348,14 @@ class Dataset:
                     "inherited": source.get("appearance") == plandefaults.DEFAULTS,
                 },
                 "themeParts": owned,
+                # OZX-1789 / OZX-1802: every element some room of the floor
+                # can offer (`Habitats.PossibleOnFloor`) under the theme the
+                # generator stamps — each one calls for a dweller in the pool.
+                "habitats": {
+                    "themeId": gen_theme,
+                    "possible": sorted(libs.possible_on_floor(
+                        gen_theme, floor.get("defaultStaticPlacements"))),
+                },
             })
         cap = doc.value.get("skillDropLevelCap") or 0
         return {
@@ -1785,6 +1816,10 @@ def _cluster_brief(source: dict) -> dict | None:
         return {"declared": False, "sizeMin": lo, "sizeMax": hi,
                 "radius": radius, **shared} if radius else None
     return {"declared": True, "sizeMin": lo, "sizeMax": hi, "radius": radius, **shared}
+
+
+class _NoDoc:
+    value: dict = {}
 
 
 def _code(identifier: str) -> str:

@@ -795,6 +795,9 @@ function renderRooms() {
             : [source.meta];
           if (e.eliteCount) bits.push(`elite ×${e.eliteCount}`);
           if (e.viaSpawner) bits.push(`via ${e.viaSpawner}`);
+          // OZX-1621: launched from a placed prop's rim (a WaterPool), not a
+          // tilemap spawn layer.
+          if (e.at) bits.push(`from the ${e.at}`);
           // When the wave appears. Shown on every row so its absence is never
           // ambiguous, but muted for the immediate ones — 177 of the 190 waves
           // in this data are immediate, and highlighting all of them would
@@ -1951,7 +1954,8 @@ function renderPlanFloors() {
             <span><strong>${esc(e.railTrainId || e.enemyId || '?')}</strong><small>${
               e.missing ? (e.railTrainId ? 'no RailTrainData with this id' : 'no EnemyData with this id')
                 : `${e.railTrainId ? 'train on the rail · ' : ''}${
-                    e.family ? `tier ${e.family.tier} ${e.family.id} · ` : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+                    e.family ? `tier ${e.family.tier} ${e.family.id} · ` : ''}${
+                    e.habitats && e.habitats.length ? `dwells in ${e.habitats.join(' / ')} · ` : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
             }</small></span>${groupLine(e)}${channel}
           </div>`;
         }).join('')
@@ -1963,7 +1967,9 @@ function renderPlanFloors() {
     const placements = f.defaultStaticPlacements.length
       ? f.defaultStaticPlacements.map((p) => {
           const odds = oddsLine(p);
-          const what = [p.prefabKey, p.cargoId, p.placement].filter(Boolean).join(' · ');
+          const what = [p.prefabKey, p.cargoId, p.placement,
+            p.provides && p.provides.length ? `gives ${p.provides.join(' / ')}` : '']
+            .filter(Boolean).join(' · ');
           return `<div class="content-entry${odds ? ' odds-carrier' : ''}">
             <span class="content-glyph">${esc(codeOf(p.kind))}</span>
             <span><strong>${esc(p.kind || '?')}</strong><small>${
@@ -1971,6 +1977,8 @@ function renderPlanFloors() {
             <span class="weight-value" title="how many at most">×${p.count || (p.pinned ? '—' : 0)}</span>
             ${p.skipsStages.length ? `<span class="odds-line" title="StaticPlacementPolicy (OZX-1057 / OZX-1225 / OZX-1486): the start room is where the player spawns, at launch and after every death, so it takes no blast hazard or floor trap; a release room is the breather after a peak, so it takes no floor trap">
               <span class="drop-tag">except</span>${esc(p.skipsStages.join(' / '))} rooms</span>` : ''}
+            ${p.skipsFloor ? `<span class="odds-line" title="StaticPlacementPolicy (OZX-1919): a themes/basement floor has no ground lasers; the generator drops this entry from every room of the floor">
+              <span class="drop-tag">except</span>basement floor — never placed here</span>` : ''}
             ${odds}</div>`;
         }).join('')
       : '<div class="inline-empty">No default placements — generated rooms spawn nothing static</div>';
@@ -2069,6 +2077,9 @@ function renderPlanFloors() {
         <div class="content-list">${placements}</div>
         ${f.defaultStaticPlacements.length
           ? '<div class="derived-note">applied to every generated room whose own staticPlacements came out empty</div>'
+          : ''}
+        ${f.habitats && f.habitats.possible.length
+          ? `<div class="derived-note" title="OZX-1802: theme ground plus what these placements may put down; an element some enemy dwells in needs a dweller in the pool, and a room offering it weights its dwellers up">can offer ${esc(f.habitats.possible.join(', '))} (${esc(f.habitats.themeId)})</div>`
           : ''}
       </div>
       <div class="content-column">

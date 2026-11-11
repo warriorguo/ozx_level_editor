@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import math
 
-from . import arealinks, plandefaults, tilemaps
-from .dataset import (DIRECTION_TWIN, DIRECTIONS, SKILL_DROP_LEVEL_CAP_DEFAULT,
-                      Dataset, _stage_budget, banned_stages, countmin_reading)
+from . import arealinks, habitats, plandefaults, tilemaps
+from .dataset import (DIRECTION_TWIN, DIRECTIONS, GROUND_LASER_KIND,
+                      SKILL_DROP_LEVEL_CAP_DEFAULT, Dataset, _stage_budget, banned_stages,
+                      countmin_reading)
 
 GENERATOR_TYPES = {"tree", "cycle", "mixed", "static"}
 STAGE_TYPES = {"start", "teaching", "building", "default",
@@ -38,6 +39,7 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
 
     issues: list[dict] = []
     floors = doc.value.get("floors") or []
+    libs = habitats.Libraries(ds)
 
     # roomId -> (floor index, room index)
     locations: dict[str, tuple[int, int]] = {}
@@ -193,6 +195,21 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                         f"where the player spawns; a release room is the breather after a "
                         f"peak) — the level refuses to load. Put it in another room",
                         entity=level_id, pointer=pptr))
+                # OZX-1919: the same policy judges by the floor's theme too —
+                # a themes/basement floor takes no ground laser. Upstream
+                # reports one reason per entry, the stage's first.
+                elif (p.get("kind") == GROUND_LASER_KIND
+                      and floor.get("themeId") == habitats.BASEMENT_THEME_ID):
+                    issues.append(_issue(
+                        "error", "ROOM_PLACEMENT_THEME_BANNED",
+                        f"{rid}: placement {pi} is a 'groundlaser' on a "
+                        f"'{habitats.BASEMENT_THEME_ID}' floor, which StaticPlacementPolicy "
+                        f"keeps out of it: a basement floor has no ground lasers (OZX-1919) — "
+                        f"the level refuses to load. Put it in another room",
+                        entity=level_id, pointer=pptr))
+                issues.extend(_prop_habitat_issues(libs, level_id, rid, pi, pptr, p))
+                issues.extend(_prop_rule_placement_issues(
+                    libs, level_id, rid, pi, pptr, p, floor.get("themeId")))
                 issues.extend(_placement_count_issues(level_id, rid, pi, pptr, p))
                 issues.extend(_cargo_issues(level_id, rid, pi, pptr, p,
                                             bool(room.get("floorLootTableId"))))
@@ -343,6 +360,330 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                                          f"{rid}: not reachable from start room '{start}'",
                                          entity=level_id,
                                          pointer=f"{fptr}/rooms/{ri}"))
+    issues.extend(_prop_launch_issues(ds, libs, level_id, floors))
+    return issues
+
+
+# ── habitats and spawn-point props (OZX-1622 / OZX-1788 / OZX-1802) ─────────
+
+
+def _prop_habitat_issues(libs, entity: str, where: str, pi: int, pptr: str,
+                         p: dict) -> list[dict]:
+    """`Habitats.ValidateLevelProps` (level load) and the throw inside
+    `Habitats.PossibleOnFloor` (`LevelPlanValidator`): every environment
+    placement has an entry in prop_habitats.json, so a room's habitats can
+    always be derived. Pickups and logic kinds are exempt."""
+    if libs.props_doc is None or not habitats.is_environment(p):
+        return []
+    pid = habitats.prop_id(p)
+    if libs.provides(pid) is not None:
+        return []
+    return [_issue(
+        "error", "ROOM_PROP_HABITAT_UNMAPPED",
+        f"{where}: placement {pi}: prop '{pid}' has no entry in 'prop_habitats'. Every "
+        f"environment prop says which habitat elements it gives its room — write [] for "
+        f"none (OZX-1788). The level refuses to load",
+        entity=entity, pointer=pptr)]
+
+
+def _prop_rule_placement_issues(libs, entity: str, where: str, pi: int, pptr: str,
+                                p: dict, theme_id: str | None) -> list[dict]:
+    """`PropSpawnRuleValidator.CheckPlacements` (OZX-1622): a spawn-point prop
+    (WaterPool) stands only on a floor whose theme its rule lists, declares the
+    rule's footprint, and — when the rule owns a ring band (OZX-1625) — writes
+    no `placement` of its own. Runs on every level at load, generated ones
+    included, so a plan's floor defaults are held to it under the theme the
+    generator stamps."""
+    rule = libs.rule_for_prefab(p.get("prefabKey"))
+    if rule is None:
+        return []
+    key = rule.get("prefabKey")
+    issues: list[dict] = []
+    themes = rule.get("themeIds") or []
+    if theme_id not in themes:
+        issues.append(_issue(
+            "error", "ROOM_PROP_THEME_REFUSED",
+            f"{where}: placement {pi} places '{key}' on a '{theme_id or ''}' floor; it may "
+            f"only stand on {', '.join(themes)} (prop_spawn_rules) — the level refuses to load",
+            entity=entity, pointer=pptr))
+    cols = p.get("footprintCols") or 0
+    rows = p.get("footprintRows") or 0
+    cols, rows = (cols if cols > 0 else 1), (rows if rows > 0 else 1)
+    want = (rule.get("footprintCols") or 0, rule.get("footprintRows") or 0)
+    if (cols, rows) != want:
+        issues.append(_issue(
+            "error", "ROOM_PROP_FOOTPRINT_MISMATCH",
+            f"{where}: placement {pi} places '{key}' with a {cols}×{rows} footprint; it must "
+            f"declare footprintCols {want[0]} / footprintRows {want[1]} (prop_spawn_rules)",
+            entity=entity,
+            pointer=f"{pptr}/footprintCols" if "footprintCols" in p else pptr))
+    if (rule.get("ringMax") or 0) > 0 and p.get("placement"):
+        issues.append(_issue(
+            "error", "ROOM_PROP_PLACEMENT_REFUSED",
+            f"{where}: placement {pi} places '{key}' with placement '{p['placement']}', but "
+            f"its rule already chooses where it goes (ringMin / ringMax); drop the entry's "
+            f"placement",
+            entity=entity, pointer=f"{pptr}/placement"))
+    return issues
+
+
+def _prop_launch_issues(ds: Dataset, libs, level_id: str, floors: list) -> list[dict]:
+    """`PropSpawnRuleValidator.CheckLaunches`, the half that needs the room.
+
+    A launch `at` a prop category (`waterpool`) runs in a room certain to ask
+    for that prop (`Habitats.SurelyPlaces`: pinned cells or count ≥ 1, no
+    chance roll) — the executor throws on a launch with no points, and the
+    validator moves that from the moment the room opens to level load. A cave
+    passage holds no prop at all. Who may come out of the prop depends only on
+    the encounter, so `validate_encounter` reports that half."""
+    issues: list[dict] = []
+
+    def prop_steps(encounter_id):
+        enc = ds.get("EncounterData", encounter_id) if encounter_id else None
+        for index, step in enumerate((enc.value.get("steps") if enc else None) or []):
+            action = (step or {}).get("action") or {}
+            if habitats.is_prop_category(action.get("at")):
+                yield index, action, action["at"].lower()
+
+    for fi, floor in enumerate(floors):
+        for ri, room in enumerate(floor.get("rooms") or []):
+            rid = room.get("roomId")
+            seen = set()
+            for index, action, category in prop_steps(room.get("encounterId")):
+                rule = libs.rule_for_category(category)
+                if rule is None or category in seen:
+                    continue
+                seen.add(category)
+                key = rule.get("prefabKey")
+                if any(isinstance(e, dict) and e.get("prefabKey") == key
+                       and habitats.surely_places(e)
+                       for e in room.get("staticPlacements") or []):
+                    continue
+                issues.append(_issue(
+                    "error", "LEVEL_PROP_LAUNCH_UNCERTAIN",
+                    f"{rid}: encounter '{room['encounterId']}' (step {index}) launches "
+                    f"'{action.get('enemyId')}' at '{category}', but that room is not certain "
+                    f"to have a '{key}': place one with pinned cells or count ≥ 1, and no "
+                    f"chance roll — the level refuses to load",
+                    entity=level_id, pointer=f"/floors/{fi}/rooms/{ri}/encounterId"))
+        for li, link in enumerate(floor.get("caveLinks") or []):
+            for index, action, category in prop_steps((link or {}).get("encounterId")):
+                issues.append(_issue(
+                    "error", "LEVEL_CAVE_PROP_LAUNCH",
+                    f"cave passage '{link.get('caveId')}': encounter '{link['encounterId']}' "
+                    f"(step {index}) launches '{action.get('enemyId')}' at '{category}', but a "
+                    f"cave passage holds no prop — the level refuses to load",
+                    entity=level_id, pointer=f"/floors/{fi}/caveLinks/{li}/encounterId"))
+                break
+    return issues
+
+
+def _prop_category_launch_issues(ds: Dataset, encounter_id: str, index: int,
+                                 aptr: str, action: dict) -> list[dict]:
+    """The half of `PropSpawnRuleValidator.CheckLaunches` that reads only the
+    encounter: a prop category needs a rule, and only an enemy whose
+    `habitats` name an element the prop provides (`Habitats.EmergesFrom`,
+    OZX-1788) may come out of it — variants included. An enemy with no
+    habitats lives anywhere but emerges from nothing."""
+    at = action.get("at")
+    if not habitats.is_prop_category(at):
+        return []
+    libs = habitats.Libraries(ds)
+    category = at.lower()
+    rule = libs.rule_for_category(category)
+    if rule is None:
+        if libs.rules_doc is None:
+            return []
+        return [_issue(
+            "error", "ENCOUNTER_PROP_CATEGORY_UNRULED",
+            f"step {index}: launches at '{category}', which no rule in 'prop_spawn_rules' "
+            f"covers — any level running it refuses to load",
+            entity=encounter_id, pointer=f"{aptr}/at")]
+    provided = libs.provides(rule.get("prefabKey")) or []
+    issues: list[dict] = []
+    bodies = [(action.get("enemyId"), f"{aptr}/enemyId")] + [
+        (v, f"{aptr}/variantIds/{vi}") for vi, v in enumerate(action.get("variantIds") or [])]
+    for enemy_id, ptr in bodies:
+        enemy = ds.get("EnemyData", enemy_id or "")
+        if enemy is None or habitats.emerges_from(enemy.value, provided):
+            continue
+        issues.append(_issue(
+            "error", "ENCOUNTER_PROP_LAUNCH_NOT_DWELLER",
+            f"step {index}: launches '{enemy_id}' at '{category}', but only an enemy whose "
+            f"habitats name [{', '.join(provided)}] may come out of a '{rule.get('prefabKey')}' "
+            f"— '{enemy_id}' lists [{', '.join(enemy.value.get('habitats') or [])}] (OZX-1788). "
+            f"Any level running it refuses to load",
+            entity=encounter_id, pointer=ptr))
+    return issues
+
+
+def _pool_enemy_ids(pool: list) -> list:
+    """`LevelBasePlanAssigner.PoolEnemyIds`: every entry's enemyId and
+    variantIds, in order, trains excluded."""
+    ids: list = []
+    for e in pool or []:
+        if not isinstance(e, dict) or e.get("railTrainId"):
+            continue
+        for i in [e.get("enemyId")] + list(e.get("variantIds") or []):
+            if i not in ids:
+                ids.append(i)
+    return ids
+
+
+def _habitat_plan_issues(ds: Dataset, plan_id: str, fi: int, fptr: str,
+                         floor: dict) -> list[dict]:
+    """`LevelPlanValidator.ValidateHabitats` (OZX-1802) on a merged floor,
+    plus what a generated level is held to at load (`ValidateLevelProps`,
+    `PropSpawnRuleValidator`) — the floor's defaults are what its rooms get.
+
+    The theme is `FloorPlanData.GeneratedThemeIdOf` — themes/factory when
+    none is written, not the LevelData default. A floor that can offer an
+    element (its theme's ground, or a prop its placements may put down) must
+    list a dweller of it whenever the enemy library has one: water calls for
+    its creatures. An element nobody dwells in asks for nothing."""
+    if floor.get("generatorType") == "static":
+        return []
+    libs = habitats.Libraries(ds)
+    issues: list[dict] = []
+    theme = habitats.generated_theme_id(floor.get("themeId"))
+    placements = floor.get("defaultStaticPlacements") or []
+    for pi, p in enumerate(placements):
+        pptr = f"{fptr}/defaultStaticPlacements/{pi}"
+        issues.extend(_prop_habitat_issues(libs, plan_id, f"floor {fi}", pi, pptr, p))
+        issues.extend(_prop_rule_placement_issues(
+            libs, plan_id, f"floor {fi}", pi, pptr, p, theme))
+    if libs.themes_doc is None or libs.props_doc is None:
+        return issues
+    if libs.ground(theme) is None:
+        issues.append(_issue(
+            "error", "LEVEL_THEME_HABITAT_MISSING",
+            f"floor {fi}: theme '{theme}' has no entry in 'theme_habitats'. Every theme says "
+            f"what its ground gives a room — write [] for nothing (OZX-1788)",
+            entity=plan_id, pointer=f"{fptr}/themeId"))
+        return issues
+    if any(r["code"] == "ROOM_PROP_HABITAT_UNMAPPED" for r in issues):
+        return issues
+
+    listed: set = set()
+    for i in _pool_enemy_ids(floor.get("enemyPool")):
+        e = ds.get("EnemyData", i or "")
+        if e is not None:
+            listed.update(e.value.get("habitats") or [])
+    possible = libs.possible_on_floor(theme, placements)
+    dwellers: dict = {}
+    for e in ds.of_type("EnemyData"):
+        for h in e.value.get("habitats") or []:
+            dwellers.setdefault(h, []).append(e.id)
+    for element in sorted(possible):
+        if element not in dwellers or element in listed:
+            continue
+        issues.append(_issue(
+            "error", "LEVEL_HABITAT_DWELLER_MISSING",
+            f"floor {fi} can offer '{element}' — its theme '{theme}' and the props its "
+            f"placements may put down give [{', '.join(sorted(possible))}] — but its pool lists "
+            f"nothing that dwells there ([{', '.join(sorted(dwellers[element]))}] do). Add one, "
+            f"or drop what gives the element (OZX-1802)",
+            entity=plan_id, pointer=f"{fptr}/enemyPool"))
+    return issues
+
+
+def _enemy_habitat_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
+    """`Habitats.ValidateAll` (boot), per enemy: every element it names is one
+    some prop or theme ground provides — anything else is a typo, or a habitat
+    no room can ever offer."""
+    named = v.get("habitats") or []
+    if not named:
+        return []
+    libs = habitats.Libraries(ds)
+    if libs.props_doc is None or libs.themes_doc is None:
+        return []
+    provided = libs.provided_anywhere()
+    return [_issue(
+        "error", "ENEMY_HABITAT_UNPROVIDED",
+        f"enemy '{enemy_id}' lives in '{h}', which no prop or theme ground provides "
+        f"(prop_habitats / theme_habitats) — the game refuses to boot",
+        entity=enemy_id, pointer=f"/habitats/{hi}")
+        for hi, h in enumerate(named) if not h or h not in provided]
+
+
+def validate_habitat_config(ds: Dataset) -> list[dict]:
+    """The library-wide checks over the three habitat config files:
+    `Habitats.ValidateAll` (boot; the per-enemy half is `validate_enemy`'s)
+    and `PropSpawnRuleValidator.ValidateRules` (every level load)."""
+    libs = habitats.Libraries(ds)
+    issues: list[dict] = []
+    for (dtype, cid), doc in ((habitats.PROP_HABITATS, libs.props_doc),
+                              (habitats.THEME_HABITATS, libs.themes_doc),
+                              (habitats.PROP_SPAWN_RULES, libs.rules_doc)):
+        if doc is None:
+            issues.append(_issue(
+                "error", "DATA_CONFIG_MISSING",
+                f"{dtype} '{cid}' not found in GameData; the game refuses to "
+                f"{'load a level' if cid == 'prop_spawn_rules' else 'boot'} without it",
+                entity=cid))
+
+    def bad(code, entity, msg, ptr):
+        issues.append(_issue("error", code, msg, entity=entity, pointer=ptr))
+
+    if libs.themes_doc is not None:
+        scale = libs.themes_doc.get("dwellerWeightScale") or 0
+        if not scale >= 1:
+            bad("HABITAT_CONFIG_INVALID", "theme_habitats",
+                f"'theme_habitats'.dwellerWeightScale is {scale}; it multiplies a dweller's "
+                f"weight in a room of its element and must be at least 1 (OZX-1802)",
+                "/dwellerWeightScale")
+        seen: set = set()
+        for i, t in enumerate(libs.themes_doc.get("themes") or []):
+            tid = (t or {}).get("themeId")
+            if not tid:
+                bad("HABITAT_CONFIG_INVALID", "theme_habitats",
+                    "a theme entry with no themeId", f"/themes/{i}")
+            elif tid in seen:
+                bad("HABITAT_CONFIG_INVALID", "theme_habitats",
+                    f"theme '{tid}' is listed twice", f"/themes/{i}/themeId")
+            seen.add(tid)
+    if libs.props_doc is not None:
+        seen = set()
+        for i, e in enumerate(libs.props_doc.get("props") or []):
+            pid = (e or {}).get("prop")
+            if not pid:
+                bad("HABITAT_CONFIG_INVALID", "prop_habitats",
+                    "a prop entry with no prop id", f"/props/{i}")
+            elif pid in seen:
+                bad("HABITAT_CONFIG_INVALID", "prop_habitats",
+                    f"prop '{pid}' is listed twice", f"/props/{i}/prop")
+            seen.add(pid)
+    if libs.rules_doc is not None:
+        rules = libs.rules_doc.get("rules") or []
+        if not rules:
+            bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                "'prop_spawn_rules' has no rules", "/rules")
+        for i, r in enumerate(rules):
+            rptr = f"/rules/{i}"
+            key = (r or {}).get("prefabKey")
+            if not key:
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    "'prop_spawn_rules' has a rule with no prefabKey", f"{rptr}/prefabKey")
+                continue
+            if r.get("category") not in habitats.PROP_CATEGORIES:
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    f"rule '{key}' has category '{r.get('category')}', which no prop registers "
+                    f"spawn points under (PropSpawnCategory)", f"{rptr}/category")
+            if not r.get("themeIds"):
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    f"rule '{key}' lists no themeIds", f"{rptr}/themeIds")
+            if libs.props_doc is not None and not libs.provides(key):
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    f"rule '{key}' carries spawn points, but 'prop_habitats' gives it no "
+                    f"habitat element, so no enemy may come out of it", f"{rptr}/prefabKey")
+            if (r.get("footprintCols") or 0) < 1 or (r.get("footprintRows") or 0) < 1:
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    f"rule '{key}' has no footprint", f"{rptr}/footprintCols")
+            lo, hi = r.get("ringMin") or 0, r.get("ringMax") or 0
+            if not (lo == 0 and hi == 0) and not (0 <= lo < hi <= 1):
+                bad("PROP_SPAWN_RULE_INVALID", "prop_spawn_rules",
+                    f"rule '{key}' has ring band [{lo}, {hi}]; it needs 0 ≤ ringMin < ringMax "
+                    f"≤ 1 (or both 0)", f"{rptr}/ringMin")
     return issues
 
 
@@ -979,6 +1320,7 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
             # A rail launch has had its body-placement fields refused above,
             # by name; checking their shape as well would say it twice.
             if not rail:
+                issues.extend(_prop_category_launch_issues(ds, encounter_id, index, aptr, action))
                 issues.extend(_variant_issues(
                     ds, encounter_id, f"step {index}", aptr, action.get("enemyId"),
                     list(action.get("variantIds") or []),
@@ -2028,6 +2370,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_depth_scale_issues(plan_id, fi, fptr, floor))
 
     issues.extend(_variant_tier_issues(ds, plan_id, fi, fptr, floor, arrival))
+
+    issues.extend(_habitat_plan_issues(ds, plan_id, fi, fptr, floor))
     return issues
 
 
@@ -3486,7 +3830,8 @@ def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
         return [_issue("error", "DATA_REFERENCE_MISSING",
                        f"enemy '{enemy_id}' not found")]
     return (_wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
-            + _family_issues(ds, enemy_id, doc.value))
+            + _family_issues(ds, enemy_id, doc.value)
+            + _enemy_habitat_issues(ds, enemy_id, doc.value))
 
 
 def family_of(enemy: dict, enemy_id: str) -> tuple[str, int]:
@@ -3636,6 +3981,8 @@ def _hatch_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
 
 def validate_all(ds: Dataset) -> list[dict]:
     issues = list(ds.problems)
+    if ds.game_data is not None:
+        issues += validate_habitat_config(ds)
     for doc in ds.of_type("LevelData"):
         issues += validate_level(ds, doc.id)
     for doc in ds.of_type("LevelBasePlanData"):

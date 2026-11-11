@@ -110,7 +110,7 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 | `dropTableId` | 这批敌人摇的表（替换 `EnemyData.dropTableId`） | 10 step |
 | ~~`guaranteedDrop`~~ | OZX-1380 删除，见 §1.6 | —— |
 | `viaSpawner` | 走生产者通道，见 §1.4 | 20 step（6 个 spawner 类型） |
-| `at` | 生成点类别覆盖 | **0** |
+| `at` | 生成点类别覆盖；`waterpool`（OZX-1621，`PropSpawnCategory.cs:11`）从房间里 WaterPool 的轮廓点出生，而不是 tilemap 生成层，规则见 `level_data_reference.md` §5.7（核对于 `ozx_base@7c8e3c8ea`） | 7（`spawn_waterpool_01` 4 / `_02` 3） |
 
 ### 1.4 两个必须在 UI 里讲清楚的语义
 
@@ -184,6 +184,7 @@ pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntrie
 | `hatchPool` / `hatchCountMin/Max` / `hatchSpreadRadius` | 孵化池与一窝的大小，见 §2.4 | 1 |
 | `spawnConfig.enemyIds[]` | 该敌人能轮转生产的类型 | **0 份数据使用** |
 | `projectileId` / `beamId` | 远程弹道；`beamId` 非空时 `projectileId` 被忽略 | — |
+| `habitats` | OZX-1788 / OZX-1802（`EnemyData.cs:23`）：它**栖息**的要素（`water` / `sand` …），多选，省略 = 无。不限制去哪；有该要素的房间给它加权，只有它能从提供该要素的 prop 冒出（`at: "waterpool"`），楼层能出现该要素就要有它这类栖息者。每个要素必须有 prop 或 theme 地面提供（`HabitatData.cs:226` `ValidateAll` → `ENEMY_HABITAT_UNPROVIDED`）。规则全文见 `level_data_reference.md` §5.7 | 9（8 water / 1 sand） |
 | `spawnMinWallDistance` / `wallRepelDistance` | OZX-1263，世界单位（1 格 = 1），0 = 关。前者：直放（`LaunchPlacement`）只收离房间矩形每条边 ≥ 该值的点，jitter 夹回内矩形——房间里没有这样的内矩形时 `RoomWallClearance.ClampInside` **抛**；后者：活着时离墙更近就主动飞开。负值报错（`ENEMY_WALL_DISTANCE_NEGATIVE`）；≥ 5 时标准 16×10 房一个合格点都没有，直放的身体全被丢（`ENEMY_WALL_CLEARANCE_UNPLACEABLE`，Warning，大复合房仍可能放得下） | 1（broodwing 3 / 2） |
 
 `role` 是这份数据里最重要的一个字段：它同时决定敌人放在哪层生成点、以及 encounter 不写 `at` 时的默认落点。改 `role` 等于改所有引用该敌人的 encounter 的落点。
