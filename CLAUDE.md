@@ -17,6 +17,8 @@ that way unless there is a strong reason not to.
 - `ozxlevel/plandefaults.py` — the `floorDefaults` merge (`FloorPlanDefaults.Merge`) and
   `PortionResolver`; every plan check runs on merged floors and reroutes findings to the
   node that holds the value.
+- `ozxlevel/habitats.py` — the `Habitats` rules (OZX-1788 / OZX-1802: what a room's theme and
+  props offer, who dwells there) and the `prop_spawn_rules` lookups (WaterPool, OZX-1622).
 - `ozxlevel/tilemaps.py` — TilemapData facts (stat-stamped, never trusted to stay put: the
   room-template sync replaces it) and the pinned-template door rules. The pool is the
   mirror-expanded one `RoomTilemapQuery.LoadPool` draws from (OZX-1467: four orientations
