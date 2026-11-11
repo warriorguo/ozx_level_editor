@@ -107,13 +107,14 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 | 字段 | 说明 | 实测用量 |
 |---|---|---|
-| `verb` | `launch`，或 `sound`（OZX-1173：只读 `soundId`，其余 launch 字段都不适用，`EncounterValidator` 校验完 `soundId` 非空就 return）；缺席 = 纯等待 | 205 launch / 2 缺席 |
+| `verb` | `launch`，或 `sound`（OZX-1173：只读 `soundId`，其余 launch 字段都不适用，`EncounterValidator` 校验完 `soundId` 非空就 return），或 `door_close`（OZX-1931：只读 `viaDoor`，关掉之前 viaDoor launch 打开的那扇门，`EncounterValidator.cs:19`、`:241`，核对于 `ozx_base@2e204463b`）；缺席 = 纯等待；其它值 → `ENCOUNTER_ACTION_VERB_INVALID` | 205 launch / 2 缺席 |
 | `enemyId` | 必填 | 205 |
 | `min` / `max` | 数量区间，闭区间随机 | 最常见是 min==max |
 | `eliteCount` | 前 N 只以 elite 出生 | 11 step |
 | `dropTableId` | 这批敌人摇的表（替换 `EnemyData.dropTableId`） | 10 step |
 | ~~`guaranteedDrop`~~ | OZX-1380 删除，见 §1.6 | —— |
 | `viaSpawner` | 走生产者通道，见 §1.4 | 20 step（6 个 spawner 类型） |
+| `viaDoor` | OZX-1931 / OZX-1932（`EncounterData.cs:101-106`）：`up`/`down`/`left`/`right` 让房间那一侧的门变成刷怪口（门亮红、对玩家仍关着），身体逐个走进来；门一直开着给后面的 launch 用，直到同一拼写的 `door_close`。`other` = 进门那扇以外、且不是脚本点名的门，RoomReady 时抽一扇（`EncounterDoors.OtherCandidates`，`EncounterDoors.cs:42`）。规则见 §1.5「门刷怪」 | 0（出货数据没人用） |
 | `at` | 生成点类别覆盖；`waterpool`（OZX-1621，`PropSpawnCategory.cs:11`）从房间里 WaterPool 的轮廓点出生，而不是 tilemap 生成层，规则见 `level_data_reference.md` §5.7（核对于 `ozx_base@7c8e3c8ea`） | 7（`spawn_waterpool_01` 4 / `_02` 3） |
 
 ### 1.4 两个必须在 UI 里讲清楚的语义
@@ -126,7 +127,9 @@ OZX-947 之前这里是 `op` + `children` 的布尔树。`JsonUtility` 无法表
 
 ### 1.5 校验（`EncounterValidator` 已有 + 需要补的）
 
-已有（结构性，抛异常）：verb 既非 `launch` 也非 `sound`、`sound` 缺 `soundId`（缺了只在 `SoundServiceAdapter` 打一行日志，看起来触发了其实没声音）、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
+已有（结构性，抛异常）：verb 不是 `launch` / `sound` / `door_close` 之一、`sound` 缺 `soundId`（缺了只在 `SoundServiceAdapter` 打一行日志，看起来触发了其实没声音）、`launch` 缺 `enemyId`、`min < 0`、`max < min`、`eliteCount < 0`、`time.seconds < 0`、`touch` 缺 `triggerId`、`killed` 缺 `enemyId`、`custom` 缺 `key`、未知 `kind`。
+
+**门刷怪**（OZX-1931 / OZX-1932，`EncounterValidator.cs`，核对于 `ozx_base@2e204463b`）：`viaDoor` 只认 `up`/`down`/`left`/`right`/`other`，launch 与 `door_close` 都查（`IsDoorToken`，`:34`）→ `ENCOUNTER_DOOR_SIDE_INVALID`。viaDoor launch 不读的字段按名拒（`DoorLaunchProblem`，`:307`）→ `ENCOUNTER_DOOR_LAUNCH_FIELD_UNREAD`：`viaSpawner`（两个来源只能选一个）、`at`、`boss`、`variantIds`、cluster / `sharedRoot` / `fanArcDegrees`；轨道 launch 带 `viaDoor` 归 `ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD`。按播放顺序配对（`ValidateDoorPairing`，`:80`）：每个被 viaDoor launch 打开的拼写都要有之后的同拼写 `door_close`，`door_close` 必须关一扇此刻开着的门（`other` 与具体方向各算各的）→ `ENCOUNTER_DOOR_UNPAIRED`；开着的刷怪门让房间永远不 calm，等于封房。房间侧（`EncounterRunner.ValidateSpawnerDoors`，`EncounterRunner.cs:226`，RoomReady 抛）：点名的方向必须是该房真实存在的门 → `ROOM_ENCOUNTER_DOOR_MISSING`（cave 通道没有门，用了 viaDoor 也报这条）；`other` 的候选 = 房间的门 − 进门那扇 − 点名的方向，空就抛——编辑器不知道玩家从哪扇进，所以剩 0 扇（总是抛）或只剩 1 扇可进入的门（从它进来时抛；`exitsRun` 门永远不是入口）都报 `ROOM_ENCOUNTER_DOOR_OTHER_NO_CANDIDATE`。点名的方向即使是进门那扇上游也允许；房间唯一的门被点名时编辑器给 Warning `ROOM_ENCOUNTER_DOOR_ONLY_ENTRANCE`（怪从玩家刚进来的门进）。生成器目前不产 viaDoor（`Game.Level` 无引用），OZX-1932 评论里「生成遭遇只给 ≥2 扇门的房间用 `other`」是生成器的事，不在编辑器。房间卡的敌人行显示「in through the up door」/「in through a door other than the entry」，`door_close` 像 `sound` 一样只当作后续 launch 的门槛。
 
 **轨道 launch**（OZX-1309 列车 / OZX-1317 油罐车）：`enemyId` / `railTrainId` / `railOilTankId` 三选一（`ENCOUNTER_LAUNCH_TARGET_AMBIGUOUS`），`min..max` 数的是**列车数 / 辆数**。不读刷怪层字段，写了就按名拒（`EncounterValidator.RailLaunchProblem` → `ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD`）：`at`、`eliteCount`、`boss`、`variantIds`、cluster / `sharedRoot` / `fanArcDegrees`；油罐车另拒 `viaSpawner` 与 `dropTableId`。**注意两条后来放开的**：OZX-1315 起列车的每节车会掷 launch 的 `dropTableId`（pool 楼层会给每条 launch 盖楼层表）；OZX-1341 起列车可以走 rail factory 的 `viaSpawner`。`enemyId` 指向 `railConfig.enabled` 的敌人，执行器抛（`ENCOUNTER_RAIL_ENEMY_AS_BODY`）——轨道敌人只能作为列车的一节刷。`boss` 不能走 `viaSpawner`（OZX-1328，`ENCOUNTER_BOSS_ON_SPAWNER_CHANNEL`）。
 

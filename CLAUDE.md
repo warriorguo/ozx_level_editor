@@ -84,7 +84,7 @@ The data and the game runtime live in a different repo: `/Users/andrew/Codes/git
 
 These are the ones that produce broken levels with no error, so they belong in validation and in any code that writes data:
 
-- **Encounter "wait" is an absent `action`**, not `"verb": "wait"`. The only legal verb is `launch`; anything else throws in `EncounterValidator`. Likewise "immediate" is an **omitted `condition`**.
+- **Encounter "wait" is an absent `action`**, not `"verb": "wait"`. The legal verbs are `launch`, `sound` (OZX-1173, reads `soundId` only) and `door_close` (OZX-1931, reads `viaDoor` only); anything else throws in `EncounterValidator`. Likewise "immediate" is an **omitted `condition`**.
 - **Tilemap JSON is `[x][y]`** — the outer array is the column (`RoomTilemapData.Visit`, `RoomGroundRenderer` read it that way). Reading it as rows transposes non-square rooms and makes cell/footprint checks lie. Every file's own `meta.width/height` is stated the other way round (all 23 have `meta.width == inner length`), so trust the code, not `meta`.
 - **Unknown `generatorType` silently becomes `tree`** (`ParseGeneratorType`), so an unknown value there must be an Error, not a Warning.
 - **`inlineEncounter` / `inlineLootPlan` / `floorLootTableId` are `[NonSerialized]`** runtime synthesis. Never write them back to source JSON.

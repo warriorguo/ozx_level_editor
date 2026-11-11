@@ -872,6 +872,10 @@ function renderRooms() {
             : [source.meta];
           if (e.eliteCount) bits.push(`elite ×${e.eliteCount}`);
           if (e.viaSpawner) bits.push(`via ${e.viaSpawner}`);
+          // OZX-1931 / 1932: walked in through a door, held open (red) until
+          // a door_close step on the same side.
+          if (e.viaDoor) bits.push(e.viaDoor === 'other'
+            ? 'in through a door other than the entry' : `in through the ${e.viaDoor} door`);
           // OZX-1621: launched from a placed prop's rim (a WaterPool), not a
           // tilemap spawn layer.
           if (e.at) bits.push(`from the ${e.at}`);

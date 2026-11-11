@@ -1012,8 +1012,8 @@ class Dataset:
             # Absent action == pure wait, not an enemy source. A `sound`
             # action (OZX-1173) spawns nothing either, but it holds the
             # playhead on its condition the same way, so the launches after
-            # it inherit that gate.
-            if not action or action.get("verb") == "sound":
+            # it inherit that gate. So does a `door_close` (OZX-1931).
+            if not action or action.get("verb") in ("sound", "door_close"):
                 pending_gates.append(describe_condition(condition))
                 continue
 
@@ -1069,6 +1069,9 @@ class Dataset:
                 "stepId": step.get("id"),
                 "eliteCount": action.get("eliteCount", 0),
                 "viaSpawner": action.get("viaSpawner"),
+                # OZX-1931 / OZX-1932: the bodies walk in one by one through
+                # this side's door ("other": one besides the entry door).
+                "viaDoor": action.get("viaDoor") or None,
                 # OZX-1621: a prop category (`waterpool`) launches from the
                 # placed prop's rim instead of a tilemap spawn layer.
                 "at": action.get("at") or None,

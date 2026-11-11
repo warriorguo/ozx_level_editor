@@ -173,6 +173,7 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                     f"a cargo entry's lootTableId, or the prize in guaranteedDrops",
                     entity=level_id, pointer=f"{rptr}/lootPlanId"))
             issues.extend(_room_pin_issues(ds, level_id, rid, rptr, room))
+            issues.extend(_room_door_spawn_issues(ds, level_id, rid, rptr, room))
             for name, dtype in (("encounterId", "EncounterData"),
                                 ("bossId", "EnemyData")):
                 ref = room.get(name)
@@ -762,6 +763,14 @@ def _cave_content_issues(ds: Dataset, entity: str, where: str, ptr: str,
         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
                              f"{where}: encounterId '{enc_id}' does not exist",
                              entity=entity, pointer=f"{ptr}/encounterId"))
+    if enc is not None and is_cave_passage(cave) and any(encounter_door_spellings(enc.value)):
+        # OZX-1931: a cave passage has no doors; EncounterRunner throws at
+        # RoomReady on an encounter that names one.
+        issues.append(_issue(
+            "error", "ROOM_ENCOUNTER_DOOR_MISSING",
+            f"{where}: encounter '{enc_id}' brings bodies in viaDoor, but a cave has no "
+            f"doors — EncounterRunner throws at RoomReady",
+            entity=entity, pointer=f"{ptr}/encounterId"))
     if enc is not None and is_cave_passage(cave):
         for index, step in enumerate(enc.value.get("steps") or []):
             action = (step or {}).get("action") or {}
@@ -1459,12 +1468,18 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                         f"the step looks like it fired and plays nothing",
                         entity=encounter_id, pointer=f"{sptr}/action"))
                 continue
+            # OZX-1931: like sound, a door_close reads one field — the side
+            # it shuts — and EncounterValidator returns after checking it.
+            if verb == "door_close":
+                issues.extend(_door_side_issues(encounter_id, index, sptr, action, "door_close"))
+                continue
             # "wait" is not a verb — a wait step is one with no action at all.
             if verb != "launch":
                 issues.append(_issue(
                     "error", "ENCOUNTER_ACTION_VERB_INVALID",
                     f"step {index}: verb '{verb}' is invalid; the legal verbs are "
-                    f"'launch' and 'sound' (a wait step omits `action` entirely)",
+                    f"'launch', 'sound' and 'door_close' (a wait step omits `action` "
+                    f"entirely)",
                     entity=encounter_id, pointer=f"{sptr}/action/verb"))
             enemy_id = action.get("enemyId")
             rail_issues, rail = _rail_launch_issues(ds, encounter_id, index, sptr, action)
@@ -1541,9 +1556,15 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                     f"step {index}: boss cannot ride a viaSpawner launch — the channel never "
                     f"reads the flag, so the floor's Boss would spawn as an ordinary body",
                     entity=encounter_id, pointer=f"{aptr}/boss"))
-            # A rail launch has had its body-placement fields refused above,
-            # by name; checking their shape as well would say it twice.
-            if not rail:
+            # OZX-1931: a door lets bodies in one by one, so it refuses by
+            # name every field that places or lays them out elsewhere. A rail
+            # launch's viaDoor is the rail check's to refuse.
+            door = bool(action.get("viaDoor")) and not rail
+            if door:
+                issues.extend(_door_launch_issues(encounter_id, index, sptr, action))
+            # A rail or door launch has had its body-placement fields refused
+            # above, by name; checking their shape as well would say it twice.
+            if not rail and not door:
                 issues.extend(_prop_category_launch_issues(ds, encounter_id, index, aptr, action))
                 issues.extend(_variant_issues(
                     ds, encounter_id, f"step {index}", aptr, action.get("enemyId"),
@@ -1553,6 +1574,160 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                     encounter_id, f"step {index}", aptr, action,
                     via_spawner=bool(action.get("viaSpawner"))))
 
+    issues.extend(_door_pairing_issues(encounter_id, doc.value))
+    return issues
+
+
+# OZX-1931 / OZX-1932 (`EncounterValidator.DoorSides` / `DoorOther`): the
+# spellings of `viaDoor` — a side of the room, or "other", one of its doors
+# besides the one the player came in by, picked at RoomReady.
+DOOR_SIDES = ("up", "down", "left", "right")
+DOOR_OTHER = "other"
+# `DoorDirection` { Up, Down, Left, Right } — a LevelData door's `direction`.
+DOOR_SIDE_OF_DIRECTION = dict(enumerate(DOOR_SIDES))
+
+
+def _door_side_issues(encounter_id: str, index: int, sptr: str, action: dict,
+                      verb: str) -> list[dict]:
+    side = action.get("viaDoor")
+    if side == DOOR_OTHER or side in DOOR_SIDES:
+        return []
+    return [_issue("error", "ENCOUNTER_DOOR_SIDE_INVALID",
+                   f"step {index}: '{verb}' needs viaDoor = one of "
+                   f"{'/'.join(DOOR_SIDES)}/{DOOR_OTHER}, got '{side or ''}'",
+                   entity=encounter_id,
+                   pointer=f"{sptr}/action/viaDoor" if "viaDoor" in action else f"{sptr}/action")]
+
+
+def _door_launch_issues(encounter_id: str, index: int, sptr: str,
+                        action: dict) -> list[dict]:
+    """`EncounterValidator.DoorLaunchProblem` (OZX-1931) on a viaDoor launch.
+
+    The bodies walk in through the door one at a time, so another source
+    (`viaSpawner`), another spot (`at`), the Boss flag (placed by its bossId
+    launch only), variants and clump fields are never read — upstream throws
+    on the first, each is named here.
+    """
+    side_issues = _door_side_issues(encounter_id, index, sptr, action, "launch")
+    if side_issues:
+        return side_issues
+    aptr = f"{sptr}/action"
+    unread = []
+    if action.get("viaSpawner"):
+        unread.append(("viaSpawner", f"viaSpawner '{action['viaSpawner']}' (the door and the "
+                                     f"spawner both name where the bodies come from — pick one)"))
+    if action.get("at"):
+        unread.append(("at", f"at '{action['at']}' (the bodies walk in through the door)"))
+    if action.get("boss"):
+        unread.append(("boss", "boss (a floor's Boss is placed by its bossId launch)"))
+    if action.get("variantIds"):
+        unread.append(("variantIds", "variantIds (the door lets in enemyId only)"))
+    for k in ("clusterSizeMin", "clusterSizeMax", "clusterRadius", "sharedRoot", "fanArcDegrees"):
+        if action.get(k):
+            unread.append((k, "cluster / sharedRoot fields (the bodies walk in one at a time)"))
+            break
+    return [_issue("error", "ENCOUNTER_DOOR_LAUNCH_FIELD_UNREAD",
+                   f"step {index}: a viaDoor '{action['viaDoor']}' launch sets {what}, which "
+                   f"it never reads — EncounterValidator refuses it",
+                   entity=encounter_id, pointer=f"{aptr}/{field}")
+            for field, what in unread]
+
+
+def _door_pairing_issues(encounter_id: str, value: dict) -> list[dict]:
+    """`EncounterValidator.ValidateDoorPairing` (OZX-1931), in playhead order.
+
+    Every door a viaDoor launch opens must be shut by a later `door_close`
+    on the same spelling, and a `door_close` must name a door open at that
+    point. An open spawner door keeps the room from ever going calm, so one
+    left open seals the room; closing a shut door is a typo for another side.
+    """
+    issues: list[dict] = []
+    opened: dict = {}  # spelling -> index of the last launch that opened it
+    for index, step in enumerate(value.get("steps") or []):
+        action = (step or {}).get("action") or {}
+        side = action.get("viaDoor")
+        if action.get("verb") == "launch" and side:
+            opened[side] = index
+        elif action.get("verb") == "door_close":
+            if side in opened:
+                del opened[side]
+            else:
+                issues.append(_issue(
+                    "error", "ENCOUNTER_DOOR_UNPAIRED",
+                    f"step {index}: door_close '{side or ''}', but no earlier viaDoor launch "
+                    f"opened that door (or it was already closed)",
+                    entity=encounter_id, pointer=f"/steps/{index}/action"))
+    for side, index in opened.items():
+        issues.append(_issue(
+            "error", "ENCOUNTER_DOOR_UNPAIRED",
+            f"step {index}: opens door '{side}' with a viaDoor launch and nothing closes it. "
+            f"An open spawner door keeps the room from ever going calm — add a door_close "
+            f"'{side}' step after its last launch",
+            entity=encounter_id, pointer=f"/steps/{index}/action/viaDoor"))
+    return issues
+
+
+def encounter_door_spellings(value: dict) -> tuple:
+    """(named sides in step order, uses "other") — `EncounterDoors.NamedSides`
+    / `UsesOther` (OZX-1932). door_close steps count: upstream reads every
+    step's viaDoor, whatever its verb."""
+    named: list = []
+    other = False
+    for step in value.get("steps") or []:
+        side = ((step or {}).get("action") or {}).get("viaDoor")
+        if side in DOOR_SIDES and side not in named:
+            named.append(side)
+        other = other or side == DOOR_OTHER
+    return named, other
+
+
+def _room_door_spawn_issues(ds: Dataset, level_id: str, rid: str, rptr: str,
+                            room: dict) -> list[dict]:
+    """`EncounterRunner.ValidateSpawnerDoors` at RoomReady (OZX-1931 / 1932).
+
+    Every side the room's encounter names must be a door of the room. "other"
+    is drawn from the room's doors minus the entry door minus the named sides;
+    no candidate throws — always when nothing is left, and on every arrival by
+    the last door left when only one is (a run exit is never arrived by).
+    A named side may be the entry door; the room's only door named outright
+    is legal but lets the wave in where the player just came from (warning).
+    """
+    encounter_id = room.get("encounterId")
+    doc = ds.get("EncounterData", encounter_id) if encounter_id else None
+    if doc is None:
+        return []
+    named, other = encounter_door_spellings(doc.value)
+    if not named and not other:
+        return []
+    doors = room.get("doors") or []
+    sides = [DOOR_SIDE_OF_DIRECTION.get(d.get("direction", 0)) for d in doors]
+    ptr = f"{rptr}/encounterId"
+    issues: list[dict] = []
+    for side in named:
+        if side not in sides:
+            issues.append(_issue(
+                "error", "ROOM_ENCOUNTER_DOOR_MISSING",
+                f"{rid}: encounter '{encounter_id}' launches viaDoor '{side}', but the room has "
+                f"no door on that side (doors: {', '.join(sides) or 'none'}) — EncounterRunner "
+                f"throws at RoomReady", entity=level_id, pointer=ptr))
+    if len(doors) == 1 and sides[0] in named and not doors[0].get("exitsRun"):
+        issues.append(_issue(
+            "warning", "ROOM_ENCOUNTER_DOOR_ONLY_ENTRANCE",
+            f"{rid}: encounter '{encounter_id}' brings bodies in through '{sides[0]}', the "
+            f"room's only door — the one the player just came in by. viaDoor 'other' cannot "
+            f"help here; a direct launch can", entity=level_id, pointer=ptr))
+    if other:
+        rest = [(s, d) for s, d in zip(sides, doors) if s not in named]
+        if not rest or (len(rest) == 1 and not rest[0][1].get("exitsRun")):
+            when = ("always" if not rest
+                    else f"whenever the player comes in by the {rest[0][0]} door")
+            issues.append(_issue(
+                "error", "ROOM_ENCOUNTER_DOOR_OTHER_NO_CANDIDATE",
+                f"{rid}: encounter '{encounter_id}' launches viaDoor 'other', but besides the "
+                f"sides it names ({', '.join(named) or 'none'}) the room has "
+                f"{'no door' if not rest else 'one door'} (doors: {', '.join(sides) or 'none'}); "
+                f"'other' excludes the entry door, so EncounterRunner throws at RoomReady {when}",
+                entity=level_id, pointer=ptr))
     return issues
 
 
@@ -1667,6 +1842,9 @@ def _rail_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
     elif any(action.get(k) for k in ("clusterSizeMin", "clusterSizeMax", "clusterRadius",
                                      "sharedRoot", "fanArcDegrees")):
         unread = "cluster / sharedRoot fields (a train is laid along the rail, not clumped)"
+    elif action.get("viaDoor"):
+        # OZX-1931 (`DoorLaunchProblem`): trains are laid on the rail.
+        unread = f"viaDoor '{action['viaDoor']}' (cars are laid on the rail, not walked in)"
     if unread:
         err("ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD", f"a rail launch sets {unread}, which it never reads")
     return issues, True
