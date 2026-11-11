@@ -905,7 +905,7 @@ class Dataset:
                             for i in items),
         }
 
-    def wave_drop(self, action: dict, tables: dict | None = None) -> dict:
+    def wave_drop(self, action: dict, tables: dict | None = None) -> dict | None:
         """What one launch wave drops when it dies — the Effective Drop view.
 
         `EventBindings.OnEnemyDied` resolves exactly one table, in this order
@@ -926,7 +926,14 @@ class Dataset:
 
         The elite bonus is `item_exp_large` on top of whatever rolled, never
         instead of it.
+
+        None for a rail oil tank launch (OZX-1798): the tank is neutral and
+        drops nothing — no table, not even the fallback — and EncounterValidator
+        refuses a dropTableId on it, which is why OZX-1791 made
+        `LevelBasePlanAssigner` stop stamping the floor table on its launch.
         """
+        if action.get("railOilTankId"):
+            return None
         enemy_id = action.get("enemyId")
         # OZX-1041 renamed this field. The two meanings that used to share it
         # are now `dropTableId` (what this group rolls) and `guaranteedDrop`

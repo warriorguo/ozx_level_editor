@@ -253,11 +253,11 @@ enemy picker 至少显示 `category / role / movementType / attackType / footpri
 
 1. 敌人死亡：`instance/action override` → `EnemyData.dropTableId` → `item_exp_small` 兜底，三者取第一个命中的**一张**表；elite 额外直接给 `item_exp_large`（相加，不替换）。
    （`EventBindings.cs:103-138`。编辑器已按这一条实现：每个 launch wave 的敌人行
-   下面挂一行 `DROPS`，标出最终生效的表、它是哪一级命中的，以及表里的物品；
+   下面挂一行 `DROPS`（轨道油罐行没有——它什么都不掉，连兜底都没有，OLE-86），标出最终生效的表、它是哪一级命中的，以及表里的物品；
    带技能的那一行高亮，因为这是能靠打怪拿到技能的通道，而它不在 cargo 上，Loot
    栏看不到。第 3、4 条的楼层合成与 cap 仍未实现。）
 2. ~~房间清场~~：OZX-1381 删除（`lootPlanId` / `inlineLootPlan`），全被 cap 掉时也不再补发 exp+heal。房间自己的那一行现在是 `guaranteedDrops`（开局波最后一杀额外支付）。
-3. 楼层通道：floor `probabilistic` 合成的楼层表会覆盖 enemy pool entry 自带的 drop override，并作为 `floorLootTableId` 给每间房的箱子；`guaranteed` 与过渡钥匙追加到选中房间的 `guaranteedDrops`。
+3. 楼层通道：floor `probabilistic` 合成的楼层表会覆盖 enemy pool entry 自带的 drop override（盖到房间 inlineEncounter 每条 launch 的 `dropTableId` 上，**轨道油罐 launch 除外**——OZX-1791 起 `LevelBasePlanAssigner` 跳过 `railOilTankId` 非空的 launch，`LevelBasePlanAssigner.cs:1250`，核对于 `ozx_base@2e204463b`；油罐中立、不掉落，`EncounterValidator` 拒它带 `dropTableId`），并作为 `floorLootTableId` 给每间房的箱子；`guaranteed` 与过渡钥匙追加到选中房间的 `guaranteedDrops`。
 4. `floorCap` / `categoryCap` 按实际事件顺序消费；全部候选被 cap 掉时仍回退 `item_exp_small`。
 
 带共享 cap 的跨通道期望值**没有可靠闭式解**，只能用固定 seed 的确定性模拟给分布，不要显示伪精确的百分比。

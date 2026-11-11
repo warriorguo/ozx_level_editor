@@ -339,13 +339,17 @@ def test_a_skill_drop_is_flagged_on_the_wave_that_carries_it(ds):
 
 def test_every_wave_reports_a_drop(ds):
     """There is no such thing as a wave that drops nothing — the chain always
-    lands somewhere, so a blank here would be the view lying."""
+    lands somewhere, so a blank here would be the view lying. The one
+    exception is a rail oil tank (OZX-1798): neutral, no drop at all (OLE-86)."""
     for level_id in ds.ids_of("LevelData"):
         view = ds.level_view(level_id)
         for floor in view["floors"]:
             for room in floor["rooms"]:
                 for wave in room["enemies"]:
                     if wave.get("missing") and "drop" not in wave:
+                        continue
+                    if wave.get("rail") == "tank":
+                        assert wave["drop"] is None, wave
                         continue
                     drop = wave["drop"]
                     assert drop["tableId"] or drop["fallbackItemId"], wave
