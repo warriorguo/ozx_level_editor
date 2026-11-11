@@ -157,8 +157,9 @@ def pin_door_findings(room: dict, tilemap: dict) -> list[tuple[str, str, str]]:
 # The kinds whose adapter defaults to a 2×2 block when `footprintCols` /
 # `footprintRows` are 0 or omitted (StaticPlacementEntryData, LevelData.cs);
 # every other kind is 1×1. The oil tank is always 2×2 and reads neither field
-# (OilTankPlacementLogic.FootprintCols/Rows).
-TWO_BY_TWO_KINDS = ("oiltank", "skill", "upgrade", "device")
+# (OilTankPlacementLogic.FootprintCols/Rows). OZX-1822's ally platform joined
+# them (`AllyPlatformSpawnAdapter.DefaultFootprint`).
+TWO_BY_TWO_KINDS = ("oiltank", "skill", "upgrade", "ally", "device")
 
 
 def placement_footprint(entry: dict) -> tuple:

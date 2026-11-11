@@ -28,6 +28,7 @@
 | `staticPlacements[].mountedEnemyId` | EnemyData | `cargo` 用 |
 | `staticPlacements[].itemId` | ItemData | `equipment` 必需 |
 | `staticPlacements[].skillId` | SkillData | `skill` 必需 |
+| `staticPlacements[].allyId`（OZX-1822） | AllyData（`GameData/allies/`） | `ally` 必需（`AllyPlatformSpawnAdapter.cs:226`，`ozx_base@2e204463b`） |
 | `staticPlacements[].prefabKey` / `decorations[].prefabKey/spriteKey/fxKey` | ResourcesDB key | 视 kind |
 | `staticPlacements[].triggerId` | 与 encounter `touch` 条件的 `triggerId` 闭合 | `trigger` 必需 |
 | `doors[].keyId` | ItemData | 锁门用 |

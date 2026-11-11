@@ -186,7 +186,9 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                 for name, dtype in (("lootTableId", "LootTableData"),
                                     ("mountedEnemyId", "EnemyData"),
                                     ("itemId", "ItemData"),
-                                    ("skillId", "SkillData")):
+                                    ("skillId", "SkillData"),
+                                    # OZX-1822: the ally an ally platform holds.
+                                    ("allyId", "AllyData")):
                     ref = p.get(name)
                     if ref and ds.get(dtype, ref) is None:
                         issues.append(_issue("error", "DATA_REFERENCE_MISSING",
@@ -226,6 +228,16 @@ def validate_level(ds: Dataset, level_id: str) -> list[dict]:
                 issues.extend(_cargo_issues(level_id, rid, pi, pptr, p,
                                             bool(room.get("floorLootTableId"))))
                 issues.extend(_cargo_id_issues(ds, level_id, rid, pi, pptr, p))
+
+                # OZX-1822: AllyPlatformSpawnAdapter.RequireAlly throws when
+                # the room spawns without one (an unknown id is the reference
+                # check's DATA_REFERENCE_MISSING above).
+                if p.get("kind") == "ally" and not p.get("allyId"):
+                    issues.append(_issue("error", "ROOM_PLACEMENT_ALLY_MISSING",
+                                         f"{rid}: placement {pi} is kind 'ally' with no "
+                                         f"allyId; the spawn adapter throws",
+                                         entity=level_id,
+                                         pointer=f"{pptr}/allyId" if "allyId" in p else pptr))
 
                 # SkillPlatformSpawnAdapter throws on both of these when the
                 # room spawns, so an unfinished skill platform takes the whole

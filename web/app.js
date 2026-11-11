@@ -532,6 +532,26 @@ function skillOptions(selected) {
   return opts.join('');
 }
 
+/** Options for an ally platform's picker (OZX-1822).
+ *
+ *  Like the skill picker there is no "none": AllyPlatformSpawnAdapter throws
+ *  on an entry without an allyId. An authored id with no AllyData stays
+ *  selectable, marked, so the picker never misreports the current value.
+ */
+function allyOptions(selected) {
+  const catalog = state.boot.allyCatalog || [];
+  const opts = [];
+  if (!selected) opts.push('<option value="" selected>⟨pick an ally⟩</option>');
+  for (const a of catalog) {
+    opts.push(`<option value="${esc(a.id)}" ${a.id === selected ? 'selected' : ''}
+      >${esc(a.id)}</option>`);
+  }
+  if (selected && !catalog.some((a) => a.id === selected)) {
+    opts.push(`<option value="${esc(selected)}" selected>${esc(selected)} (no AllyData)</option>`);
+  }
+  return opts.join('');
+}
+
 /** Options for a cargo entry's crate picker (OZX-1468).
  *
  *  "" is the ordinary choice — the field omitted, a random look per crate
@@ -782,7 +802,14 @@ function renderRooms() {
           // the row says nothing about what the player actually picks up.
           const isSkill = p.kind === 'skill';
           const skill = p.skill;
-          const detail = isSkill
+          // OZX-1822: an ally platform names the AllyData it releases.
+          const isAlly = p.kind === 'ally';
+          const detail = isAlly
+            ? (p.allyId
+                ? (p.ally.missing ? `${p.allyId} — no AllyData with this id`
+                   : `releases ${p.ally.displayName}${p.ally.flying ? ' (flying)' : ''}`)
+                : 'no allyId — the spawn adapter throws')
+            : isSkill
             ? (p.skillId
                 ? (skill.missing
                     ? `${p.skillId} — no SkillData with this id`
@@ -791,9 +818,10 @@ function renderRooms() {
             : [p.cargoId, p.itemId, p.lootTableId, p.mountedEnemyId]
                 .filter(Boolean).join(' · ')
                 || (p.cells.length ? `${p.cells.length} cell${p.cells.length === 1 ? '' : 's'}` : 'random');
-          const broken = isSkill && (!p.skillId || skill.missing
+          const broken = (isSkill && (!p.skillId || skill.missing
             || (skill.skillType && skill.skillType !== 'active') || !skill.iconKey
-            || !(p.charges > 0));
+            || !(p.charges > 0)))
+            || (isAlly && (!p.allyId || p.ally.missing));
           const count = p.count != null ? p.count : p.cells.length;
           // OZX-1057. Both are rolled/decided once for the whole entry, so
           // they belong beside `count` rather than on the object: `chance`
@@ -807,6 +835,12 @@ function renderRooms() {
                        title="The active skill this platform offers, refilled on touch"
                        ${p.skillIdDeclared ? '' : 'disabled'}
                        >${skillOptions(p.skillId)}</select>`
+            : isAlly
+            ? `<select class="inline-select ally-picker"
+                       data-ally-target="${esc(p.pointer)}/allyId"
+                       data-ally-current="${esc(p.allyId || '')}"
+                       title="OZX-1822: the ally locked on this platform; standing still on it for 1s releases it"
+                       >${allyOptions(p.allyId)}</select>`
             : p.kind === 'cargo'
               ? `<select class="inline-select cargo-picker"
                          data-cargo-target="${esc(p.pointer)}/cargoId"
@@ -1288,6 +1322,15 @@ function wireRoomCards() {
       select.addEventListener('change', async (event) => {
         state.selectedRoomIndex = roomIndex;
         await setSkillId(event.target.dataset.skillTarget, event.target.value);
+      });
+    });
+
+    card.querySelectorAll('.ally-picker').forEach((select) => {
+      select.addEventListener('click', (event) => event.stopPropagation());
+      select.addEventListener('change', async (event) => {
+        state.selectedRoomIndex = roomIndex;
+        const { allyTarget, allyCurrent } = event.target.dataset;
+        await setAllyId(allyTarget, allyCurrent, event.target.value);
       });
     });
 
@@ -2437,6 +2480,14 @@ async function setSkillId(pointer, skillId) {
     [{ op: 'set', path: pointer, value: skillId }], `skill → ${skillId}`);
 }
 
+/** OZX-1822: point an ally platform at the ally it holds. Never cleared —
+ *  an ally entry without an allyId throws at room spawn. */
+async function setAllyId(pointer, current, allyId) {
+  if (!allyId || (current || '') === allyId) return;
+  await applyEdits('LevelData', state.levelId,
+    [{ op: 'put', path: pointer, value: allyId }], `ally → ${allyId}`);
+}
+
 /** OZX-1468: name a crate, or go back to the ordinary look by omitting the
  *  field — an empty string would be "named", and match no CargoData. */
 async function setCargoId(pointer, current, cargoId) {
@@ -2473,8 +2524,11 @@ async function addStatic(kind) {
   // object. So a kind that needs a companion field has to be born with it,
   // or the picker for that field would have nothing to write into.
   // OZX-1400: a platform with no charges throws, so it is born with one.
+  // OZX-1822: an ally platform throws without an allyId, so it is born with
+  // the field and the row's picker asks for one.
   const value = kind === 'skill'
     ? { kind, skillId: '', count: 1, charges: 1 }
+    : kind === 'ally' ? { kind, allyId: '', count: 1 }
     : { kind, count: 1 };
   await applyEdits('LevelData', state.levelId, [{
     op: 'append',

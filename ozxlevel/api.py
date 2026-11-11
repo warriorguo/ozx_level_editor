@@ -97,6 +97,7 @@ class Api:
             "lootCatalog": ds.loot_catalog(),
             "skillCatalog": ds.skill_catalog(),
             "cargoCatalog": ds.cargo_catalog(),
+            "allyCatalog": ds.ally_catalog(),
             "rarityPalette": ds.rarity_palette(),
             "encounters": ds.ids_of("EncounterData"),
             "lootTables": ds.ids_of("LootTableData"),

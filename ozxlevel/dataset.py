@@ -51,7 +51,8 @@ def banned_stages(p: dict) -> list[str]:
         return ["start"]
     return []
 # Kinds whose prefab is not registered as `prefab/<kind>` in ResourcesDB.
-KIND_PREFAB = {"skill": "skillplatform", "upgrade": "upgradeplatform"}
+KIND_PREFAB = {"skill": "skillplatform", "upgrade": "upgradeplatform",
+               "ally": "allyplatform"}
 
 # ISkillService.DefaultDropLevelCap — what `skillDropLevelCap` resolves to
 # when a plan leaves it at 0. There is no "no cap" value; a plan that wants
@@ -608,6 +609,19 @@ class Dataset:
             "sprite": self.sprites.sprite_for_resource_key(icon_key),
         }
 
+    def ally_brief(self, ally_id: str | None) -> dict:
+        """What an ally platform (OZX-1822) releases: an AllyData, or missing."""
+        doc = self.get("AllyData", ally_id) if ally_id else None
+        if doc is None:
+            return {"missing": True, "displayName": None, "flying": False}
+        return {"missing": False,
+                "displayName": doc.value.get("displayName") or doc.id,
+                "flying": bool(doc.value.get("isFlying"))}
+
+    def ally_catalog(self) -> list[dict]:
+        """Every AllyData a `kind: "ally"` placement may name (OZX-1822)."""
+        return [{"id": d.id, **self.ally_brief(d.id)} for d in self.of_type("AllyData")]
+
     def cargo_catalog(self) -> list[dict]:
         """Every CargoData a cargo entry may name in `cargoId` (OZX-1468).
 
@@ -828,7 +842,9 @@ class Dataset:
                  # OZX-1371: picks its own cells, in left-right pairs.
                  "groundlaser",
                  # OZX-1472: the equipment upgrade platform, 2×2, no fields.
-                 "upgrade"]
+                 "upgrade",
+                 # OZX-1822: an ally locked on a 2×2 platform; needs allyId.
+                 "ally"]
         for k in known:
             seen.setdefault(k, 0)
         return [{"id": k, "meta": f"placement · used {seen[k]}×",
@@ -1559,6 +1575,11 @@ class Dataset:
                          # platform renders as an anonymous "skill".
                          "skillId": p.get("skillId"),
                          "skillIdDeclared": "skillId" in p,
+                         # OZX-1822: the AllyData an ally platform holds.
+                         "allyId": p.get("allyId"),
+                         "allyIdDeclared": "allyId" in p,
+                         "ally": (self.ally_brief(p.get("allyId"))
+                                  if p.get("kind") == "ally" else None),
                          # OZX-1468: the crate a cargo entry places; None is
                          # the ordinary look.
                          "cargoId": p.get("cargoId"),
