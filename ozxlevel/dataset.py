@@ -336,7 +336,7 @@ class Dataset:
             meta = " · ".join(x for x in (
                 v.get("movementType"), v.get("attackType"), v.get("role"),
                 ("dwells in " + " / ".join(v["habitats"])) if v.get("habitats") else None,
-                spawnable_brief(v)) if x)
+                spawnable_brief(v), rail_brief(v)) if x)
             out.append({
                 "id": doc.id,
                 "meta": meta or "enemy",
@@ -1853,6 +1853,26 @@ def _stage_budget(enemies_per_room: int, cut: float) -> int:
     # Round half away from zero, as C# does — Python's round() is half-even.
     scaled = math.floor(enemies_per_room * (1 - cut) + 0.5)
     return max(1, scaled)
+
+
+def rail_brief(v: dict) -> str | None:
+    """A rail-bound car's junction policy, for the picker's one-line meta.
+
+    OZX-1693 added "chase" (go after the player, turn round past
+    `chaseTurnMargin`, no sooner than `chaseTurnCooldown`); OZX-1727 lets the
+    axles sit off the body's centre. Empty policy is "circuit".
+    """
+    c = v.get("railConfig") or {}
+    if not c.get("enabled"):
+        return None
+    policy = c.get("junctionPolicy") or "circuit"
+    bits = [f"rail car · {policy}"]
+    if policy == "chase":
+        bits.append(f"turns past {c.get('chaseTurnMargin') or 0:g}u, "
+                    f"every {c.get('chaseTurnCooldown') or 0:g}s at most")
+    if c.get("axleOffset"):
+        bits.append(f"axles {c['axleOffset']:+g}u off centre")
+    return " · ".join(bits)
 
 
 def spawnable_brief(v: dict) -> str | None:

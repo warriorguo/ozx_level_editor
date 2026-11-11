@@ -4374,7 +4374,8 @@ def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
     return (_wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
             + _family_issues(ds, enemy_id, doc.value)
             + _spawn_relation_issues(ds, enemy_id, doc.value)
-            + _enemy_habitat_issues(ds, enemy_id, doc.value))
+            + _enemy_habitat_issues(ds, enemy_id, doc.value)
+            + _rail_config_issues(enemy_id, doc.value))
 
 
 def _spawn_relation_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
@@ -4484,6 +4485,76 @@ def _wall_clearance_issues(enemy_id: str, v: dict) -> list[dict]:
             f"every wall: each directly placed body is dropped, and a jittered one throws",
             entity=enemy_id, pointer="/spawnMinWallDistance"))
     return issues
+
+
+# `RailJunctionPolicies.Parse` (RailTrain.cs): empty is "circuit"; anything
+# else outside these throws, naming the owner.
+RAIL_JUNCTION_POLICIES = ("circuit", "random", "chase")
+
+
+def rail_config_problems(c: dict) -> list:
+    """`RailTrainComposition.Validate` on one enemy's enabled `railConfig`.
+
+    (field, message) per rule broken, in upstream's order: the chassis
+    numbers every rail vehicle drives by (`ValidateChassis`, OZX-1308 /
+    OZX-1317, with OZX-1727's `axleOffset`), the junction policy, then
+    OZX-1693's two chase numbers, read only under `junctionPolicy: "chase"`.
+    Upstream throws on the first; all of them are listed here.
+    """
+    num = lambda k: c.get(k) or 0  # noqa: E731 — JsonUtility: omitted is 0
+    out = []
+    if not num("speed") > 0:
+        out.append(("speed", f"speed {num('speed'):g} must be > 0"))
+    if not num("acceleration") > 0:
+        out.append(("acceleration", f"acceleration {num('acceleration'):g} must be > 0 "
+                                    f"(it is also the brake before turning round)"))
+    tsm = num("turnSpeedMultiplier")
+    if not 0 < tsm <= 1:
+        out.append(("turnSpeedMultiplier", f"turnSpeedMultiplier {tsm:g} must be in (0, 1] "
+                                           f"(1 = no corner slowdown)"))
+    for k in ("turnBlendSeconds", "turnSlowdownMargin", "keepOut"):
+        if num(k) < 0:
+            out.append((k, f"{k} {num(k):g} cannot be negative"))
+    if not num("wheelBase") > 0:
+        out.append(("wheelBase", f"wheelBase {num('wheelBase'):g} must be > 0"))
+    body = num("bodyLength")
+    if not body > 0:
+        out.append(("bodyLength", f"bodyLength {body:g} must be > 0"))
+    if not abs(num("axleOffset")) <= body * 0.5:
+        out.append(("axleOffset", f"axleOffset {num('axleOffset'):g} puts the axles' midpoint "
+                                  f"off the body (|axleOffset| ≤ bodyLength/2 = {body * 0.5:g})"))
+    policy = c.get("junctionPolicy") or ""
+    if policy and policy not in RAIL_JUNCTION_POLICIES:
+        out.append(("junctionPolicy", f"junctionPolicy '{policy}' is not one of "
+                                      f"\"circuit\", \"random\", \"chase\""))
+    elif policy == "chase":
+        if not num("chaseTurnMargin") > 0:
+            out.append(("chaseTurnMargin", f"a \"chase\" train needs chaseTurnMargin > 0 "
+                                           f"(it is {num('chaseTurnMargin'):g}), or a player level "
+                                           f"with its middle flips it round every frame"))
+        if num("chaseTurnCooldown") < 0:
+            out.append(("chaseTurnCooldown", f"chaseTurnCooldown {num('chaseTurnCooldown'):g} "
+                                             f"cannot be negative"))
+    return out
+
+
+def _rail_config_issues(enemy_id: str, v: dict) -> list[dict]:
+    """A rail-bound enemy's `railConfig` (OZX-1308 / OZX-1693 / OZX-1727).
+
+    `RailTrainComposition.Resolve` validates every car of a train as the
+    train spawns (`RailEnemyTrain`), so a bad number takes the room down mid
+    run rather than at boot. An enemy whose railConfig is not enabled is not
+    a car and none of it is read.
+    """
+    c = v.get("railConfig") or {}
+    if not c.get("enabled"):
+        return []
+    return [_issue("error", "ENEMY_RAIL_CONFIG_INVALID",
+                   f"railConfig: {message}. The train it rides in throws as it spawns "
+                   f"(RailTrainComposition.Validate)",
+                   entity=enemy_id,
+                   pointer=f"/railConfig/{field}" if field in c else "/railConfig")
+            for field, message in rail_config_problems(c)]
 
 
 def _hatch_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
