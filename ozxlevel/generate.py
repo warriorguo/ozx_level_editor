@@ -177,8 +177,15 @@ def summarize(doc: dict) -> dict:
         for room in rooms:
             stage = room.get("stageType") or "unset"
             stages[stage] = stages.get(stage, 0) + 1
+        launches = [(st or {}).get("action") or {} for r in rooms
+                    for st in ((r.get("inlineEncounter") or {}).get("steps") or [])]
         floors.append({
             "rooms": len(rooms),
+            # OZX-1818: elite bodies the rooms' waves place (alwaysElite
+            # entries take theirs before the rolled budget is spread).
+            "elites": sum(a.get("eliteCount") or 0 for a in launches),
+            # OZX-1798: rail oil tanks a factory line rolled instead of trains.
+            "oilTanks": sum(a.get("max") or 0 for a in launches if a.get("railOilTankId")),
             "stages": stages,
             "teleports": sum(1 for r in rooms if r.get("hasTeleportSpot")),
             "lockedDoors": sum(1 for r in rooms for d in r.get("doors") or [] if d.get("locked")),
@@ -190,6 +197,8 @@ def summarize(doc: dict) -> dict:
     return {"masterSeed": doc.get("masterSeed"), "floors": floors,
             "rooms": sum(f["rooms"] for f in floors),
             "teleports": sum(f["teleports"] for f in floors),
+            "elites": sum(f["elites"] for f in floors),
+            "oilTanks": sum(f["oilTanks"] for f in floors),
             # OZX-1483: the dead ends StoryRoomPlanner hangs off the layout.
             "storyRooms": sum(f["stages"].get("story", 0) for f in floors),
             # OZX-1568: of those, the upgrade-platform ones, and the areas they

@@ -1521,12 +1521,12 @@ function renderPlanAll() {
   };
   const summary = state.sampleSummary && state.sampleSummary.planId === plan.id
     ? `<table class="sample-table"><tr><th>seed</th><th>rooms</th>${
-        plan.floors.map((f) => `<th>f${f.index + 1}</th>`).join('')}<th>teleports</th>${
+        plan.floors.map((f) => `<th>f${f.index + 1}</th>`).join('')}<th>teleports</th><th title="elite bodies the generated waves place (OZX-1818: alwaysElite entries first)">elites</th>${
         story ? '<th>story</th>' : ''}${upgrade ? '<th>upgrade</th>' : ''}</tr>${
         state.sampleSummary.samples.map((r) => r.error
-          ? `<tr class="bad"><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td colspan="${plan.floors.length + 2 + (story ? 1 : 0) + (upgrade ? 1 : 0)}" title="${esc(r.error)}">fails to generate</td></tr>`
+          ? `<tr class="bad"><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td colspan="${plan.floors.length + 3 + (story ? 1 : 0) + (upgrade ? 1 : 0)}" title="${esc(r.error)}">fails to generate</td></tr>`
           : `<tr><td><button class="link" data-sample-seed="${r.seed}">${r.seed}</button></td><td>${r.rooms}</td>${
-              r.floors.map((f) => `<td title="${esc(Object.entries(f.stages).map(([k, v]) => `${k} ${v}`).join(', '))}">${f.rooms}</td>`).join('')}<td>${r.teleports}</td>${
+              r.floors.map((f) => `<td title="${esc(Object.entries(f.stages).map(([k, v]) => `${k} ${v}`).join(', ') + (f.oilTanks ? ` · ${f.oilTanks} rail oil tanks` : ''))}">${f.rooms}</td>`).join('')}<td>${r.teleports}</td><td>${r.elites ?? 0}</td>${
               story ? `<td>${r.storyRooms ?? 0}</td>` : ''}${upgrade ? upgradeCell(r) : ''}</tr>`).join('')}</table>`
     : '';
   $('mapPlane').innerHTML =
@@ -1934,20 +1934,31 @@ function renderPlanFloors() {
           // makes it produce anything has to be visible on the row. These
           // minions are ON TOP of enemies/room — the room's real body count
           // is enemiesPerRoom + minionsPerSpawner × however many drew.
-          const channel = e.isSpawner
+          // OZX-1798: a factory line's units each roll the train or a tank.
+          const tanks = (e.railOilTanks || []).length
+            ? ` · or a tank per unit: ${e.railOilTanks.map((t) => `${t.id} w${t.weight || 1}`).join(', ')}`
+            : '';
+          const channel = e.isSpawner && e.minionId
             ? `<span class="spawner-line" title="${esc(f.spawnerMinionsPerRoom > 0
                 ? `OZX-1219: each of these that a room draws is fed from the room's own allowance of ${f.spawnerMinionsPerRoom} minions, shared by every spawner; enemies/room counts only bodies placed directly`
-                : `OZX-1064: each of these that a room draws is paired with a viaSpawner launch of ${e.minionId}, charged to the room's enemies/room and capped by the minion's maxPerRoom`)}">
-                 <span class="drop-tag">spawns</span>${esc(e.minionIsTrain
+                : `OZX-1064: each of these that a room draws is paired with a viaSpawner launch of ${e.minionId}, charged to the room's enemies/room and capped by the minion's maxPerRoom`)}${
+                tanks ? ' — OZX-1798: each unit of the line rolls the train (its pool weight) or a rail oil tank; tanks take no budget and are never elite' : ''}">
+                 <span class="drop-tag">spawns</span>${esc((e.minionIsTrain
                    ? `→ ${e.minionsPerSpawner} train${e.minionsPerSpawner === 1 ? '' : 's'} of ${e.minionId} each`
-                   : `×${e.minionsPerSpawner} ${e.minionId} each`)}</span>`
+                   : `×${e.minionsPerSpawner} ${e.minionId} each`) + tanks)}</span>`
+            // OZX-1780: no minionId — the generator picks one per room from
+            // the pool entries this spawner may emit, by their pool weights.
+            : e.isSpawner
+              ? ((e.minionCandidates || []).length
+                ? `<span class="spawner-line" title="OZX-1780: no minionId, so each room picks one of these (SpawnerMinions.Candidates: pool entries this spawner's spawnableFamilies / spawnableEnemies allow, not trains or spawners) by pool weight; every spawner of this entry in the room makes the same one">
+                     <span class="drop-tag">spawns</span>${esc(`×${e.minionsPerSpawner} each, picked per room from ${e.minionCandidates.map((c) => c.id).join(' / ')}`)}</span>`
+                : `<span class="spawner-line bad" title="OZX-1780: no minionId and nothing in this pool it may emit — the plan is refused">
+                     <span class="drop-tag">spawns</span>${esc(`×${e.minionsPerSpawner} — nothing in the pool to pick`)}</span>`)
             // Half a pair reads as a spawner to a designer and as an ordinary
             // enemy to the sampler. The validator errors; the row says why.
-            : (e.minionId || e.minionsPerSpawner)
-              ? `<span class="spawner-line bad" title="Both minionId and minionsPerSpawner are required; with one missing this is sampled as an ordinary enemy">
-                   <span class="drop-tag">spawns</span>${esc(
-                     e.minionId ? `${e.minionId} — no minionsPerSpawner`
-                                : `×${e.minionsPerSpawner} — no minionId`)}</span>`
+            : e.minionId
+              ? `<span class="spawner-line bad" title="minionId without minionsPerSpawner: this is sampled as an ordinary enemy">
+                   <span class="drop-tag">spawns</span>${esc(`${e.minionId} — no minionsPerSpawner`)}</span>`
               : '';
           return `<div class="content-entry pool-entry ${e.missing ? 'missing' : ''}">
             <span class="content-glyph ${e.missing ? 'missing' : ''}">${esc(codeOf(e.railTrainId || e.enemyId))}</span>
@@ -1955,7 +1966,8 @@ function renderPlanFloors() {
               e.missing ? (e.railTrainId ? 'no RailTrainData with this id' : 'no EnemyData with this id')
                 : `${e.railTrainId ? 'train on the rail · ' : ''}${
                     e.family ? `tier ${e.family.tier} ${e.family.id} · ` : ''}${
-                    e.habitats && e.habitats.length ? `dwells in ${e.habitats.join(' / ')} · ` : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
+                    e.habitats && e.habitats.length ? `dwells in ${e.habitats.join(' / ')} · ` : ''}${
+                    e.alwaysElite ? 'always elite · ' : ''}weight ${e.weight ?? 1}${e.maxPerRoom ? ` · max ${e.maxPerRoom}/room` : ''}`
             }</small></span>${groupLine(e)}${channel}
           </div>`;
         }).join('')

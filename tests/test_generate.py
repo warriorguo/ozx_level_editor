@@ -78,6 +78,18 @@ def test_a_summary_counts_what_a_designer_compares():
     assert s["floors"][0]["lockedDoors"] == 1 and s["floors"][0]["finalRoom"] == "b"
 
 
+def test_a_summary_counts_elites_and_oil_tanks():
+    """OZX-1818 / OZX-1798: what alwaysElite and a factory's tanks change."""
+    steps = [{"action": {"verb": "launch", "enemyId": "moth", "min": 3, "max": 3,
+                         "eliteCount": 2}},
+             {"action": {"verb": "launch", "railOilTankId": "rail_oil_tank", "min": 2,
+                         "max": 2, "viaSpawner": "rail_evil_factory"}}]
+    s = generate.summarize({"floors": [{"rooms": [
+        {"roomId": "a", "inlineEncounter": {"steps": steps}}, {"roomId": "b"}]}]})
+    assert (s["elites"], s["oilTanks"]) == (2, 2)
+    assert (s["floors"][0]["elites"], s["floors"][0]["oilTanks"]) == (2, 2)
+
+
 @built
 def test_a_sample_is_the_generators_and_is_read_only():
     api = Api(OZX_BASE)

@@ -140,9 +140,11 @@ def test_half_a_pair_is_an_error(ds, plan):
     del entry["minionsPerSpawner"]
     assert "LEVEL_SPAWNER_PAIR_INCOMPLETE" in codes(ds)
 
+    # OZX-1780: a count alone is no longer half a pair — it leaves the
+    # minion to the generator (test_spawn_relations.py).
     entry["minionsPerSpawner"] = keep
     del entry["minionId"]
-    assert "LEVEL_SPAWNER_PAIR_INCOMPLETE" in codes(ds)
+    assert "LEVEL_SPAWNER_PAIR_INCOMPLETE" not in codes(ds)
 
 
 def test_a_spawner_may_not_produce_itself(ds, plan):

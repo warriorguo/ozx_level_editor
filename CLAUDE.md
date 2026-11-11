@@ -24,6 +24,10 @@ that way unless there is a strong reason not to.
   mirror-expanded one `RoomTilemapQuery.LoadPool` draws from (OZX-1467: four orientations
   per file unless `noMirror`); a pinned `templateId` names the authored file only, by its folder-qualified id
   (`normal/all_start_1_01`, OZX-1571 — `tilemaps.template_id`; bare names are not kept).
+- `ozxlevel/spawnrelations.py` — who may spawn whom (`SpawnRelations`, OZX-1779 / OZX-1792),
+  the OZX-1780 minion candidates (`SpawnerMinions.Candidates`) and what a generated floor's
+  pool lets an enemy hatch or leave on death (`FloorPoolProducts`); validator and plan view
+  both read it.
 - `ozxlevel/generate.py` — procedural previews via ozx_base's own headless `genlevel`
   (OLE-1); never reimplement the generator in Python. It finds `dotnet` off PATH too,
   because the app wrapper's environment has no Homebrew, and flags a build older than

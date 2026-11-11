@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from . import arealinks, habitats, plandefaults, tilemaps
+from . import arealinks, habitats, plandefaults, spawnrelations, tilemaps
 from .dataset import (DIRECTION_TWIN, DIRECTIONS, GROUND_LASER_KIND,
                       SKILL_DROP_LEVEL_CAP_DEFAULT, Dataset, _stage_budget, banned_stages,
                       countmin_reading)
@@ -1301,6 +1301,7 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
                     entity=encounter_id,
                     pointer=f"{sptr}/action/dropTableIdOverride"))
             issues.extend(_pin_issues(ds, encounter_id, index, sptr, action))
+            issues.extend(_spawn_relation_launch_issues(ds, encounter_id, index, sptr, action))
 
             # OZX-1063: the sampler copies a pool entry's variant and clump
             # fields onto the step it synthesises, so an action carries the
@@ -1332,6 +1333,46 @@ def validate_encounter(ds: Dataset, encounter_id: str) -> list[dict]:
     return issues
 
 
+def _spawn_relation_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
+                                  action: dict) -> list[dict]:
+    """`SpawnRelationValidator` (OZX-1780 / OZX-1792), which `LevelService.
+    StartLevel` runs over every room's and cave passage's encounter: a launch
+    riding a spawner's channel names something that spawner may emit — an
+    enemy through `SpawnRelations.CanEmit`, a train or rail oil tank through
+    the rail factory's `spawnableRailUnits`. Checked here per encounter,
+    which also covers one no level references yet."""
+    via = action.get("viaSpawner")
+    if not via or not isinstance(via, str):
+        return []
+    aptr = f"{sptr}/action"
+    producer = ds.get("EnemyData", via)
+    if producer is None:
+        return [_issue("error", "DATA_REFERENCE_MISSING",
+                       f"step {index}: launches via '{via}', which has no EnemyData",
+                       entity=encounter_id, pointer=f"{aptr}/viaSpawner")]
+    unit = action.get("railTrainId") or action.get("railOilTankId")
+    if unit:
+        if spawnrelations.can_emit_rail_unit(producer.value, unit):
+            return []
+        return [_issue(
+            "error", "ENCOUNTER_SPAWN_RELATION_FORBIDDEN",
+            f"step {index}: puts '{unit}' on the rail via '{via}', which may only emit "
+            f"[{', '.join(producer.value.get('spawnableRailUnits') or [])}] "
+            f"(spawnableRailUnits, OZX-1792) — the level refuses to start",
+            entity=encounter_id, pointer=f"{aptr}/viaSpawner")]
+    minion = ds.get("EnemyData", action.get("enemyId") or "")
+    if minion is None or spawnrelations.can_emit(producer.value, minion.value, minion.id):
+        return []   # a missing enemyId is ENCOUNTER_ENEMY_MISSING's
+    return [_issue(
+        "error", "ENCOUNTER_SPAWN_RELATION_FORBIDDEN",
+        f"step {index}: launches '{minion.id}' (family "
+        f"'{family_of(minion.value, minion.id)[0]}') via '{via}', which may only emit "
+        f"families [{', '.join(producer.value.get('spawnableFamilies') or [])}] / enemies "
+        f"[{', '.join(producer.value.get('spawnableEnemies') or [])}] (OZX-1779 / OZX-1792; "
+        f"Documents/Enemy/SpawnRelations.md) — the level refuses to start",
+        entity=encounter_id, pointer=f"{aptr}/viaSpawner")]
+
+
 class _NoDoc:
     value: dict = {}
 
@@ -1352,8 +1393,8 @@ def _rail_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
     `EncounterValidator.RailLaunchProblem` refuses each by name. Since
     OZX-1315 a train's cars DO roll the launch's `dropTableId` (a pool floor
     stamps its loot table on every launch); a tank drops nothing. Since
-    OZX-1341 a train may ride a rail factory's spawner channel; a tank may
-    not.
+    OZX-1341 a train may ride a rail factory's spawner channel, and since
+    OZX-1793 so may a tank.
 
     Returns (issues, is_rail).
     """
@@ -1390,9 +1431,7 @@ def _rail_launch_issues(ds: Dataset, encounter_id: str, index: int, sptr: str,
                 f"{aptr}/railOilTankId")
 
     unread = None
-    if action.get("viaSpawner") and tank:
-        unread = "viaSpawner (tanks are placed on the rail, not emitted by a spawner)"
-    elif action.get("at"):
+    if action.get("at"):
         unread = f"at '{action['at']}' (a train stands on the rail, not on a spawn layer)"
     elif action.get("eliteCount"):
         unread = "eliteCount (the cars spawn as the train data lists them)"
@@ -2300,6 +2339,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_cycle_branch_issues(plan_id, fi, fptr, floor))
     issues.extend(_rail_train_entry_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_spawner_pair_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_rail_oil_tank_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_always_elite_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_pool_variant_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_stage_weight_issues(ds, plan_id, fi, fptr, floor))
     issues.extend(_floor_loot_issues(ds, plan_id, fi, fptr, floor))
@@ -2370,6 +2411,8 @@ def _floor_plan_issues(ds: Dataset, plan_id: str, fi: int,
     issues.extend(_depth_scale_issues(plan_id, fi, fptr, floor))
 
     issues.extend(_variant_tier_issues(ds, plan_id, fi, fptr, floor, arrival))
+    issues.extend(_variant_family_issues(ds, plan_id, fi, fptr, floor))
+    issues.extend(_pool_product_issues(ds, plan_id, fi, fptr, floor))
 
     issues.extend(_habitat_plan_issues(ds, plan_id, fi, fptr, floor))
     return issues
@@ -3160,8 +3203,7 @@ def _pool_variant_issues(ds: Dataset, plan_id: str, fi: int,
             list(entry.get("variantIds") or []), role_of=role_of))
         issues.extend(_cluster_issues(
             plan_id, where, eptr, entry,
-            is_spawner=bool(entry.get("minionId")
-                            and (entry.get("minionsPerSpawner") or 0) > 0)))
+            is_spawner=spawnrelations.is_spawner_entry(entry)))
     return issues
 
 
@@ -3230,8 +3272,10 @@ def _rail_train_entry_issues(ds: Dataset, plan_id: str, fi: int,
             unread = "cluster fields"
         elif entry.get("sharedRoot") or entry.get("fanArcDegrees"):
             unread = "sharedRoot / fanArcDegrees"
-        elif entry.get("minionId") or entry.get("minionsPerSpawner"):
-            unread = "minionId / minionsPerSpawner"
+        elif entry.get("minionId") or entry.get("minionsPerSpawner") or entry.get("railOilTanks"):
+            unread = "minionId / minionsPerSpawner / railOilTanks"
+        elif entry.get("alwaysElite"):
+            unread = "alwaysElite"
         if unread:
             err("LEVEL_RAIL_TRAIN_FIELD_UNREAD",
                 f"sets {unread}, which a train never reads: its cars are the ones its "
@@ -3266,18 +3310,28 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
       `EnemyService.Spawn` throwing mid-room;
     - a spawner producing itself, or another spawner, builds a chain whose
       population nothing bounds — `maxAlive` gates whole encounter steps and
-      cannot stop it.
+      cannot stop it;
+    - OZX-1779 / OZX-1792: a named minion has to be one the producer may emit
+      (`SpawnRelations.CanEmit` — its family in `spawnableFamilies`, or its id
+      in `spawnableEnemies`), a rail factory's train one of its
+      `spawnableRailUnits`;
+    - OZX-1780: `minionsPerSpawner` without `minionId` leaves the minion to the
+      generator, which needs something in the pool to pick.
     """
     pool = floor.get("enemyPool") or []
     if not pool:
         return []
 
-    spawner_ids = {e.get("enemyId") for e in pool
-                   if e.get("minionId") and (e.get("minionsPerSpawner") or 0) > 0}
+    # OZX-1780 `EnemyPoolEntry.IsSpawner`: minionsPerSpawner alone makes one.
+    spawner_ids = {e.get("enemyId") for e in pool if spawnrelations.is_spawner_entry(e)}
     # OZX-1504 `EnemyPoolEntry.MinionKey`: a minionId names a train entry by
     # its railTrainId, anything else by its enemyId.
     members = {_minion_key(e): e for e in reversed(pool)}
     member_ids = set(members)
+
+    def enemy_of(enemy_id):
+        doc = ds.get("EnemyData", enemy_id or "")
+        return doc.value if doc is not None else None
 
     issues: list[dict] = []
     for ei, entry in enumerate(pool):
@@ -3288,16 +3342,30 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
             continue
         who = f"floor {fi}: enemyPool[{ei}] ('{entry.get('enemyId')}')"
 
-        if bool(minion) != (count > 0):
+        if count <= 0:
             issues.append(_issue(
                 "error", "LEVEL_SPAWNER_PAIR_INCOMPLETE",
-                f"{who} declares half a spawner pair: minionId={minion!r}, "
-                f"minionsPerSpawner={count}. Both are required — with one missing "
-                f"the entry is sampled as an ordinary enemy, and a spawner handed "
-                f"no minions stands in the room producing nothing",
+                f"{who} names minionId '{minion}' without minionsPerSpawner. Without a "
+                f"count the entry is sampled as an ordinary enemy, and a spawner that is "
+                f"handed no minions stands in the room producing nothing",
                 entity=plan_id, pointer=eptr))
             continue
 
+        quota = floor.get("spawnerMinionsPerRoom") or 0
+        if not minion:
+            # OZX-1780: the generator picks the minion, once per room, from
+            # `SpawnerMinions.Candidates` by their pool weights.
+            issues.extend(_picked_minion_issues(ds, plan_id, who, eptr, pool, ei, enemy_of))
+            if quota > 0 and count > quota:
+                issues.append(_issue(
+                    "warning", "LEVEL_SPAWNER_LINE_ALWAYS_TRUNCATED",
+                    f"{who} asks for {count} minions per spawner, above this floor's "
+                    f"spawnerMinionsPerRoom of {quota} — the allowance every spawner in "
+                    f"the room shares — so it is truncated every time, even alone",
+                    entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
+            continue
+
+        paired = False
         if minion == entry.get("enemyId"):
             issues.append(_issue(
                 "error", "LEVEL_SPAWNER_SELF_MINION",
@@ -3321,14 +3389,16 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 f"on every tilemap this floor can draw, and it carries an elite "
                 f"block. Add it to the pool — weight 0 is not a way to hide it",
                 entity=plan_id, pointer=f"{eptr}/minionId"))
+        else:
+            paired = True
 
         # OZX-1504: a train comes out of a rail factory and nothing else does —
         # `EnemyEntity.RequestProduceRailTrain` refuses a spawner without
         # `railFactory`, and a factory's emitter can only put a train on the rail.
         minion_entry = members.get(minion)
         minion_is_train = bool(minion_entry and minion_entry.get("railTrainId"))
-        spawner = ds.get("EnemyData", entry.get("enemyId") or "")
-        is_factory = bool(spawner and ((spawner.value.get("railFactory") or {}).get("enabled")))
+        spawner = enemy_of(entry.get("enemyId"))
+        is_factory = bool(spawner and spawnrelations.is_rail_factory(spawner))
         if minion_entry is not None and spawner is not None:
             if minion_is_train and not is_factory:
                 issues.append(_issue(
@@ -3343,6 +3413,26 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                     f"{who} is a rail factory producing enemy '{minion}'. A rail factory only "
                     f"produces trains — name a train entry of this pool by its railTrainId",
                     entity=plan_id, pointer=f"{eptr}/minionId"))
+            elif paired and minion_is_train:
+                # OZX-1792: a rail factory names the rail units it may put on the rail.
+                if not spawnrelations.can_emit_rail_unit(spawner, minion):
+                    issues.append(_issue(
+                        "error", "LEVEL_SPAWNER_RAIL_UNIT_FORBIDDEN",
+                        f"{who} produces train '{minion}', which rail factory "
+                        f"'{entry.get('enemyId')}' may not emit — its spawnableRailUnits are "
+                        f"[{', '.join(spawner.get('spawnableRailUnits') or [])}] (OZX-1792)",
+                        entity=plan_id, pointer=f"{eptr}/minionId"))
+            elif paired and enemy_of(minion) is not None:
+                # OZX-1779 / OZX-1792: who may spawn whom.
+                if not spawnrelations.can_emit(spawner, enemy_of(minion), minion):
+                    issues.append(_issue(
+                        "error", "LEVEL_SPAWNER_RELATION_FORBIDDEN",
+                        f"{who} has minionId '{minion}' (family "
+                        f"'{family_of(enemy_of(minion), minion)[0]}'), which "
+                        f"'{entry.get('enemyId')}' may not emit — "
+                        f"{spawnrelations.lists(spawner)} (OZX-1779 / OZX-1792, "
+                        f"Documents/Enemy/SpawnRelations.md)",
+                        entity=plan_id, pointer=f"{eptr}/minionId"))
 
         # Not a rule upstream (the pool check above already covers the pool),
         # but a minion naming nothing at all would be reported by neither.
@@ -3367,7 +3457,6 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
         # placed directly. The cap above then says nothing about the line;
         # the allowance does — a spawner asking for more than the whole room's
         # allowance is truncated even when it is the only one drawn.
-        quota = floor.get("spawnerMinionsPerRoom") or 0
         if quota > 0:
             if count > quota:
                 issues.append(_issue(
@@ -3386,6 +3475,247 @@ def _spawner_pair_issues(ds: Dataset, plan_id: str, fi: int,
                 f"the minion's own cap and charged to enemiesPerRoom, so it is "
                 f"truncated every time — the room gets at most {minion_cap}",
                 entity=plan_id, pointer=f"{eptr}/minionsPerSpawner"))
+    return issues
+
+
+def _picked_minion_issues(ds: Dataset, plan_id: str, who: str, eptr: str,
+                          pool: list, ei: int, enemy_of) -> list[dict]:
+    """`LevelPlanValidator.ValidatePickedMinion` (OZX-1780): a spawner with no
+    `minionId` has the generator pick one per room from
+    `SpawnerMinions.Candidates` — the floor's pool entries the producer may
+    emit, minus trains and other spawners. A rail factory may not pick (a
+    train has no family to pick by), and the set may not be empty."""
+    spawner = enemy_of(pool[ei].get("enemyId"))
+    if spawner is None:
+        return []   # DATA_REFERENCE_MISSING reports the entry
+    if spawnrelations.is_rail_factory(spawner):
+        return [_issue(
+            "error", "LEVEL_SPAWNER_PICK_ON_FACTORY",
+            f"{who} is a rail factory with no minionId. A rail factory produces trains, "
+            f"which have no family to pick by — name the train entry by its railTrainId",
+            entity=plan_id, pointer=eptr)]
+    candidates = spawnrelations.minion_candidates(pool, ei, enemy_of)
+    if candidates is None or candidates:
+        return []
+    families = [family_of(enemy_of(e.get("enemyId")), e.get("enemyId"))[0] for e in pool
+                if not e.get("railTrainId") and not spawnrelations.is_spawner_entry(e)
+                and enemy_of(e.get("enemyId")) is not None]
+    return [_issue(
+        "error", "LEVEL_SPAWNER_PICK_NO_CANDIDATE",
+        f"{who} leaves its minion to the generator, but nothing in this floor's pool is "
+        f"one it may emit: {spawnrelations.lists(spawner)}, the pool's ordinary entries are "
+        f"[{', '.join(families)}]. Add an entry of an allowed family to the pool, or name "
+        f"a minionId (OZX-1780, Documents/Enemy/SpawnRelations.md)",
+        entity=plan_id, pointer=eptr)]
+
+
+def _rail_oil_tank_issues(ds: Dataset, plan_id: str, fi: int,
+                          fptr: str, floor: dict) -> list[dict]:
+    """`LevelPlanValidator.ValidateRailOilTanks` (OZX-1798).
+
+    `railOilTanks` are a rail factory's neutral products: each unit of its
+    production line rolls the train (its own pool weight) or one of these
+    tanks. So only an entry that HAS that line (minionsPerSpawner + a train
+    minionId) may list them, the producer is a rail factory, and every tank
+    is one of its `spawnableRailUnits`; ids are written once, weights ≥ 0
+    (0 means 1). A train entry carrying the list is
+    LEVEL_RAIL_TRAIN_FIELD_UNREAD's to say."""
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        tanks = entry.get("railOilTanks") or []
+        if not tanks or entry.get("railTrainId"):
+            continue
+        eptr = f"{fptr}/enemyPool/{ei}"
+        who = f"floor {fi}: enemyPool[{ei}] ('{entry.get('enemyId')}')"
+        if (entry.get("minionsPerSpawner") or 0) <= 0 or not entry.get("minionId"):
+            issues.append(_issue(
+                "error", "LEVEL_RAIL_OIL_TANK_NO_LINE",
+                f"{who} lists railOilTanks but is no rail factory line (minionsPerSpawner + "
+                f"the train it names as minionId). The tanks are rolled per unit of that "
+                f"line — without one they would never be made",
+                entity=plan_id, pointer=f"{eptr}/railOilTanks"))
+            continue
+        seen: set = set()
+        bad = False
+        for ti, tank in enumerate(tanks):
+            tptr = f"{eptr}/railOilTanks/{ti}"
+            tank_id = (tank or {}).get("railOilTankId") if isinstance(tank, dict) else None
+            problem = None
+            if not tank_id:
+                problem = (f"{who}.railOilTanks[{ti}] has no railOilTankId", tptr)
+            elif tank_id in seen:
+                problem = (f"{who}.railOilTanks lists '{tank_id}' twice — raise its weight "
+                           f"instead", f"{tptr}/railOilTankId")
+            elif (tank.get("weight") or 0) < 0:
+                problem = (f"{who}.railOilTanks '{tank_id}' has weight {tank['weight']:g}; 0 "
+                           f"means 1, a negative weight means nothing", f"{tptr}/weight")
+            if tank_id:
+                seen.add(tank_id)
+            if problem:
+                bad = True
+                issues.append(_issue("error", "LEVEL_RAIL_OIL_TANK_INVALID", problem[0],
+                                     entity=plan_id, pointer=problem[1]))
+        if bad:
+            continue
+        spawner = ds.get("EnemyData", entry.get("enemyId") or "")
+        if spawner is None:
+            continue
+        if not spawnrelations.is_rail_factory(spawner.value):
+            issues.append(_issue(
+                "error", "LEVEL_RAIL_OIL_TANK_NOT_FROM_FACTORY",
+                f"{who} lists railOilTanks, but only a rail factory "
+                f"(EnemyData.railFactory.enabled) can put a rail oil tank on the rail",
+                entity=plan_id, pointer=f"{eptr}/railOilTanks"))
+            continue
+        for ti, tank in enumerate(tanks):
+            if not spawnrelations.can_emit_rail_unit(spawner.value, tank["railOilTankId"]):
+                issues.append(_issue(
+                    "error", "LEVEL_RAIL_OIL_TANK_FORBIDDEN",
+                    f"{who} lists rail oil tank '{tank['railOilTankId']}', which rail factory "
+                    f"'{entry.get('enemyId')}' may not emit — its spawnableRailUnits are "
+                    f"[{', '.join(spawner.value.get('spawnableRailUnits') or [])}] (OZX-1792)",
+                    entity=plan_id, pointer=f"{eptr}/railOilTanks/{ti}/railOilTankId"))
+    return issues
+
+
+def has_elite_block(enemy: dict) -> bool:
+    """`elite.statMultipliers` non-empty — what `EnemyService.Spawn` needs to promote."""
+    return bool(((enemy or {}).get("elite") or {}).get("statMultipliers"))
+
+
+def _always_elite_issues(ds: Dataset, plan_id: str, fi: int,
+                         fptr: str, floor: dict) -> list[dict]:
+    """`LevelPlanValidator.ValidateAlwaysElite` (OZX-1818).
+
+    An `alwaysElite` entry promotes every body it places directly (both
+    waves), charged to the room's elite budget first. A spawner is never
+    promoted — scaling its root drags its emit anchors (OZX-1032) — and the
+    enemy and every variant need an elite block, or the first body throws in
+    `EnemyService.Spawn`. Trains are LEVEL_RAIL_TRAIN_FIELD_UNREAD's."""
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        if not entry.get("alwaysElite") or entry.get("railTrainId"):
+            continue
+        eptr = f"{fptr}/enemyPool/{ei}"
+        who = f"floor {fi}: enemyPool[{ei}] ('{entry.get('enemyId')}')"
+        if entry.get("minionId") or (entry.get("minionsPerSpawner") or 0) > 0:
+            issues.append(_issue(
+                "error", "LEVEL_ALWAYS_ELITE_ON_SPAWNER",
+                f"{who} is a spawner marked alwaysElite. A spawner is never promoted — scaling "
+                f"its root drags its emit anchors (OZX-1032); mark the minion's own entry instead",
+                entity=plan_id, pointer=f"{eptr}/alwaysElite"))
+            continue
+        ids = [("enemyId", entry.get("enemyId"))] + [
+            (f"variantIds/{vi}", v) for vi, v in enumerate(entry.get("variantIds") or [])]
+        for suffix, enemy_id in ids:
+            enemy = ds.get("EnemyData", enemy_id or "")
+            if enemy is None:
+                continue   # DATA_REFERENCE_MISSING
+            if not has_elite_block(enemy.value):
+                issues.append(_issue(
+                    "error", "LEVEL_ALWAYS_ELITE_NO_ELITE_BLOCK",
+                    f"{who} is alwaysElite, but '{enemy_id}' has no elite block "
+                    f"(elite.statMultipliers), so the first of its bodies would throw in "
+                    f"EnemyService.Spawn. Give it one or drop alwaysElite",
+                    entity=plan_id, pointer=f"{eptr}/{suffix}"))
+    return issues
+
+
+def _pool_member_pointer(fptr: str, pool: list, enemy_id: str) -> str:
+    """Where `enemy_id` sits in the pool: its entry, or the variant slot."""
+    for ei, e in enumerate(pool):
+        if e.get("railTrainId"):
+            continue
+        if e.get("enemyId") == enemy_id:
+            return f"{fptr}/enemyPool/{ei}/enemyId"
+        for vi, v in enumerate(e.get("variantIds") or []):
+            if v == enemy_id:
+                return f"{fptr}/enemyPool/{ei}/variantIds/{vi}"
+    return f"{fptr}/enemyPool"
+
+
+def _pool_product_issues(ds: Dataset, plan_id: str, fi: int,
+                         fptr: str, floor: dict) -> list[dict]:
+    """What an enemy brings into the room on its own is held to the pool
+    (`FloorPoolProducts`): on a generated floor an egg hatches, and a host
+    leaves as death heir, only what the pool lists (`poolEnemyIds`).
+
+    - `ValidateHatching` (OZX-1781): every egg the pool lists hatches
+      something the pool lists — narrowed to nothing it throws as it opens.
+    - `ValidateDeathHeirs` (OZX-1794): everything that can die here — pool
+      members (entries + variants) and what the floor's boss summons — leaves
+      a death heir the pool lists, or the room throws when it dies.
+
+    Root sacs and tentacle tufts are narrowed the same way but simply do not
+    grow when nothing is left (RootSystem), so they are not findings."""
+    pool = floor.get("enemyPool") or []
+    if not pool or floor.get("generatorType") == "static":
+        return []
+    members = _pool_enemy_ids(pool)
+    issues: list[dict] = []
+    for enemy_id in members:
+        egg = ds.get("EnemyData", enemy_id or "")
+        if egg is None:
+            continue
+        own = spawnrelations.hatch_products(egg.value)
+        if own and not spawnrelations.narrow(own, members):
+            issues.append(_issue(
+                "error", "LEVEL_HATCH_NOTHING_IN_POOL",
+                f"floor {fi}: egg '{enemy_id}' hatches [{', '.join(own)}], none of which this "
+                f"floor's pool lists. On a generated floor an egg hatches only what the pool "
+                f"lists (OZX-1781) — add what it hatches to the pool, or drop the egg",
+                entity=plan_id, pointer=_pool_member_pointer(fptr, pool, enemy_id)))
+
+    dying = [(i, "in the pool", _pool_member_pointer(fptr, pool, i)) for i in members]
+    boss_id = floor.get("bossId")
+    boss = ds.get("EnemyData", boss_id) if boss_id else None
+    if boss is not None:
+        for summoned in (boss.value.get("summonConfig") or {}).get("enemyIds") or []:
+            dying.append((summoned, f"summoned by boss '{boss_id}'", f"{fptr}/bossId"))
+    for enemy_id, how, pointer in dying:
+        host = ds.get("EnemyData", enemy_id or "")
+        if host is None:
+            continue
+        heir = spawnrelations.death_heir(host.value)
+        if heir and not spawnrelations.narrow(heir, members):
+            issues.append(_issue(
+                "error", "LEVEL_DEATH_HEIR_NOT_IN_POOL",
+                f"floor {fi}: '{enemy_id}' ({how}) leaves death heir '{heir[0]}', which this "
+                f"floor's pool does not list. On a generated floor a death heir comes only "
+                f"from the pool (OZX-1794) — add it to the pool, or drop the host",
+                entity=plan_id, pointer=pointer))
+    return issues
+
+
+def _variant_family_issues(ds: Dataset, plan_id: str, fi: int,
+                           fptr: str, floor: dict) -> list[dict]:
+    """OZX-1792 (in `ValidateVariantTiers`): an entry's `variantIds` share the
+    representative's family. Variants are one creature — the entry is
+    sampled, counted and introduced as ONE type — so a variant of another
+    family would ride in on it."""
+    if floor.get("generatorType") == "static":
+        return []
+    issues: list[dict] = []
+    for ei, entry in enumerate(floor.get("enemyPool") or []):
+        if entry.get("railTrainId") or not entry.get("variantIds"):
+            continue
+        rep = ds.get("EnemyData", entry.get("enemyId") or "")
+        if rep is None or spawnrelations.family_problem(rep.value):
+            continue
+        family = family_of(rep.value, rep.id)[0]
+        for vi, variant in enumerate(entry.get("variantIds") or []):
+            doc = ds.get("EnemyData", variant or "")
+            if doc is None or spawnrelations.family_problem(doc.value):
+                continue
+            vfamily = family_of(doc.value, doc.id)[0]
+            if vfamily != family:
+                issues.append(_issue(
+                    "error", "VARIANT_FAMILY_MISMATCH",
+                    f"floor {fi}: enemyPool[{ei}].variantIds[{vi}]: variant '{variant}' is "
+                    f"family '{vfamily}', but the entry's '{entry.get('enemyId')}' is family "
+                    f"'{family}'. Variants of an entry are one creature; give the other family "
+                    f"its own pool entry (OZX-1792)",
+                    entity=plan_id, pointer=f"{fptr}/enemyPool/{ei}/variantIds/{vi}"))
     return issues
 
 
@@ -3831,12 +4161,40 @@ def validate_enemy(ds: Dataset, enemy_id: str) -> list[dict]:
                        f"enemy '{enemy_id}' not found")]
     return (_wall_clearance_issues(enemy_id, doc.value) + _hatch_issues(ds, enemy_id, doc.value)
             + _family_issues(ds, enemy_id, doc.value)
+            + _spawn_relation_issues(ds, enemy_id, doc.value)
             + _enemy_habitat_issues(ds, enemy_id, doc.value))
 
 
-def family_of(enemy: dict, enemy_id: str) -> tuple[str, int]:
-    """`EnemyData.FamilyId` / `Tier` (OZX-1427): own id and tier 1 when no family."""
-    return (enemy.get("family") or enemy_id, (enemy.get("tier") or 0) if enemy.get("family") else 1)
+def _spawn_relation_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:
+    """`SpawnRelations.ValidateAll` (OZX-1779 / OZX-1792), which boot runs over
+    the whole enemy library: an enemy emitter declares `spawnableFamilies`
+    and/or `spawnableEnemies` (real families / enemy ids, each once); a rail
+    factory declares only `spawnableRailUnits`; a non-emitter declares none.
+    Enemies with a malformed family are ENEMY_FAMILY_HALF_DECLARED's and left
+    out, as upstream does. Each rail unit has to be a train (railenemy) or a
+    rail oil tank (oiltank) — upstream pins that in SpawnRelationsTests."""
+    if spawnrelations.family_problem(v):
+        return []
+    families, ids = set(), set()
+    for d in ds.of_type("EnemyData"):
+        if not spawnrelations.family_problem(d.value):
+            families.add(family_of(d.value, d.id)[0])
+            ids.add(d.id)
+    problem = spawnrelations.relation_problem(v, enemy_id, families, ids)
+    if problem:
+        return [_issue("error", "ENEMY_SPAWN_RELATION_INVALID",
+                       f"{problem[1]} The game refuses to boot (SpawnRelations.ValidateAll)",
+                       entity=enemy_id, pointer=f"/{problem[0]}")]
+    return [_issue("error", "DATA_REFERENCE_MISSING",
+                   f"spawnableRailUnits[{ui}] names '{unit}', which is neither a train "
+                   f"(railenemy) nor a rail oil tank (oiltank)",
+                   entity=enemy_id, pointer=f"/spawnableRailUnits/{ui}")
+            for ui, unit in enumerate(v.get("spawnableRailUnits") or [])
+            if spawnrelations.is_rail_factory(v)
+            and ds.get("RailTrainData", unit) is None and ds.get("OilTankData", unit) is None]
+
+
+family_of = spawnrelations.family_of
 
 
 def _family_issues(ds: Dataset, enemy_id: str, v: dict) -> list[dict]:

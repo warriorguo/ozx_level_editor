@@ -481,7 +481,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 
 ### 5.4 EnemyPoolEntryData（OZX-1032 spawner 通道 + OZX-1063 变体组与成簇）
 
-`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner?, variantIds?, clusterSizeMin?, clusterSizeMax?, clusterRadius?, sharedRoot?, fanArcDegrees? }`。
+`{ enemyId, weight(0=1.0), maxPerRoom(0=无限), dropTableId?, minionId?, minionsPerSpawner?, railOilTanks?, alwaysElite?, variantIds?, clusterSizeMin?, clusterSizeMax?, clusterRadius?, sharedRoot?, fanArcDegrees? }`（`railOilTanks` / `alwaysElite` 见 §5.4.2，`LevelBasePlanData.cs:437` / `:507`，`ozx_base@7c8e3c8ea`）。
 
 #### 5.4.0 变体组与成簇（OZX-1063，核对于 `ozx_base@f0a78923`）
 
@@ -518,7 +518,7 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 | `minionId` | 这台 spawner 产什么。非空 = 本条目是 spawner 锚点。**必须是同层 `enemyPool` 的另一个成员**；列车条目按它的 `railTrainId` 认（`EnemyPoolEntry.MinionKey`，`Game.Level/LevelBasePlan.cs:110`，OZX-1504） |
 | `minionsPerSpawner` | 一台 spawner 喂几只；乘以本房抽到的该 spawner 只数 |
 
-**两者必须同时非空或同时缺省**，旧 plan 不写这两个字段，行为不变。
+**两者必须同时非空或同时缺省**，旧 plan 不写这两个字段，行为不变。⚠️ OZX-1780 起此条只剩一半：只写 `minionId` 仍被拒；**只写 `minionsPerSpawner` 合法**，表示让生成器挑 minion（`IsSpawner` 改为 `minionsPerSpawner > 0`，`LevelBasePlan.cs:113`），见 §5.4.2。
 
 ⚠️ **OZX-1064 起这条线是「请求」不是「承诺」**：它被计入 `enemiesPerRoom`（那个数字现在是这间房的**全部**身体数，两条通道合计），并且受 **minion 自己的 `maxPerRoom`** 限制——minion 是同一种敌人走第二道门进来的。谁先见底谁就截断这条线：房间少产几只，spawner 照样出现；只有连一只都放不下才不放这个 spawner。所以 `minionsPerSpawner` 写得比 minion 的 `maxPerRoom` 大，就是一条**每次都被截断**的线（chapter_3 floor 2 就是 6 vs 4）。实测每房敌人数 f0 13.59 → 11.06、f2 15.49 → 11.30，`jammer` 单房最多 8/10 → 4。合成遭遇的 `maxAlive` 不变，仍只数直接放置的身体。
 
@@ -544,6 +544,63 @@ plan 顶层（不在 floor 上）可选的 `areaLinks: [{ fromArea, toArea, kind
 3. 不能产自己 → 无界增长，`maxAlive` 门的是整条 step，管不到通道里面。
 4. 不能产另一台 spawner → 链式生产没有人口上界。
 5. （OZX-1504，`LevelPlanValidator.cs:732-740`，核对于 `ozx_base@6a8e344e`）只有轨道工厂（`EnemyData.railFactory.enabled`，目前只有 `rail_evil_factory`）能产列车，轨道工厂也只产列车 → 否则房间请求产线时抛。工厂的子代是一整列车：合成的 launch 写 `railTrainId` + `viaSpawner`（不写 `enemyId`），从不当精英，额度和普通产线同一套（`spawnerMinionsPerRoom`，没有时是 `enemiesPerRoom` + 列车条目的 `maxPerRoom`）。首个出货用例：chapter_5 `floors[2]` `{ enemyId: rail_evil_factory, minionId: rail_heavy_solo, minionsPerSpawner: 3 }`。
+
+#### 5.4.2 产兵关系、产物受 pool 约束、轨道油罐、alwaysElite（OZX-1779 / 1780 / 1781 / 1792 / 1794 / 1798 / 1818，核对于 `ozx_base@7c8e3c8ea` 工作区）
+
+**产兵关系（谁能产谁）是敌人数据上的硬约束**（`EnemyData.cs:634-642`）：
+
+| 字段（EnemyData） | 语义 |
+|---|---|
+| `spawnableFamilies` | OZX-1779：这个产出方经 `viaSpawner` 通道能产的 **family**（`FamilyId`，没有 family 的敌人就是它自己的 id）。按 family 写，具体哪个 variant 出来由关卡的 tier 规则决定 |
+| `spawnableEnemies` | OZX-1792：能产的**敌人 id**，只放行这一个 variant（husk 产 `cinderclaw`，不产它的绿色变体）。两张表任一命中即可（`SpawnRelations.CanEmit`，`EnemyData.cs:944`） |
+| `spawnableRailUnits` | OZX-1792：轨道工厂能放上 rail 的东西——列车 id（`GameData/railenemy`）或轨道油罐 id（`GameData/oiltank`），`CanEmitRailUnit` |
+
+开机时 `SpawnRelations.ValidateAll`（`GameBootstrap.cs:1235`，规则在 `EnemyData.cs:993` `ProblemOf`）：会产兵的敌人（`EmitsMinions`，`EnemyData.cs:329`：`category: spawner` / `mobileSpawner` / `producesMinions`）至少声明一张敌人表；轨道工厂只能写 `spawnableRailUnits`、而且必须写；不产兵的什么都不能写；表里不重复、不空、family / id 都真实存在。family 写坏的敌人交给 `EnemyFamily` 报，不在这里重复。rail unit 存在性上游由 `SpawnRelationsTests` 钉住。
+
+**plan 的 spawner 条目**（`LevelPlanValidator.cs:793` `ValidateSpawnerPairs`，非 static 楼层，读合并后的楼层）：
+
+- 写了 `minionId`：minion 须是产出方能产的（`CanEmit`）；工厂产的列车须在它的 `spawnableRailUnits` 里（OZX-1792）。
+- 只写 `minionsPerSpawner`（OZX-1780，`ValidatePickedMinion`，`:1079`）：生成器从本层 pool 挑。候选 = `SpawnerMinions.Candidates`（`LevelBasePlan.cs:143`）：产出方允许的 pool 条目，去掉自己、列车和其它 spawner。不另加 tier 过滤——pool 条目本来就在本 area 的 tier 之内（OZX-1429），从 pool 抽也挡住了同 family 的 boss。`PoolSampler` **每间房每条 spawner 条目挑一次**、按候选各自的 pool `weight`，同房第二波继承开局波的挑选。候选为空 → 拒；轨道工厂不许这样写（列车没有 family 可挑）。出货章节全部写着 `minionId`，挑选不多掷随机数。
+- 手写遭遇的 `viaSpawner` launch 同样受约束：`SpawnRelationValidator`（`LevelService.cs:77`，`StartLevel` 时对每间房和每条 cave 通道的遭遇跑）——敌人走 `CanEmit`，列车 / 油罐走 `spawnableRailUnits`，产出方没有 EnemyData 也抛。
+
+**产物受 pool 约束**（`FloorPoolProducts`，`EnemyData.cs:892`）：生成楼层盖 `FloorData.poolEnemyIds`（pool 条目 + 变体，不含列车，`LevelBasePlanAssigner.PoolEnemyIds`），敌人「自己带进房间」的东西都收窄到它：
+
+| 通道 | 收窄后为空时 |
+|---|---|
+| 卵的 `hatchPool` / `hatchEnemyId`（OZX-1781） | plan 校验拒（`ValidateHatching`，`LevelPlanValidator.cs:901`）：pool 列出的每颗卵都要至少能孵出一种 pool 里有的；漏网的在破壳时抛 |
+| `deathSpawnEnemyId` 死亡分裂（OZX-1794） | plan 校验拒（`ValidateDeathHeirs`，`:931`）：本层会死的——pool 成员和本层 boss 的 `summonConfig.enemyIds`——它的死亡产物要在 pool 里 |
+| 根系卵囊、根须触手丛（`tipSpawn`） | 不报错，**就是不长**（`RootSystem`）：ch5 / ch6 的 husk 根须因此不长触手。纯运行时行为，编辑器不查 |
+
+手写楼层（`LevelData`、static plan 楼层）没有 `poolEnemyIds`，不收窄。
+
+**变体同 family**（OZX-1792，`LevelPlanValidator.cs:1247`，在 `ValidateVariantTiers` 里）：条目的 `variantIds` 必须和代表同一个 family——条目按一种类型采样、计数、引入，别的 family 的变体会搭便车进来。
+
+**轨道油罐 `railOilTanks`**（OZX-1798，`[{ railOilTankId, weight }]`，`LevelBasePlanData.cs:437` / `:544`）：只写在轨道工厂的产线条目上。生成时产线的 `minionsPerSpawner` 个单位**逐个**按权重掷成「列车」（列车条目自己的 pool weight）或某种油罐（weight 0 = 1）；列车单位照旧被额度截断，油罐不截断、不花 `enemiesPerRoom` / `spawnerMinionsPerRoom`、不占 `maxPerRoom`、不会被直接抽中、不算类型（`PoolSampler.cs:92`）。合成：列车一条 `railTrainId` + `viaSpawner`，之后每种油罐一条 `{ railOilTankId, viaSpawner, min = max = n }`（`PoolSampler.cs:598`），不当精英、没有掉落表。只有写了这张表的条目多掷随机数。校验 `ValidateRailOilTanks`（`LevelPlanValidator.cs:1032`）：须有产线（`minionsPerSpawner` + 指名列车的 `minionId`）、产出方是轨道工厂、每个油罐在它的 `spawnableRailUnits` 里、不重复、weight ≥ 0；列车条目写了由 `ValidateRailTrainEntries`（`:438`）拒。出货：chapter_5 `floors[2]` 的 `rail_evil_factory` 写 `rail_oil_tank` 0.5。
+
+**`alwaysElite`**（OZX-1818，`LevelBasePlanData.cs:507`）：条目直接放下的身体（开局波与第二波）全是精英——`eliteCount = max`，先从房间精英预算（`elitePlan` 掷出并按深度缩放后）里扣到 0 为止，剩下的照旧 round-robin（`PoolSampler.cs:363` / `:383` / `:471`）；预算不够、甚至没 `elitePlan` 也照样是精英。被别的 spawner 当 minion 产出时不受影响。校验 `ValidateAlwaysElite`（`LevelPlanValidator.cs:481`）：不能写在 spawner 上（提拔会缩放 root、拖走发射锚点），enemy 和每个变体都要有 `elite.statMultipliers`；列车条目写了由 `ValidateRailTrainEntries` 拒。出货暂无条目使用。
+
+**编辑器的码**（`ozxlevel/spawnrelations.py` 是 `SpawnRelations` / `SpawnerMinions.Candidates` / `FloorPoolProducts` 的 Python 版，校验与 plan 视图共用）：
+
+| 码 | 上游 | 指向 |
+|---|---|---|
+| `LEVEL_SPAWNER_RELATION_FORBIDDEN` | `ValidateSpawnerPairs` → `CanEmit` | 条目的 `minionId` |
+| `LEVEL_SPAWNER_RAIL_UNIT_FORBIDDEN` | 同上 → `CanEmitRailUnit` | 条目的 `minionId` |
+| `LEVEL_SPAWNER_PICK_NO_CANDIDATE` / `LEVEL_SPAWNER_PICK_ON_FACTORY` | `ValidatePickedMinion` | 条目 |
+| `LEVEL_SPAWNER_PAIR_INCOMPLETE` | `ValidateSpawnerPairs`（现只剩「有 `minionId` 无数量」） | 条目 |
+| `LEVEL_HATCH_NOTHING_IN_POOL` | `ValidateHatching` | 卵所在条目的 `enemyId` 或 `variantIds/v` |
+| `LEVEL_DEATH_HEIR_NOT_IN_POOL` | `ValidateDeathHeirs` | 宿主所在的 pool 槽，boss 召唤物指 `bossId` |
+| `VARIANT_FAMILY_MISMATCH` | `ValidateVariantTiers`（OZX-1792） | `variantIds/v` |
+| `LEVEL_RAIL_OIL_TANK_NO_LINE` / `_INVALID` / `_NOT_FROM_FACTORY` / `_FORBIDDEN` | `ValidateRailOilTanks` | `railOilTanks` 或其中的槽 |
+| `LEVEL_ALWAYS_ELITE_ON_SPAWNER` / `LEVEL_ALWAYS_ELITE_NO_ELITE_BLOCK` | `ValidateAlwaysElite` | `alwaysElite` / 缺 elite 块的 `enemyId` 或 `variantIds/v` |
+| `LEVEL_RAIL_TRAIN_FIELD_UNREAD`（扩充） | `ValidateRailTrainEntries` | 列车条目写了 `railOilTanks` / `alwaysElite` |
+| `ENEMY_SPAWN_RELATION_INVALID` | `SpawnRelations.ValidateAll`（开机） | 敌人的 `spawnableFamilies` / `spawnableEnemies` / `spawnableRailUnits` |
+| `ENCOUNTER_SPAWN_RELATION_FORBIDDEN` | `SpawnRelationValidator` | 遭遇 launch 的 `viaSpawner`。按遭遇查，所以没被任何关卡引用的遭遇也查 |
+
+顺带：OZX-1793 起油罐也能骑轨道工厂的 `viaSpawner` 通道（`EncounterValidator.cs:423`），编辑器原先把「油罐 + `viaSpawner`」报为 `ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD`，已去掉。
+
+**plan 视图**：pool 条目上 spawner 产线行写出挑选候选（「picked per room from …」，候选为空标红）、油罐（「or a tank per unit: rail_oil_tank w0.5」）、`always elite`；敌人 picker 的 meta 带 `makes …`（三张表合并）。genlevel 抽样表多一列 `elites`（生成波次里的精英总数），楼层格的提示带油罐数（`generate.summarize` 的 `elites` / `oilTanks`）。
+
+**生成算法不在 Python 里重写**。用 genlevel 核过：chapter_5 seed 1–3 的 `floors[2]` 每间工厂房的产线拆成「n 列车 + m 油罐」（n + m = 3，例 `rail_heavy_solo ×1` + `rail_oil_tank ×2`），油罐 launch 带 `viaSpawner: rail_evil_factory`；在 GameData 副本里给 chapter_5 `floors[2]` 的 `heavy_assault` 加 `alwaysElite`，seed 1 / 2 的该层 `heavy_assault` 直接放置 32 / 32 只全是精英（原为 10 / 12），其余条目的精英数相应下降。
 
 ### 5.5 stageWeights 的 category 维度（OZX-1044，核对于 `ozx_base@c87c6236`）
 
@@ -708,7 +765,7 @@ AssignStageTypes → AssignEnemyPools → AssignLootPools → AssignBossId → A
 
 - **重复 `(dataType, id)`**：后加载者直接覆盖，无任何提示。
 - **未知 `generatorType`**：静默变成 `tree`。
-- **spawner 条目只写了一半**：`minionId` 或 `minionsPerSpawner` 缺一个时 `EnemyPoolEntry.IsSpawner` 判定为假，这条按普通敌人采样——工厂原地站着不产任何东西，没有任何报错（OZX-1032，见 §5.4）。
+- **spawner 条目只写了 `minionId`**：没有 `minionsPerSpawner` 时 `EnemyPoolEntry.IsSpawner` 判定为假，这条按普通敌人采样——工厂原地站着不产任何东西（OZX-1032，见 §5.4；上游 `ValidateSpawnerPairs` 现在拒它）。只写 `minionsPerSpawner` 自 OZX-1780 起是合法的「让生成器挑」（§5.4.2）。
 - **`countMin` 写在不读它的 kind 上**（cargo / oiltank 等；prop、toxicbarrel、groundlaser 都读）：读了就丢，摆放照旧（OZX-1057；OZX-1465 起墙外 prop 也读，见 §5.6）。
 - **`skillDropLevelCap` 高于本章能掉的所有 `maxLevel`**：数字写着、看着像调过，实际永不触发（OZX-1069，见 §5.1）。
 - **孵化不占任何预算**：`enemiesPerRoom` 和 `maxAlive` 都数不到孵化物，一间有蛋的房间比两个数字都大（OZX-1063，见 `level_referenced_data.md` §2.4）。

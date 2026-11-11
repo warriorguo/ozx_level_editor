@@ -16,7 +16,7 @@ import math
 import pathlib
 from typing import Any
 
-from . import arealinks, habitats, jsonspan, plandefaults, tilemaps
+from . import arealinks, habitats, jsonspan, plandefaults, spawnrelations, tilemaps
 from .sprites import SpriteIndex
 from .themes import ThemeIndex
 
@@ -335,7 +335,8 @@ class Dataset:
             v = doc.value
             meta = " · ".join(x for x in (
                 v.get("movementType"), v.get("attackType"), v.get("role"),
-                ("dwells in " + " / ".join(v["habitats"])) if v.get("habitats") else None) if x)
+                ("dwells in " + " / ".join(v["habitats"])) if v.get("habitats") else None,
+                spawnable_brief(v)) if x)
             out.append({
                 "id": doc.id,
                 "meta": meta or "enemy",
@@ -1060,6 +1061,14 @@ class Dataset:
             })
         return out
 
+    def _minion_candidates(self, pool: list, spawner: int) -> list:
+        """`SpawnerMinions.Candidates` as the row shows them: id + pool weight."""
+        def enemy_of(i):
+            doc = self.get("EnemyData", i or "")
+            return doc.value if doc is not None else None
+        picked = spawnrelations.minion_candidates(pool, spawner, enemy_of) or []
+        return [{"id": pool[m].get("enemyId"), "weight": pool[m].get("weight")} for m in picked]
+
     def _enemy_family(self, enemy_id: str | None) -> dict | None:
         """`{"id", "tier"}` for an enemy that declares a family, else None."""
         enemy = self.get("EnemyData", enemy_id or "")
@@ -1278,8 +1287,19 @@ class Dataset:
                      # the HP of a wall. Declared iff BOTH are set.
                      "minionId": e.get("minionId") or None,
                      "minionsPerSpawner": e.get("minionsPerSpawner") or 0,
-                     "isSpawner": bool(e.get("minionId")
-                                       and (e.get("minionsPerSpawner") or 0) > 0),
+                     # OZX-1780: minionsPerSpawner alone is a spawner too —
+                     # the generator picks its minion per room from these
+                     # candidates (SpawnerMinions.Candidates) by pool weight.
+                     "isSpawner": spawnrelations.is_spawner_entry(e),
+                     "minionCandidates": self._minion_candidates(floor.get("enemyPool") or [], ei)
+                                         if spawnrelations.is_spawner_entry(e)
+                                         and not e.get("minionId") else None,
+                     # OZX-1798: a rail factory line's neutral products,
+                     # rolled per unit against the train's own pool weight.
+                     "railOilTanks": [{"id": t.get("railOilTankId"), "weight": t.get("weight") or 0}
+                                      for t in e.get("railOilTanks") or [] if isinstance(t, dict)],
+                     # OZX-1818: every body this entry places directly is elite.
+                     "alwaysElite": bool(e.get("alwaysElite")),
                      # OZX-1504: a rail factory's minionId names a train
                      # entry of this pool by its railTrainId; each minion is
                      # then one whole train.
@@ -1790,6 +1810,13 @@ def _stage_budget(enemies_per_room: int, cut: float) -> int:
     # Round half away from zero, as C# does — Python's round() is half-even.
     scaled = math.floor(enemies_per_room * (1 - cut) + 0.5)
     return max(1, scaled)
+
+
+def spawnable_brief(v: dict) -> str | None:
+    """OZX-1779 / OZX-1792: what an emitter may produce, in one line."""
+    made = list(v.get("spawnableFamilies") or []) + list(v.get("spawnableEnemies") or []) \
+        + list(v.get("spawnableRailUnits") or [])
+    return ("makes " + " / ".join(made)) if made else None
 
 
 def _cluster_brief(source: dict) -> dict | None:

@@ -78,11 +78,20 @@ def test_a_spawn_layer_field_on_a_train_is_unread(ds, steps, extra):
     assert not [c for c in found if c.startswith(("CLUSTER", "VARIANT"))]
 
 
-@pytest.mark.parametrize("extra", [{"dropTableId": "loot_common"},
-                                   {"viaSpawner": "rail_evil_factory"}])
-def test_a_tank_drops_nothing_and_rides_no_channel(ds, steps, extra):
-    steps.append(launch(railOilTankId="rail_oil_tank", **extra))
+def test_a_tank_drops_nothing(ds, steps):
+    steps.append(launch(railOilTankId="rail_oil_tank", dropTableId="loot_common"))
     assert "ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD" in codes(ds)
+
+
+def test_a_tank_may_ride_a_rail_factory(ds, steps):
+    """OZX-1793: the factory emits a tank the way it emits a train — and, by
+    OZX-1792, only one its spawnableRailUnits lists."""
+    steps.append(launch(railOilTankId="rail_oil_tank", viaSpawner="rail_evil_factory"))
+    found = codes(ds)
+    assert "ENCOUNTER_RAIL_LAUNCH_FIELD_UNREAD" not in found
+    assert "ENCOUNTER_SPAWN_RELATION_FORBIDDEN" not in found
+    steps[-1]["action"]["viaSpawner"] = "husk"
+    assert "ENCOUNTER_SPAWN_RELATION_FORBIDDEN" in codes(ds)
 
 
 @pytest.mark.parametrize("action", [

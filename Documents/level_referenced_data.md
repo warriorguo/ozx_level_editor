@@ -180,9 +180,10 @@ pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntrie
 | `emergeWay` / `emergeDuration` / `emergeOnSense` | 出场方式；`emergeOnSense` 需要 `emergeDuration > 0` | — |
 | `excludeFromRoomClear` | 不计入清场条件 | — |
 | `passive` | 永不索敌 | — |
-| `deathSpawnEnemyId` / `hatchEnemyId` | 死亡/孵化衍生敌人（引用边） | 2 / 1 |
+| `deathSpawnEnemyId` / `hatchEnemyId` | 死亡/孵化衍生敌人（引用边）。OZX-1781 / OZX-1794：**生成楼层上**两者都收窄到本层 pool（`FloorPoolProducts`，`EnemyData.cs:892`）——pool 里的卵一样都孵不出、会死的敌人（含 boss 召唤物）死亡产物不在 pool 里，plan 校验拒（`LEVEL_HATCH_NOTHING_IN_POOL` / `LEVEL_DEATH_HEIR_NOT_IN_POOL`）；根系卵囊、根须触手丛收窄为空就不长。手写楼层不收窄 | 2 / 1 |
 | `hatchPool` / `hatchCountMin/Max` / `hatchSpreadRadius` | 孵化池与一窝的大小，见 §2.4 | 1 |
 | `spawnConfig.enemyIds[]` | 该敌人能轮转生产的类型 | **0 份数据使用** |
+| `spawnableFamilies` / `spawnableEnemies` / `spawnableRailUnits` | OZX-1779 / OZX-1792（`EnemyData.cs:634-642`，`ozx_base@7c8e3c8ea`）：产兵关系的硬约束——经 `viaSpawner` 能产的 family、单个敌人 id、轨道工厂能放上 rail 的列车 / 油罐 id。会产兵的敌人（`EmitsMinions`：spawner / `mobileSpawner` / `producesMinions`）必须声明敌人表，轨道工厂只写 rail 表，其余都不写（`SpawnRelations.ValidateAll`，`EnemyData.cs:993`，开机 → `ENEMY_SPAWN_RELATION_INVALID`）。plan 的 `minionId`、手写遭遇的 `viaSpawner` launch、OZX-1780 的自动挑选都按它判（`SpawnRelations.CanEmit`，`EnemyData.cs:944`）。规则全文见 `level_data_reference.md` §5.4.2 | 14（13 个敌人表 + `rail_evil_factory`） |
 | `projectileId` / `beamId` | 远程弹道；`beamId` 非空时 `projectileId` 被忽略 | — |
 | `habitats` | OZX-1788 / OZX-1802（`EnemyData.cs:23`）：它**栖息**的要素（`water` / `sand` …），多选，省略 = 无。不限制去哪；有该要素的房间给它加权，只有它能从提供该要素的 prop 冒出（`at: "waterpool"`），楼层能出现该要素就要有它这类栖息者。每个要素必须有 prop 或 theme 地面提供（`HabitatData.cs:226` `ValidateAll` → `ENEMY_HABITAT_UNPROVIDED`）。规则全文见 `level_data_reference.md` §5.7 | 9（8 water / 1 sand） |
 | `spawnMinWallDistance` / `wallRepelDistance` | OZX-1263，世界单位（1 格 = 1），0 = 关。前者：直放（`LaunchPlacement`）只收离房间矩形每条边 ≥ 该值的点，jitter 夹回内矩形——房间里没有这样的内矩形时 `RoomWallClearance.ClampInside` **抛**；后者：活着时离墙更近就主动飞开。负值报错（`ENEMY_WALL_DISTANCE_NEGATIVE`）；≥ 5 时标准 16×10 房一个合格点都没有，直放的身体全被丢（`ENEMY_WALL_CLEARANCE_UNPLACEABLE`，Warning，大复合房仍可能放得下） | 1（broodwing 3 / 2） |
@@ -193,6 +194,7 @@ pool 里的列车条目（OZX-1315，`LevelPlanValidator.ValidateRailTrainEntrie
 
 - **新敌人按族判定**（OZX-1428）：某个变体出现过，整族都不算新；pool 仍按变体写。这影响「一局见全池子」的计数与采样器，由生成器体现（OLE-1）。
 - **area 的 tier 上限**（OZX-1429，`ValidateVariantTiers`）：第 k 个能到达的 area（入口 k = 1，沿 area 连接最短步数 + 1，连接双向走，`ArrivalOrder`）的 pool 里，每具能放下的身体（`enemyId` 与每个 `variantIds`）`tier ≤ k`。精英提拔不受限，轨道列车不查 → `LEVEL_VARIANT_TIER_TOO_EARLY`。
+- **变体同 family**（OZX-1792，`LevelPlanValidator.cs:1247`）：pool 条目的 `variantIds` 要和代表同一 family——条目按一种类型采样 / 计数 / 引入，别族的变体会搭便车 → `VARIANT_FAMILY_MISMATCH`。
 
 ### 2.3 编辑器要给的信息
 
